@@ -1,5 +1,9 @@
 # ASTROCATCH
 
+**[Play it in your browser →](https://wistrand.github.io/astrocatch/)**
+
+<img src="docs/image.png" width="250" alt="ASTROCATCH gameplay screenshot — the ball tracing a magenta trail from a pink star toward a green star with a dashed capture ring">
+
 A one-tap browser game where you slingshot between stars under
 real Newtonian gravity. Tap when your orbit aims at the next star.
 The game picks a boost, the trajectory follows real gravity, and

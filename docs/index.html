@@ -188,6 +188,21 @@
     font-weight: 600;
   }
 
+  /* ─── Repo link on the start screen ─── */
+  #repo-link {
+    margin-top: 26px;
+    font-size: 11px;
+    font-weight: 300;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.4);
+    text-decoration: none;
+    transition: color 0.2s;
+  }
+  #repo-link:hover {
+    color: rgba(255, 255, 255, 0.75);
+  }
+
   /* ─── Buttons ─── */
   button {
     border: none;
@@ -241,6 +256,7 @@
     <div class="tag">click / space to play</div>
     <button id="start-btn">START</button>
     <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next one. The game picks a boost; gravity bends the path and captures you on the other side. Release within one rotation for bonus points.</div>
+    <a id="repo-link" href="https://github.com/wistrand/astrocatch" target="_blank" rel="noopener">github.com/wistrand/astrocatch</a>
   </div>
 
   <div id="gameover" class="overlay hidden">
