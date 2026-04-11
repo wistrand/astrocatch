@@ -19,9 +19,9 @@ pulls you in and you orbit that one too.
 - **Release within one rotation for bonus points.** Half a rotation
   pays ×3 (Blazing), less than one full rotation pays ×2 (Quick).
 - **Chain fast launches for a streak multiplier.** Consecutive
-  Quick or Blazing captures stack: the second doubles the bonus,
-  the third triples it, up to ×8. A slow capture (or dying) breaks
-  the streak.
+  Quick or Blazing captures build a streak that multiplies the
+  bonus on each capture — starts at ×1, grows half a step per
+  chain link, caps at ×4. A slow capture (or dying) breaks it.
 - **Watch your replay.** The game records every frame and plays
   the run back behind the AGAIN button.
 
@@ -81,13 +81,20 @@ before it reaches a player.
   integrator, same sub-stepping, same nearest-star rule. The
   predicted periapsis frame is the same frame the live ball
   reaches its closest approach.
+- **Rendering is WebGL2**, not Canvas2D. Four shader programs
+  (fullscreen / circle / star / polyline) cover every primitive.
+  The star is evaluated procedurally per pixel in the fragment
+  shader — corona, streamers, glow, photosphere, granulation,
+  core highlight — so every star stays animated without the
+  Canvas2D gradient costs that used to dominate the frame budget.
 
 ## Project layout
 
 ```
 docs/
   index.html         tiny shell — DOM + CSS, one <script type="module">
-  gameplay.js        browser-only module: canvas, drawing, input, replay
+  gameplay.js        browser-only: state, input, orchestration
+  renderer.js        browser-only: WebGL2 renderer + shader programs
   physics.js         pure physics module, used by browser and node
 scripts/
   physics-test.js    node test runner

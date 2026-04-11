@@ -256,16 +256,22 @@ On top of the bonus, consecutive Quick/Blazing captures (bonus ≥ 2)
 grow a **fast-launch streak**:
 
 - `fastStreak` (module-level in `gameplay.js`) increments on each
-  capture with bonus ≥ 2, capped at `FAST_STREAK_CAP = 8`.
+  capture with bonus ≥ 2, capped at `FAST_STREAK_CAP = 7`.
 - A capture with bonus == 1 (or death) resets `fastStreak` to 0.
-- Score earned per capture is `bonus * max(1, fastStreak)`. So the
-  first Quick/Blazing of a run still earns its raw bonus (streak=1
-  → multiplier 1), but the second consecutive fast one doubles, the
-  third triples, and so on up to the cap.
+- The applied multiplier comes from `streakMultiplier(fastStreak)`,
+  which is a gentle half-step ramp: streak 1 → ×1, 2 → ×1.5,
+  3 → ×2, 4 → ×2.5, 5 → ×3, 6 → ×3.5, 7 → ×4 (cap). The first
+  fast capture of a run keeps the raw bonus (×1), so single
+  Quick/Blazing captures earn exactly what they used to; the
+  multiplier only kicks in on the second consecutive fast one.
+- Score earned per capture is `Math.round(bonus * streakMultiplier)`
+  so players always see integer ticks on the score display.
 
-The bonus flash HUD shows ` · STREAK ×N` when `fastStreak ≥ 2`, and
-the persistent sub-line under the score reads `· ×N streak` while
-the streak is live so the player can track it between captures.
+The bonus flash HUD shows ` · STREAK ×N` (where N is the applied
+multiplier, e.g. `×2.5`) when `fastStreak ≥ 2`, and the persistent
+sub-line under the score reads `· streak ×N` with the same
+multiplier value while the streak is live. `fmtMult` in gameplay.js
+formats half-step multipliers cleanly (`3` vs `2.5`).
 
 ## Replay
 

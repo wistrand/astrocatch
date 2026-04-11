@@ -117,12 +117,29 @@ let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
 // Fast-launch streak: consecutive captures with a Quick or Blazing
-// bonus (i.e. bonus >= 2). Each capture multiplies the earned
-// score by max(1, fastStreak), capped at FAST_STREAK_CAP so a long
-// chain doesn't produce absurd point totals. Resets on a regular
-// (non-fast) capture and on death.
+// bonus (i.e. bonus >= 2). Earns a multiplier on the per-capture
+// bonus — gentle ramp (half a step per streak increment) so the
+// high end stays rewarding without inflating scores to absurd
+// levels. Resets on a regular (non-fast) capture and on death.
 let fastStreak = 0;
-const FAST_STREAK_CAP = 8;
+const FAST_STREAK_CAP = 7;
+// Streak multiplier applied to the per-capture bonus:
+//   streak 0 → ×1  (no active streak)
+//   streak 1 → ×1  (first fast capture, unchanged from no-streak)
+//   streak 2 → ×1.5
+//   streak 3 → ×2
+//   streak 4 → ×2.5
+//   streak 5 → ×3
+//   streak 6 → ×3.5
+//   streak 7 → ×4  (cap)
+// Shared between captureStar scoring and the HUD so both always
+// agree on what "streak" means in user-facing numbers.
+function streakMultiplier(streak) {
+  return streak >= 1 ? 1 + (streak - 1) * 0.5 : 1;
+}
+function fmtMult(m) {
+  return m === Math.floor(m) ? String(m) : m.toFixed(1);
+}
 let camY = 0;           // world->screen vertical translation
 let camTargetY = 0;
 let hasBoosted = false; // for the hint
@@ -310,7 +327,9 @@ function init() {
 
 function updateSub() {
   let text = "best " + best + " · " + starsVisited + " stars";
-  if (fastStreak >= 2) text += " · ×" + fastStreak + " streak";
+  if (fastStreak >= 2) {
+    text += " · streak ×" + fmtMult(streakMultiplier(fastStreak));
+  }
   document.getElementById("sub").textContent = text;
 }
 
@@ -382,17 +401,17 @@ function captureStar(idx) {
   // Apply the quick-launch bonus that was locked in at boost time.
   const bonus = ball.pendingBonus || 1;
   // Fast-launch streak — consecutive Quick/Blazing captures stack
-  // a multiplier on top of the per-capture bonus. The first fast
-  // capture keeps the historical behavior (mult = 1); each further
-  // consecutive fast capture multiplies by one more up to the cap.
-  // A regular (non-fast) capture breaks the streak.
+  // a multiplier on top of the per-capture bonus (see
+  // streakMultiplier comment block for the ramp). A regular
+  // (non-fast) capture breaks the streak. Earned score is always
+  // rounded to an integer so players see whole numbers tick up.
   if (bonus >= 2) {
     fastStreak = Math.min(fastStreak + 1, FAST_STREAK_CAP);
   } else {
     fastStreak = 0;
   }
-  const streakMult = Math.max(1, fastStreak);
-  score += bonus * streakMult;
+  const streakMult = streakMultiplier(fastStreak);
+  score += Math.round(bonus * streakMult);
   starsVisited += 1;
   // Reset orbit timer + bonus for the new orbit.
   ball.framesInOrbit = 0;
@@ -455,7 +474,7 @@ function showBonusFlash(bonus, streak) {
     document.getElementById("ui").appendChild(el);
   }
   let text = (bonus >= 3 ? "★ BLAZING " : "QUICK ") + "×" + bonus;
-  if (streak >= 2) text += " · STREAK ×" + streak;
+  if (streak >= 2) text += " · STREAK ×" + fmtMult(streakMultiplier(streak));
   el.textContent = text;
   el.style.color = bonus >= 3 ? "#ffaa3c" : "#58e0fb";
   el.style.opacity = "1";
