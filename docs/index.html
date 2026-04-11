@@ -57,14 +57,16 @@
   }
 
   /* ─── HUD utility buttons (mute, reload) ─── */
-  /* Sit in the top-right corner of the HUD, above overlays so
-    the player can reach them from the welcome / game-over
-    screens too. pointer-events must be re-enabled explicitly
-    because they're outside any .overlay container. */
+  /* Sit in the bottom corners of the HUD, above overlays so the
+    player can reach them from the welcome / game-over screens
+    too. pointer-events must be re-enabled explicitly because
+    they're outside any .overlay container. Bottom offset uses
+    safe-area-inset-bottom so the home indicator on iOS doesn't
+    eat into the tap target. */
   #mute-btn,
   #reload-btn {
     position: absolute;
-    top: env(safe-area-inset-top, 16px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
     width: 40px;
     height: 40px;
     padding: 0;
