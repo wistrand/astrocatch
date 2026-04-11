@@ -68,51 +68,55 @@ export function createAudio() {
     return muted;
   }
 
-  // ── boost: soft melodic "shwiiip". Two triangle waves an
-  // octave apart, both sweeping from a high start note down a
-  // perfect fifth, through a gentle lowpass. Triangle keeps the
-  // timbre warm (no saw rasp) and the octave stacking gives it
-  // body without harshness. Reads as a little melodic sigh
-  // rather than a blaster shot.
+  // ── boost: happy ascending launch. Two sine waves an octave
+  // apart, both sweeping UP a perfect fifth (A4 → E5, A3 → E4)
+  // through an open lowpass, for a bright optimistic blip. A
+  // rising perfect fifth is the opening interval of "Twinkle
+  // Twinkle" and the Star Wars fanfare — universally upbeat.
+  // Sines on both voices keep it sweet; the octave stacking
+  // gives body without making it heavy. ~230 ms total.
   function boost() {
     const c = ensure();
     if (!c || muted) return;
     const t = c.currentTime;
-    const dur = 0.28;
+    const dur = 0.23;
 
-    // Soft lowpass — opens briefly on the attack then settles,
-    // so the attack has a bit of air without ever being bright.
+    // Open lowpass — bright through the attack, gently darkens
+    // on the tail so the last bit isn't shrill.
     const filter = c.createBiquadFilter();
     filter.type = "lowpass";
-    filter.Q.value = 0.9;
-    filter.frequency.setValueAtTime(2000, t);
-    filter.frequency.exponentialRampToValueAtTime(700, t + dur);
+    filter.Q.value = 0.8;
+    filter.frequency.setValueAtTime(3200, t);
+    filter.frequency.exponentialRampToValueAtTime(1400, t + dur);
 
     const outGain = c.createGain();
     outGain.gain.setValueAtTime(0.0001, t);
-    outGain.gain.exponentialRampToValueAtTime(0.38, t + 0.018);
+    outGain.gain.exponentialRampToValueAtTime(0.42, t + 0.012);
     outGain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
 
-    // Melodic sweep: E5 → A4 (a falling perfect fourth) plus an
-    // octave below for warmth. Both voices share the filter so
-    // the envelope shape stays simple.
-    const highStart = 659.25; // E5
-    const highEnd = 440;      // A4
+    // Rising perfect fifth: A5 → E6. Pitch reaches the top
+    // slightly before the envelope tails so the ear locks onto
+    // the destination note rather than the slide.
+    const sweepEnd = t + dur * 0.75;
+    const loStart = 440;     // A4
+    const loEnd   = 659.25;  // E5
+    const hiStart = 880;     // A5
+    const hiEnd   = 1318.51; // E6
 
-    // Upper voice — sine for a softer top end than triangle.
+    // Upper voice
     const hi = c.createOscillator();
     hi.type = "sine";
-    hi.frequency.setValueAtTime(highStart, t);
-    hi.frequency.exponentialRampToValueAtTime(highEnd, t + dur);
+    hi.frequency.setValueAtTime(hiStart, t);
+    hi.frequency.exponentialRampToValueAtTime(hiEnd, sweepEnd);
     hi.connect(filter);
     hi.start(t);
     hi.stop(t + dur + 0.05);
 
-    // Lower voice — triangle an octave down for body.
+    // Lower voice — octave down for body.
     const lo = c.createOscillator();
-    lo.type = "triangle";
-    lo.frequency.setValueAtTime(highStart * 0.5, t);
-    lo.frequency.exponentialRampToValueAtTime(highEnd * 0.5, t + dur);
+    lo.type = "sine";
+    lo.frequency.setValueAtTime(loStart, t);
+    lo.frequency.exponentialRampToValueAtTime(loEnd, sweepEnd);
     lo.connect(filter);
     lo.start(t);
     lo.stop(t + dur + 0.05);

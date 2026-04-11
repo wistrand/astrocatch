@@ -185,11 +185,14 @@ filtered movement, short arpeggios rather than beeps.
 
 Three sound events:
 
-- `audio.boost()` — soft melodic descent. Two voices sweeping
-  from E5 → A4 (upper sine) and E4 → A3 (lower triangle), a
-  falling perfect fourth, through a gentle lowpass that closes
-  from 2000 → 700 Hz. ~280 ms total. Reads as a little sigh on
-  each tap, not a blaster. Plays from `boost()`.
+- `audio.boost()` — happy ascending launch. Two sine voices
+  sweeping UP a perfect fifth (A5 → E6 upper, A4 → E5 lower),
+  through an open lowpass closing from 3200 → 1400 Hz. The
+  pitch reaches the destination note slightly before the
+  envelope tails so the ear locks onto the fifth rather than
+  the slide. ~230 ms total. Rising perfect fifth is the
+  opening interval of "Twinkle Twinkle" / the Star Wars
+  fanfare — universally upbeat. Plays from `boost()`.
 - `audio.capture(bonus, streak)` — arpeggio chime through the
   A-major triad. Regular captures play root + fifth; Quick adds
   the third; Blazing plays the full root-third-fifth-octave
