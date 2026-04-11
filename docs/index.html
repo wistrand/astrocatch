@@ -118,6 +118,13 @@
     backdrop-filter: blur(6px);
   }
 
+  /* Start screen is also see-through so the ambient stars drawn
+    on the canvas are visible behind the title block. */
+  #start {
+    background: rgba(10, 10, 18, 0.55);
+    backdrop-filter: blur(6px);
+  }
+
   .overlay.hidden {
     opacity: 0;
     pointer-events: none !important;
@@ -220,9 +227,9 @@
 
   <div id="start" class="overlay">
     <h1>ASTROCATCH</h1>
-    <div class="tag">one tap · real gravity</div>
+    <div class="tag">click / space to play</div>
+    <button id="start-btn">START</button>
     <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next one. The game picks a boost; gravity bends the path and captures you on the other side. Release within one rotation for bonus points.</div>
-    <button id="start-btn">BEGIN</button>
   </div>
 
   <div id="gameover" class="overlay hidden">

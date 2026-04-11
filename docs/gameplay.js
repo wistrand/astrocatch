@@ -19,7 +19,11 @@ function resize() {
   canvas.style.height = H + "px";
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
-window.addEventListener("resize", () => { resize(); if (bgStars.length) initBgStars(); });
+window.addEventListener("resize", () => {
+  resize();
+  if (bgStars.length) initBgStars();
+  if (state === STATE.MENU) initMenuStars();
+});
 resize();
 
 // Physics constants are imported from physics.js via AC.
@@ -84,6 +88,7 @@ let trail = [];     // [{x,y,life,color}]
 let particles = []; // [{x,y,vx,vy,life,decay,color,size}]
 let shockwaves = [];// [{x,y,r,mr,life,color}]
 let bgStars = [];   // parallax starfield (screen-space, non-interactive)
+let menuStars = []; // 1–3 decorative animated stars on the welcome screen
 
 // Replay: a samples-per-render-frame log of ball positions during
 // the live run, replayed faded behind the game-over overlay so the
@@ -219,6 +224,43 @@ function initBgStars() {
       twinkleSpeed: 1.4 + Math.random() * 2.5,
       color: palette[Math.floor(Math.random() * palette.length)],
     });
+  }
+}
+
+// 1–3 decorative stars scattered around the welcome overlay.
+// They use the same makeStar() shape and drawStar() renderer as
+// gameplay stars, so they animate identically (corona, streamers,
+// granules, pulse). Positions avoid a rectangle centered on the
+// overlay text so the glow doesn't fight the title/button.
+function initMenuStars() {
+  menuStars = [];
+  const n = 1 + Math.floor(Math.random() * 3); // 1..3
+  const margin = 100;
+  // Rough text-block exclusion zone (matches overlay content).
+  const cx = W / 2;
+  const cy = H / 2;
+  const exclHalfW = 230;
+  const exclHalfH = 210;
+  for (let i = 0; i < n; i++) {
+    const r = 24 + Math.random() * 26;
+    let x = 0, y = 0;
+    let placed = false;
+    for (let tries = 0; tries < 40; tries++) {
+      x = margin + Math.random() * (W - 2 * margin);
+      y = margin + Math.random() * (H - 2 * margin);
+      if (Math.abs(x - cx) < exclHalfW && Math.abs(y - cy) < exclHalfH) continue;
+      // Keep menu stars from clumping into each other's halos.
+      let ok = true;
+      for (const m of menuStars) {
+        const dx = m.x - x, dy = m.y - y;
+        if (Math.hypot(dx, dy) < (m.r + r) * 4) { ok = false; break; }
+      }
+      if (!ok) continue;
+      placed = true;
+      break;
+    }
+    if (!placed) continue;
+    menuStars.push(makeStar(x, y, r, Math.floor(Math.random() * PALETTE.length)));
   }
 }
 
@@ -951,6 +993,18 @@ function draw() {
   }
   ctx.globalAlpha = 1;
 
+  // Welcome screen: draw the decorative menu stars in screen space
+  // (no world transform, no camera offset) and bail before the
+  // gameplay-only rendering below. These stars use the same
+  // drawStar() renderer as gameplay, so they animate identically.
+  if (state === STATE.MENU) {
+    const nowSec = performance.now() / 1000;
+    for (let i = 0; i < menuStars.length; i++) {
+      drawStar(menuStars[i], nowSec, false, false, false);
+    }
+    return;
+  }
+
   // Game-over replay: when state is DEAD, replace the live world
   // drawing with a faded ghost playback of the run. The overlay
   // sits on top with reduced opacity so the AGAIN button remains
@@ -1136,6 +1190,12 @@ function loop() {
   }
   requestAnimationFrame(loop);
 }
+// Populate welcome-screen visuals before the first draw. All
+// top-level `let` declarations have run by this point, so the
+// init helpers can touch bgStars / menuStars without TDZ issues.
+// init() re-seeds bgStars on BEGIN so gameplay gets fresh twinkle.
+initBgStars();
+initMenuStars();
 loop();
 
 // ─────────────────────────────────────────────────────────────
