@@ -412,6 +412,36 @@ toggling mid-sound doesn't click.
   stars. This is what the user explicitly asked for ("I know this is
   not true gravity, but let it be so"). Don't switch to true
   superposition without checking.
+- **Planets as weak perturbations, not bodies.** Planets ramp in
+  with run progression: the first star never has any, probability
+  rises linearly to `PLANET_MAX_PROB = 0.5` by `PLANET_RAMP_STARS
+  = 50`, and stays there. Stars that pass the roll get 1–2 planets
+  each (assigned in `assignPlanets` in gameplay.js). Each planet
+  orbits its parent at a constant angular velocity, carries ~1.5%
+  of the parent's GM, and exerts gravity on the ship via
+  `accelFromStarWithPlanets` on top of the nearest-star accel. The
+  ship's orbit wobbles slightly on close passes but the star
+  remains the dominant body. Plummer softening (`softR2` ≈
+  `(2·planetR)²`) keeps the 1/r² accel from diverging inside the
+  planet, so predictions stay stable on direct-hit trajectories.
+  Planets have **no collision** — the ship flies through them.
+  The crash check in `checkCollisions` / `willHitAnyStar` only
+  iterates `stars`, not planet positions, so planets only show up
+  in the gravity math.
+- **Planets on past stars are stripped.** When a capture lands,
+  `captureStar` nulls out `stars[oldCurrent].planets`. Past stars
+  never get visited again, so their planet systems would be dead
+  weight in both the physics loop (via `computePlanetPositions`
+  short-circuit on null) and the draw loop (same short-circuit).
+  The current star keeps its planets until the next capture.
+- **Planet positions are a pure function of `ball.frame`.** The ball
+  gets a monotonic frame counter incremented inside `physicsStep`,
+  and `predictCapture(..., startFrame)` takes that counter as its
+  start so live and predicted planet positions match at every
+  simulated moment. Without this, a prediction would see planets in
+  a different location than the live trajectory eventually
+  encounters, and the "clean capture never crashes" invariant would
+  break on high-eccentricity orbits that skim near a planet.
 - **`SAFE_SEP = 6`** in star generation guarantees neighbours are at
   least `6 × max(R_a, R_b)` apart, so no orbit captured under the
   rules can be stolen by a neighbour. The matching

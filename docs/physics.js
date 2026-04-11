@@ -54,6 +54,63 @@ function accelFromStar(s, px, py) {
   return [a * dx, a * dy];
 }
 
+// Compute a primary star's planet positions for a single
+// physics frame. Planets orbit at a constant angular velocity
+// around their parent, so their position is a pure function of
+// (star, planet, frame) — no stored state, and the same call
+// at the same frame produces the same answer. Returns null if
+// the star has no planets, so the hot loop can short-circuit.
+// Reused across all sub-steps within one physicsStep because
+// frame doesn't advance between sub-steps.
+function computePlanetPositions(star, frame) {
+  const planets = star.planets;
+  if (!planets || planets.length === 0) return null;
+  const out = new Array(planets.length);
+  for (let i = 0; i < planets.length; i++) {
+    const p = planets[i];
+    const angle = frame * p.omega + p.phase;
+    out[i] = {
+      x: star.x + Math.cos(angle) * p.orbitR,
+      y: star.y + Math.sin(angle) * p.orbitR,
+      gm: p.gm,
+      softR2: p.softR2,
+    };
+  }
+  return out;
+}
+
+// Acceleration from a known primary star PLUS the small
+// perturbation from each of its orbiting planets. Planet
+// gravity uses Plummer softening (ε² added to r² before the
+// 1/r³ term) so the ship can fly through a planet without the
+// force diverging — planets have no collision, they're pure
+// gravity sources. If there are no planets the loop is
+// skipped entirely and the result matches accelFromStar.
+function accelFromStarWithPlanets(primary, planets, px, py) {
+  // Star — same as accelFromStar.
+  const sdx = primary.x - px, sdy = primary.y - py;
+  const sr2 = sdx * sdx + sdy * sdy;
+  let ax = 0, ay = 0;
+  if (sr2 >= 1) {
+    const sr = Math.sqrt(sr2);
+    const sa = primary.gm / (sr2 * sr);
+    ax = sa * sdx;
+    ay = sa * sdy;
+  }
+  if (planets) {
+    for (let i = 0; i < planets.length; i++) {
+      const p = planets[i];
+      const pdx = p.x - px, pdy = p.y - py;
+      const effR2 = pdx * pdx + pdy * pdy + p.softR2;
+      const effR = Math.sqrt(effR2);
+      const pa = p.gm / (effR2 * effR);
+      ax += pa * pdx;
+      ay += pa * pdy;
+    }
+  }
+  return [ax, ay];
+}
+
 // Combined nearest-star scan: returns the star's index AND the
 // minimum distance (sqrt) in a single pass over `stars`. Replaces
 // both `nearestStarIdx` + `subStepCount` for the integrator hot
@@ -83,17 +140,24 @@ function subStepCount(stars, px, py) {
 
 // One physics frame (mutates ball.x/y/vx/vy). Pure free flight,
 // no burn handling — that's a separate step. The nearest star is
-// looked up ONCE per frame; all sub-steps reuse it via accelFromStar.
+// looked up ONCE per frame; all sub-steps reuse it via
+// accelFromStarWithPlanets. `ball.frame` is a monotonic tick
+// counter shared with predictCapture via its startFrame
+// parameter, so planet positions in the live and predicted
+// trajectories are computed from the same time basis and
+// therefore match exactly.
 function physicsStep(stars, ball) {
   const info = nearestStarInfo(stars, ball.x, ball.y);
   const sub = info.minR < 60 ? 4 : info.minR < 120 ? 2 : 1;
   const dt = 1 / sub;
   const primary = stars[info.idx];
+  const frame = ball.frame || 0;
+  const planetPositions = computePlanetPositions(primary, frame);
   for (let i = 0; i < sub; i++) {
-    const [ax, ay] = accelFromStar(primary, ball.x, ball.y);
+    const [ax, ay] = accelFromStarWithPlanets(primary, planetPositions, ball.x, ball.y);
     const nx = ball.x + ball.vx * dt + 0.5 * ax * dt * dt;
     const ny = ball.y + ball.vy * dt + 0.5 * ay * dt * dt;
-    const [ax2, ay2] = accelFromStar(primary, nx, ny);
+    const [ax2, ay2] = accelFromStarWithPlanets(primary, planetPositions, nx, ny);
     ball.vx += 0.5 * (ax + ax2) * dt;
     ball.vy += 0.5 * (ay + ay2) * dt;
     ball.x = nx;
@@ -105,6 +169,7 @@ function physicsStep(stars, ball) {
       ball.vy *= MAX_SPEED / sp;
     }
   }
+  ball.frame = frame + 1;
 }
 
 // Capture step: detect actual periapsis in the live trajectory
@@ -183,7 +248,13 @@ function burnStep(stars, ball) {
 // Forward-simulate free flight under the same physics and find
 // periapsis (closest approach) of the next star. Returns
 // {periFrame, periDist, vMagAtPeri} on success or null otherwise.
-function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0) {
+// `startFrame` (optional, default 0) is the live-physics frame
+// index at which this prediction starts. Each predicted frame
+// advances it by 1 and passes the sum to computePlanetPositions
+// so the simulated planet positions exactly match whatever the
+// live physicsStep would see at the same simulated moment.
+function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
+  if (startFrame === undefined) startFrame = 0;
   const nextIdx = currentStarIdx + 1;
   if (nextIdx >= stars.length) return null;
   const next = stars[nextIdx];
@@ -195,18 +266,21 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0) {
   let minDVx = 0, minDVy = 0;
 
   for (let f = 1; f <= PREDICT_MAX_FRAMES; f++) {
-    // Cache the nearest star ONCE per frame and reuse it for all
-    // sub-step accelFromStar calls. Same approximation as the live
-    // physicsStep, so the two integrators agree exactly.
+    // Cache the nearest star ONCE per frame and reuse it for
+    // all sub-step accel calls. Same approximation as the live
+    // physicsStep, so the two integrators agree exactly — as
+    // long as we also feed it the same planet positions, which
+    // is why we pass startFrame + f here.
     const info = nearestStarInfo(stars, x, y);
     const sub = info.minR < 60 ? 4 : info.minR < 120 ? 2 : 1;
     const dt = 1 / sub;
     const primary = stars[info.idx];
+    const planetPositions = computePlanetPositions(primary, startFrame + f);
     for (let k = 0; k < sub; k++) {
-      const [ax, ay] = accelFromStar(primary, x, y);
+      const [ax, ay] = accelFromStarWithPlanets(primary, planetPositions, x, y);
       const nx = x + vx * dt + 0.5 * ax * dt * dt;
       const ny = y + vy * dt + 0.5 * ay * dt * dt;
-      const [ax2, ay2] = accelFromStar(primary, nx, ny);
+      const [ax2, ay2] = accelFromStarWithPlanets(primary, planetPositions, nx, ny);
       vx += 0.5 * (ax + ax2) * dt;
       vy += 0.5 * (ay + ay2) * dt;
       x = nx; y = ny;
@@ -275,6 +349,7 @@ const BOOST_DEFAULT = 0.85;      // fallback Δv when search finds nothing
 function applyBoostAndArm(stars, ball) {
   const sp = Math.hypot(ball.vx, ball.vy);
   if (sp < 0.001) return null;
+  const startFrame = ball.frame || 0;
   // Search for the smallest Δv that produces a clean capture.
   let bestFactor = 0;
   let bestPred = null;
@@ -283,7 +358,7 @@ function applyBoostAndArm(stars, ball) {
     const factor = BOOST_SEARCH_MIN + (BOOST_SEARCH_MAX - BOOST_SEARCH_MIN) * t;
     const trialVx = ball.vx * (1 + factor);
     const trialVy = ball.vy * (1 + factor);
-    const pred = predictCapture(stars, ball.currentStar, ball.x, ball.y, trialVx, trialVy);
+    const pred = predictCapture(stars, ball.currentStar, ball.x, ball.y, trialVx, trialVy, startFrame);
     if (pred) { bestFactor = factor; bestPred = pred; break; }
   }
   if (bestPred) {

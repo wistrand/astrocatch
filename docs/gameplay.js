@@ -194,8 +194,8 @@ let hasBoosted = false; // for the hint
 // ─────────────────────────────────────────────────────────────
 // Star generation
 // ─────────────────────────────────────────────────────────────
-function makeStar(x, y, r, colorIdx) {
-  return {
+function makeStar(x, y, r, colorIdx, starIdx) {
+  const s = {
     x, y, r,
     gm: AC.starGM(r),
     colorIdx,
@@ -209,7 +209,72 @@ function makeStar(x, y, r, colorIdx) {
     // (when hasRays is true) reuse this count since each streamer
     // is rooted to a granule in the star fragment shader.
     nGran: 5 + Math.floor(Math.random() * 4),
+    // Optional planets — see assignPlanets below. Most stars get
+    // none; the ones that do get 1–2. Planets perturb the ship
+    // orbit slightly via AC.physicsStep, but have no collision.
+    // starIdx < 0 signals "decorative star, never has planets"
+    // (used for the welcome-screen menu stars).
+    planets: null,
   };
+  if (starIdx !== undefined && starIdx >= 0) {
+    assignPlanets(s, starIdx);
+  }
+  return s;
+}
+
+// Planet probability ramps linearly from 0% at star 0 to
+// PLANET_MAX_PROB at PLANET_RAMP_STARS and beyond. The first
+// star never has a planet (probability is exactly 0), the
+// ramp is gentle so early captures stay clean, and by the
+// time a player has threaded their way through ~30 stars the
+// chance levels off at the steady-state rate. Each star that
+// passes the probability check gets 1–2 planets. Planets
+// orbit the parent at a constant angular velocity (positions
+// are a pure function of physics frame) and exert weak
+// gravity — ~1.5% of the parent's GM — so the ship wobbles
+// noticeably on close passes but the star is always the
+// dominant body. Planets have no collision; Plummer softening
+// in the physics integrator keeps the 1/r² accel from
+// diverging inside the planet, so prediction stays stable
+// even on a near-hit.
+const PLANET_MAX_PROB = 0.5;
+const PLANET_RAMP_STARS = 50;
+function assignPlanets(s, starIdx) {
+  const ramp = Math.min(1, starIdx / PLANET_RAMP_STARS);
+  const probability = ramp * PLANET_MAX_PROB;
+  if (Math.random() >= probability) return;
+  const nPlanets = 1 + (Math.random() < 0.25 ? 1 : 0);
+  const planets = [];
+  for (let i = 0; i < nPlanets; i++) {
+    // Orbit radius: 1.9–2.8 R of the parent plus a small
+    // per-planet stagger, so two planets on the same star
+    // don't overlap. That keeps planets inside the ship's
+    // likely orbit band so they're visible AND dynamically
+    // relevant on most captures.
+    const orbitR = s.r * (1.9 + Math.random() * 0.9 + i * 0.4);
+    // Period in physics frames. At PHYSICS_HZ = 120 this is
+    // roughly 5–12 seconds per revolution — slow enough to
+    // feel graceful, fast enough to see movement across one
+    // capture's worth of orbit time.
+    const periodFrames = 600 + Math.random() * 840;
+    const spin = Math.random() < 0.5 ? 1 : -1;
+    const planetR = 3 + Math.random() * 3;
+    planets.push({
+      orbitR,
+      omega: spin * (Math.PI * 2) / periodFrames,
+      phase: Math.random() * Math.PI * 2,
+      radius: planetR,
+      colorIdx: Math.floor(Math.random() * PALETTE_LEN),
+      // 1.5% of the parent's GM — a perturbation, not a body.
+      gm: s.gm * 0.015,
+      // Plummer softening length squared. At ~2× planet radius
+      // the force is already significantly softened; inside
+      // the planet it's effectively capped. No divergence on
+      // a direct hit.
+      softR2: (planetR * 2) * (planetR * 2),
+    });
+  }
+  s.planets = planets;
 }
 
 // Minimum allowed distance between two stars of radii ra, rb.
@@ -267,7 +332,7 @@ function addNextStar() {
     if (ny > prev.y - 120) ny = prev.y - 120 - Math.random() * 60;
     nx = Math.max(80, Math.min(W - 80, nx));
     if (separationOk(nx, ny, r)) {
-      stars.push(makeStar(nx, ny, r, n));
+      stars.push(makeStar(nx, ny, r, n, n));
       return;
     }
   }
@@ -275,7 +340,7 @@ function addNextStar() {
   // Fallback: straight up at a safely large distance.
   const fx = Math.max(80, Math.min(W - 80, prev.x));
   const fy = prev.y - hardMin * 1.4;
-  stars.push(makeStar(fx, fy, r, n));
+  stars.push(makeStar(fx, fy, r, n, n));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -341,7 +406,7 @@ function init() {
   hasBoosted = false;
 
   // First star, centered-ish, low on screen
-  stars.push(makeStar(W / 2, H * 0.7, 44, 0));
+  stars.push(makeStar(W / 2, H * 0.7, 44, 0, 0));
   for (let i = 0; i < 6; i++) addNextStar();
 
   // Place ball in a circular orbit around star 0, above the star
@@ -365,6 +430,13 @@ function init() {
     captureMinVy: 0,
     framesInOrbit: 0,       // physics frames spent in the current orbit (reset on capture)
     pendingBonus: 1,        // multiplier earned at boost time, applied at capture
+    // Monotonic physics frame counter, incremented inside
+    // AC.physicsStep. Shared between live physics and the
+    // prediction integrator so planet positions at the same
+    // simulated moment agree exactly, which is what keeps the
+    // "clean capture never crashes" invariant intact under
+    // planet gravity perturbation.
+    frame: 0,
   };
 
   document.getElementById("score").textContent = "0";
@@ -446,6 +518,16 @@ function checkCollisions() {
 function captureStar(idx) {
   const s = stars[idx];
   ball.pendingCapture = -1;
+
+  // Strip planets from the star we're leaving. Past stars no
+  // longer contribute to gravity or render — the ship never
+  // orbits back to them, so their planetary systems can be
+  // discarded. computePlanetPositions and the draw loop both
+  // short-circuit on a null `planets` field.
+  const leavingIdx = ball.currentStar;
+  if (leavingIdx !== idx && stars[leavingIdx]) {
+    stars[leavingIdx].planets = null;
+  }
 
   s.caught = true;
   s.pulse = 1;
@@ -977,6 +1059,47 @@ function draw() {
     });
   }
   if (starBatch.length) renderer.drawStarBatch(starBatch, cam);
+
+  // Planets — rendered at their current physics frame so their
+  // visual position exactly matches what the physics integrator
+  // sees. Each planet is a glow halo + a solid core, pushed
+  // through the circle program. A faint orbital ring is also
+  // drawn to suggest the path. Planets are cosmetic-plus-gravity:
+  // the ship flies through them and does NOT crash.
+  const frame = ball ? (ball.frame || 0) : 0;
+  const planetBatch = [];
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.planets) continue;
+    const sY = s.y + camY;
+    if (sY < -260 || sY > H + 260) continue;
+    for (let j = 0; j < s.planets.length; j++) {
+      const p = s.planets[j];
+      const angle = frame * p.omega + p.phase;
+      const px = s.x + Math.cos(angle) * p.orbitR;
+      const py = s.y + Math.sin(angle) * p.orbitR;
+      const c = c1Of(p.colorIdx);
+      // Faint glow halo.
+      planetBatch.push({
+        x: px, y: py,
+        outerR: p.radius * 2.4,
+        innerR: 0,
+        r: c[0], g: c[1], b: c[2],
+        a: 0.28,
+        kind: 2,
+      });
+      // Solid core.
+      planetBatch.push({
+        x: px, y: py,
+        outerR: p.radius,
+        innerR: 0,
+        r: c[0], g: c[1], b: c[2],
+        a: 0.95,
+        kind: 0,
+      });
+    }
+  }
+  if (planetBatch.length) renderer.drawCircleBatch(planetBatch, cam);
 
   // Dashed hint ring around the next star — drawn via the circle
   // program with kind=3.

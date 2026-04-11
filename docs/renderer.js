@@ -163,23 +163,28 @@ void main() {
   vec2 frag = gl_FragCoord.xy / u_dpr;
   frag.y = u_resolution.y - frag.y;
 
-  // Background radial gradient: #12121f center → #0a0a12 corners.
-  // On portrait (taller-than-wide) viewports — i.e. mobile — the
-  // gradient span uses the *shorter* dimension × 1.1, so the
-  // bright center doesn't dominate the narrow screen. On
-  // landscape (desktop) it uses the larger dimension, preserving
-  // the original look where the bright area fills the whole
-  // visible canvas.
+  // Background radial gradient. Center is always #12121f.
+  // On landscape (desktop) the fade reaches #0a0a12 at the
+  // longer screen dimension, preserving the original look.
+  // On portrait (mobile) the gradient:
+  //   • uses the *shorter* dimension × 1.1 for the falloff
+  //     span, so the bright center doesn't dominate the
+  //     narrow viewport
+  //   • fades all the way to pure black at the edges, not
+  //     the very-dark-blue landscape target, so the mobile
+  //     frame reads as a small lit area in dark space rather
+  //     than a full-screen bluish cast.
   vec2 c = u_resolution * 0.5;
   float dist = length(frag - c);
-  float span = (u_resolution.y > u_resolution.x)
+  bool portrait = u_resolution.y > u_resolution.x;
+  float span = portrait
     ? u_resolution.x * 1.1
     : max(u_resolution.x, u_resolution.y);
-  vec3 col = mix(
-    vec3(0.071, 0.071, 0.121),
-    vec3(0.039, 0.039, 0.071),
-    clamp(dist / span, 0.0, 1.0)
-  );
+  vec3 nearCol = vec3(0.071, 0.071, 0.121);
+  vec3 farCol = portrait
+    ? vec3(0.0, 0.0, 0.0)
+    : vec3(0.039, 0.039, 0.071);
+  vec3 col = mix(nearCol, farCol, clamp(dist / span, 0.0, 1.0));
 
   outColor = vec4(col, 1.0);
 }
