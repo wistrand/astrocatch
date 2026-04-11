@@ -37,7 +37,19 @@ export function createAudio() {
         ctx = new Ctor();
         master = ctx.createGain();
         master.gain.value = muted ? 0 : MASTER_VOLUME;
-        master.connect(ctx.destination);
+        // Soft safety limiter before the destination. With
+        // Blazing captures playing 4 overlapping notes, each
+        // with a bell overtone, worst-case in-phase peaks can
+        // approach unity. The compressor gives us guaranteed
+        // headroom and a slightly smoother mix when chords
+        // stack, without affecting isolated sounds.
+        const comp = ctx.createDynamicsCompressor();
+        comp.threshold.value = -12;
+        comp.knee.value = 6;
+        comp.ratio.value = 3;
+        comp.attack.value = 0.003;
+        comp.release.value = 0.15;
+        master.connect(comp).connect(ctx.destination);
       } catch (_) {
         ctx = null;
         return null;
@@ -69,7 +81,7 @@ export function createAudio() {
   }
 
   // ── boost: happy ascending launch. Two sine waves an octave
-  // apart, both sweeping UP a perfect fifth (A4 → E5, A3 → E4)
+  // apart, both sweeping UP a perfect fifth (A5 → E6, A4 → E5)
   // through an open lowpass, for a bright optimistic blip. A
   // rising perfect fifth is the opening interval of "Twinkle
   // Twinkle" and the Star Wars fanfare — universally upbeat.
@@ -96,16 +108,20 @@ export function createAudio() {
 
     // Rising perfect fifth: A5 → E6. Pitch reaches the top
     // slightly before the envelope tails so the ear locks onto
-    // the destination note rather than the slide.
+    // the destination note rather than the slide. A small
+    // random detune per call (±4 cents) breaks up back-to-back
+    // identicalness on tap chains.
     const sweepEnd = t + dur * 0.75;
     const loStart = 440;     // A4
     const loEnd   = 659.25;  // E5
     const hiStart = 880;     // A5
     const hiEnd   = 1318.51; // E6
+    const detuneCents = (Math.random() - 0.5) * 8;
 
     // Upper voice
     const hi = c.createOscillator();
     hi.type = "sine";
+    hi.detune.value = detuneCents;
     hi.frequency.setValueAtTime(hiStart, t);
     hi.frequency.exponentialRampToValueAtTime(hiEnd, sweepEnd);
     hi.connect(filter);
@@ -115,6 +131,7 @@ export function createAudio() {
     // Lower voice — octave down for body.
     const lo = c.createOscillator();
     lo.type = "sine";
+    lo.detune.value = detuneCents;
     lo.frequency.setValueAtTime(loStart, t);
     lo.frequency.exponentialRampToValueAtTime(loEnd, sweepEnd);
     lo.connect(filter);
@@ -134,13 +151,18 @@ export function createAudio() {
     if (!c || muted) return;
     const t = c.currentTime;
 
-    // A-major triad pitches (Hz). Octave bumps with bonus tier
-    // so a Blazing chain feels noticeably brighter.
-    const octave = bonus >= 3 ? 2 : bonus >= 2 ? 1 : 1;
-    const root   = 220 * Math.pow(2, octave);        // A4 or A5
-    const third  = 277.18 * Math.pow(2, octave - 1); // C#4 or C#5
-    const fifth  = 329.63 * Math.pow(2, octave - 1); // E4 or E5
-    const high   = 440 * Math.pow(2, octave);        // A5 or A6
+    // A-major triad pitches (Hz). Third and fifth live a major
+    // third and perfect fifth ABOVE the root — not below — so
+    // the pattern [root, third, fifth, high] is a true ascending
+    // arpeggio. A small per-call random detune (±4 cents) keeps
+    // consecutive captures from sounding mechanically identical
+    // while preserving the chord's internal intonation.
+    const octave = bonus >= 3 ? 2 : 1;
+    const root   = 220 * Math.pow(2, octave);     // A4 or A5
+    const third  = 277.18 * Math.pow(2, octave);  // C#5 or C#6
+    const fifth  = 329.63 * Math.pow(2, octave);  // E5 or E6
+    const high   = 440 * Math.pow(2, octave);     // A5 or A6
+    const detuneCents = (Math.random() - 0.5) * 8;
 
     const pattern =
       bonus >= 3 ? [root, third, fifth, high]
@@ -155,6 +177,7 @@ export function createAudio() {
       // Fundamental — sine for a clean bell attack.
       const osc = c.createOscillator();
       osc.type = "sine";
+      osc.detune.value = detuneCents;
       osc.frequency.setValueAtTime(freq, start);
       const g = c.createGain();
       g.gain.setValueAtTime(0.0001, start);
@@ -167,6 +190,7 @@ export function createAudio() {
       // Slightly inharmonic overtone for bell character.
       const osc2 = c.createOscillator();
       osc2.type = "sine";
+      osc2.detune.value = detuneCents;
       osc2.frequency.setValueAtTime(freq * 2.01, start);
       const g2 = c.createGain();
       g2.gain.setValueAtTime(0.0001, start);
@@ -186,6 +210,7 @@ export function createAudio() {
       const base = 880 * climb;
       const osc = c.createOscillator();
       osc.type = "sine";
+      osc.detune.value = detuneCents;
       osc.frequency.setValueAtTime(base, start);
       osc.frequency.exponentialRampToValueAtTime(base * 1.5, start + 0.22);
       const g = c.createGain();
