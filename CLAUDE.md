@@ -5,7 +5,8 @@ A browser-based one-tap orbital mechanics game.
 ```
 docs/
   index.html         # tiny shell — DOM + CSS + one <script type="module">
-  gameplay.js        # browser-only ES module: canvas, drawing, input, gameplay
+  gameplay.js        # browser-only ES module: state, input, orchestration
+  renderer.js        # browser-only ES module: WebGL2 renderer + shaders
   physics.js         # pure physics ES module — used by browser and node
 scripts/
   physics-test.js    # node test runner — imports ../docs/physics.js
@@ -29,11 +30,15 @@ from any other working directory.
 
 - **No build step.** No bundlers, no transpilers, no `npm install`
   for runtime dependencies. The browser loads `gameplay.js` directly
-  via `<script type="module">`. Node runs `physics-test.js` directly.
-  The only "tooling" is the local static server (`serve.js`), which
-  has zero dependencies. Don't add webpack, vite, esbuild, rollup,
-  TypeScript, JSX, postcss, sass, etc. Every file in the repo is
-  either runnable as-is or it's data.
+  via `<script type="module">`; `gameplay.js` imports `renderer.js`
+  and `physics.js` by relative path. Node runs `physics-test.js`
+  directly. The only "tooling" is the local static server
+  (`serve.js`), which has zero dependencies. Don't add webpack,
+  vite, esbuild, rollup, TypeScript, JSX, postcss, sass, etc.
+  Every file in the repo is either runnable as-is or it's data.
+- **No shader loader.** All GLSL lives as template strings inside
+  `renderer.js`. Don't pull shaders from separate files or fetch
+  them over the network.
 - **ES modules only.** All `.js` files use `import` / `export`. No
   CommonJS (`require` / `module.exports`). `package.json` sets
   `"type": "module"` so node treats `.js` as ESM. New files follow
@@ -65,10 +70,12 @@ built-in modules. It serves the project root, sets the right
 and disables caching so a refresh always picks up the latest
 gameplay/physics changes.
 
-`physics.js` is the only file the node test runner uses.
-`gameplay.js` is browser-only. Edits to gameplay rendering or
-input do not need to be re-tested in node. Any change to
-`physics.js` MUST be re-verified by running `npm test`.
+`physics.js` is the only file the node test runner uses. Both
+`gameplay.js` and `renderer.js` are browser-only (renderer.js
+calls `canvas.getContext("webgl2")` at module load, which node
+can't provide). Edits to rendering, input, or UI do not need to
+be re-tested in node. Any change to `physics.js` MUST be
+re-verified by running `npm test`.
 
 ## Running tests
 
@@ -115,6 +122,56 @@ visuals.
 Both modules share `stars` and `ball` by reference. The live game and
 the test runner manipulate the same object shapes.
 
+## Rendering
+
+All pixel work lives in `renderer.js`. It owns the WebGL2 context,
+all shader programs, dynamic vertex buffers, and the draw API
+consumed by `gameplay.js`. `gameplay.js draw()` is pure
+orchestration: it advances per-entity state and hands the
+renderer typed batches of instances.
+
+Four shader programs cover the entire render surface:
+
+- **`fullscreen`** — background radial gradient + scrolling grid.
+  One fullscreen quad synthesized in the vertex shader from
+  `gl_VertexID`, no vertex buffer required.
+- **`circle`** — instanced quad per entity. The `kind` per-instance
+  attribute picks between solid disc, ring, glow, and dashed ring.
+  Covers the ball glow and core, particles, shockwaves, the
+  `isNext` dashed hint ring, and the parallax `bgStars` (which
+  opt into per-instance `depth` and `twinkle`).
+- **`star`** — instanced quad per active star. The fragment shader
+  evaluates corona, streamers, outer glow, photosphere with limb
+  darkening, granulation, and core highlight procedurally per
+  pixel, all driven by `u_time` so the whole layered look stays
+  animated. Past stars (dim embers) are a short-circuit inside
+  the same shader. Per-instance flags encode `isCurrent`,
+  `isNext`, `isPast`.
+- **`polyline`** — dynamic line strip extruded to a triangle strip
+  in the vertex shader. Used for the trail, the connector hints
+  to upcoming stars, the velocity arrow shaft, and the replay
+  ghost path. Alpha fades head-to-tail via two uniform color
+  stops, no per-vertex color attribute needed.
+
+Per-frame CPU work is ~10 draw calls. Alpha is always premultiplied,
+the blend mode is `gl.ONE, gl.ONE_MINUS_SRC_ALPHA`, and `gameplay.js`
+never touches `globalAlpha` or any Canvas2D state.
+
+**No libraries.** Shaders live as template strings inside
+`renderer.js`. If you need a new primitive, add another kind to
+`circle`, extend the `star` fragment shader, or add a fifth program.
+Don't reach for three.js / pixi / regl / twgl.
+
+**Lost context.** `renderer.js` registers `webglcontextlost` /
+`webglcontextrestored` handlers. On loss we `preventDefault` so
+the browser will try to restore; on restore we reload the page
+(rebuilding every program and buffer mid-frame isn't worth the
+code).
+
+**Unsupported devices.** If `canvas.getContext("webgl2")` returns
+`null`, `gameplay.js` unhides `#unsupported` and aborts further
+init. There's no Canvas2D fallback.
+
 ## Physics model (non-obvious bits)
 
 - **Nearest-star gravity, not multi-body.** The dominant body switches
@@ -142,8 +199,13 @@ the test runner manipulate the same object shapes.
 
 All in `gameplay.js` near the top, after the SF constant imports.
 
-- **`ZOOM = 0.65`** — world is drawn at 65% scale around the camera
-  focus, so ~3 stars ahead of the ball fit on screen.
+- **`ZOOM = 0.65`** (desktop) / **`ZOOM = 0.58`** (touch) — world is
+  drawn at this scale around the camera focus, so ~3 stars ahead of
+  the ball fit on screen on desktop. Touch devices get a slightly
+  wider view because physical phone screens are smaller; detection
+  is via `matchMedia("(pointer: coarse)")` at module load, not a
+  user-agent sniff. `ZOOM` is a `const` set once — plugging in a
+  mouse mid-session won't recompute it.
 - **`PHYSICS_HZ = 120`** — fixed-timestep physics rate. Decoupled
   from `requestAnimationFrame` so a 144 Hz monitor doesn't run the
   game at 240 ticks/sec, and an RAF burst right after page load
@@ -175,31 +237,59 @@ There's a standalone diagnostic for this:
 node check-distances.js
 ```
 
-## Quick-launch bonus
+## Quick-launch bonus + fast-launch streak
 
 Tracked via `ball.framesInOrbit` (incremented in `physicsTick`, reset
 on capture). At boost time `currentOrbitPeriod()` computes the live
 orbit's period via Kepler's third law (`T = 2π·√(a³/GM)` with
 `a = −GM/(2E)`, returning `Infinity` for unbound orbits) and the
-player gets:
+player gets a per-capture **bonus** tier:
 
-- `< 0.5` rotation → ×3 points (BLAZING)
-- `< 1.0` rotation → ×2 points (QUICK)
+- `< 0.5` rotation → ×3 (BLAZING)
+- `< 1.0` rotation → ×2 (QUICK)
 - otherwise → ×1
 
 The bonus is locked in on tap and applied in `captureStar()`. If the
 trajectory dies before reaching capture, the bonus is discarded.
 
+On top of the bonus, consecutive Quick/Blazing captures (bonus ≥ 2)
+grow a **fast-launch streak**:
+
+- `fastStreak` (module-level in `gameplay.js`) increments on each
+  capture with bonus ≥ 2, capped at `FAST_STREAK_CAP = 8`.
+- A capture with bonus == 1 (or death) resets `fastStreak` to 0.
+- Score earned per capture is `bonus * max(1, fastStreak)`. So the
+  first Quick/Blazing of a run still earns its raw bonus (streak=1
+  → multiplier 1), but the second consecutive fast one doubles, the
+  third triples, and so on up to the cap.
+
+The bonus flash HUD shows ` · STREAK ×N` when `fastStreak ≥ 2`, and
+the persistent sub-line under the score reads `· ×N streak` while
+the streak is live so the player can track it between captures.
+
 ## Replay
 
 The game records `{x, y, currentStar}` once per render frame during
 PLAY (capped at `REPLAY_MAX = 6000` samples, FIFO). When the death
-wind-down ends, `computeReplayBounds()` finds the trajectory AABB and
-the camera transform that fits it on screen. `drawReplay()` paints a
-faded ghost playback behind the game-over overlay, advancing
-`replayIdx += REPLAY_SPEED` per render frame and looping. The overlay
-opacity is dropped specifically for `#gameover` so the replay shows
-through without obscuring the AGAIN button.
+wind-down ends, `computeReplayBounds()` finds the trajectory AABB
+and the fit transform that maps it to screen space. `draw()`'s
+`STATE.DEAD` branch calls `drawReplayGhost()`, which asks the
+renderer for a `replayMat(scale, ox, oy)` world-to-clip matrix and
+then issues:
+
+- A `drawCircleBatch` of past-star markers — one glow halo + one
+  solid core per visited star, each tinted with the star's palette
+  color (`c1Of`). Not the star shader's `isPast` path — that's for
+  live-play dead embers and is too dim for a trajectory landmark.
+- A `drawPolyline` of the trajectory up to `replayIdx`, fading
+  head-to-tail via the two color-stop uniforms.
+- A second `drawCircleBatch` for the moving marker dot at the
+  current replay position (white glow + white solid core).
+
+`replayIdx += REPLAY_SPEED` advances per render frame and loops
+with a brief hold at the end. The overlay opacity is dropped
+specifically for `#gameover` so the replay shows through without
+obscuring the AGAIN button.
 
 ## User preferences (project-specific)
 

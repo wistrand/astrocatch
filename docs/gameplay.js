@@ -1,30 +1,44 @@
 // All physics + capture logic lives in physics.js (also used by
-// the node test runner). This file owns DOM, canvas, input,
-// gameplay state, and visuals. ES modules are strict by default.
+// the node test runner). All rendering lives in renderer.js
+// (WebGL2, browser-only). This file owns DOM, canvas acquisition,
+// input, gameplay state, and orchestration. ES modules are strict
+// by default.
 import * as AC from "./physics.js";
+import { createRenderer, c1Of, c2Of } from "./renderer.js";
 
 // ─────────────────────────────────────────────────────────────
-// Canvas setup
+// Canvas + renderer setup
 // ─────────────────────────────────────────────────────────────
 const canvas = document.getElementById("c");
-const ctx = canvas.getContext("2d");
+let renderer = null;
 let W = 0, H = 0, DPR = 1;
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
   H = window.innerHeight;
-  canvas.width = W * DPR;
-  canvas.height = H * DPR;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
   canvas.style.width = W + "px";
   canvas.style.height = H + "px";
-  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  if (renderer) renderer.setViewport(W, H, DPR);
 }
 window.addEventListener("resize", () => {
   resize();
-  if (bgStars.length) initBgStars();
   if (state === STATE.MENU) initMenuStars();
 });
 resize();
+renderer = createRenderer(canvas);
+if (!renderer) {
+  // No WebGL2 → show the unsupported overlay and abort. The rest
+  // of this module still loads (nothing crashes) but the main loop
+  // will never actually render anything, and input is a no-op.
+  const el = document.getElementById("unsupported");
+  if (el) el.classList.remove("hidden");
+} else {
+  // Viewport wasn't set on the very first resize() because the
+  // renderer didn't exist yet — seed it now.
+  renderer.setViewport(W, H, DPR);
+}
 
 // Physics constants are imported from physics.js via AC.
 const CAPTURE_MULT = AC.CAPTURE_MULT;
@@ -33,8 +47,14 @@ const INITIAL_ORBIT_MULT = AC.INITIAL_ORBIT_MULT;
 const SAFE_SEP = AC.SAFE_SEP;
 
 // View / pacing tunables.
-// < 1 means zoom out (more stars visible).
-const ZOOM = 0.65;
+// < 1 means zoom out (more stars visible). Touch devices get a
+// slightly wider view so the smaller physical screen doesn't
+// feel cramped — matchMedia("(pointer: coarse)") is the correct
+// check for "finger, not mouse", not the user-agent string.
+const IS_TOUCH = typeof window !== "undefined"
+  && window.matchMedia
+  && window.matchMedia("(pointer: coarse)").matches;
+const ZOOM = IS_TOUCH ? 0.58 : 0.65;
 // Fixed-timestep physics rate. Decoupled from requestAnimationFrame so a
 // 144 Hz monitor doesn't run the orbits at 240 Hz, and an RAF burst right
 // after page load can't sneak in extra physics work.
@@ -56,19 +76,10 @@ const MISS_GRAVITY_MULT = 5;
 const MISS_LOOKAHEAD = 1500;
 
 // ─────────────────────────────────────────────────────────────
-// Palette — pairs of (hot, cool) per stellar type. Shifted one
-// step from any related palette so the values are our own.
+// Palette — the full RGB data lives in renderer.js as c1Of/c2Of.
+// Gameplay only needs the count so it can pick a random colorIdx.
 // ─────────────────────────────────────────────────────────────
-const PALETTE = [
-  ["#58e0fb", "#3a7ce4"], // ice blue
-  ["#b39bf8", "#7449e4"], // lavender
-  ["#fa6db0", "#ea3f8c"], // magenta
-  ["#38d6a0", "#12b083"], // mint
-  ["#ffaa3c", "#f08c0c"], // amber
-  ["#f56b6b", "#e63838"], // coral
-  ["#6ae8f4", "#08b8d2"], // teal
-];
-const colorOf = (i) => PALETTE[i % PALETTE.length];
+const PALETTE_LEN = 7;
 
 // ─────────────────────────────────────────────────────────────
 // World state
@@ -82,12 +93,11 @@ const STATE = { MENU: 0, PLAY: 1, DYING: 2, DEAD: 3 };
 const DYING_FRAMES_MS = 1000;  // wind-down duration (ms)
 let state = STATE.MENU;
 
-let stars = [];     // {x,y,r,gm,colorIdx,caught,pulse}
+let stars = [];     // {x,y,r,gm,colorIdx,caught,pulse,hasRays,nGran}
 let ball = null;    // {x,y,vx,vy,currentStar,alive}
-let trail = [];     // [{x,y,life,color}]
-let particles = []; // [{x,y,vx,vy,life,decay,color,size}]
-let shockwaves = [];// [{x,y,r,mr,life,color}]
-let bgStars = [];   // parallax starfield (screen-space, non-interactive)
+let trail = [];     // [{x,y,r,g,b}]
+let particles = []; // [{x,y,vx,vy,life,decay,r,g,b,size}]
+let shockwaves = [];// [{x,y,r,mr,life,cr,cg,cb}]
 let menuStars = []; // 1–3 decorative animated stars on the welcome screen
 
 // Replay: a samples-per-render-frame log of ball positions during
@@ -106,6 +116,13 @@ const REPLAY_SPEED = 1.75;
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
+// Fast-launch streak: consecutive captures with a Quick or Blazing
+// bonus (i.e. bonus >= 2). Each capture multiplies the earned
+// score by max(1, fastStreak), capped at FAST_STREAK_CAP so a long
+// chain doesn't produce absurd point totals. Resets on a regular
+// (non-fast) capture and on death.
+let fastStreak = 0;
+const FAST_STREAK_CAP = 8;
 let camY = 0;           // world->screen vertical translation
 let camTargetY = 0;
 let hasBoosted = false; // for the hint
@@ -122,11 +139,11 @@ function makeStar(x, y, r, colorIdx) {
     pulse: 0,
     // Visual variety: only ~half the stars get coronal streamers,
     // so the ones that do stand out instead of every star looking
-    // identically spiky.
+    // identically spiky. The renderer reads these per instance.
     hasRays: Math.random() < 0.5,
     // Per-star granule count in [5, 8]. The coronal streamers
     // (when hasRays is true) reuse this count since each streamer
-    // is rooted to a granule.
+    // is rooted to a granule in the star fragment shader.
     nGran: 5 + Math.floor(Math.random() * 4),
   };
 }
@@ -200,38 +217,17 @@ function addNextStar() {
 // ─────────────────────────────────────────────────────────────
 // Init / reset
 // ─────────────────────────────────────────────────────────────
-// Parallax background starfield. These are purely decorative —
-// tiny twinkling points in screen space, with a depth factor in
-// [0.05, 0.4] that scales how much they move with camY. depth=0.05
-// means "practically a fixed star field", depth=0.4 means "still
-// much farther than the gameplay layer". White dominates the
-// palette with a few warm/cool tints to suggest stellar type.
-function initBgStars() {
-  bgStars = [];
-  const count = 220;
-  const palette = [
-    "#ffffff", "#ffffff", "#ffffff", "#ffffff",
-    "#bcd4ff", "#a8c5ff", "#ffe6c2", "#ffd7a8", "#ffc9c9",
-  ];
-  for (let i = 0; i < count; i++) {
-    bgStars.push({
-      x: Math.random() * W,
-      y: Math.random() * H,
-      depth: 0.05 + Math.random() * 0.35,
-      size: 0.4 + Math.random() * 1.3,
-      brightness: 0.25 + Math.random() * 0.65,
-      phase: Math.random() * Math.PI * 2,
-      twinkleSpeed: 1.4 + Math.random() * 2.5,
-      color: palette[Math.floor(Math.random() * palette.length)],
-    });
-  }
-}
+// The parallax background starfield lives entirely inside
+// renderer.js — it's generated once per setViewport and drawn
+// via the circle program with per-instance depth + twinkle.
+// Nothing gameplay-side to maintain.
 
 // 1–3 decorative stars scattered around the welcome overlay.
-// They use the same makeStar() shape and drawStar() renderer as
-// gameplay stars, so they animate identically (corona, streamers,
-// granules, pulse). Positions avoid a rectangle centered on the
-// overlay text so the glow doesn't fight the title/button.
+// They use the same makeStar() shape as gameplay stars, so they
+// animate identically through the same WebGL `star` shader —
+// corona, streamers, granules, pulse, all live. Positions avoid
+// a rectangle centered on the overlay text so the glow doesn't
+// fight the title/button.
 function initMenuStars() {
   menuStars = [];
   const n = 1 + Math.floor(Math.random() * 3); // 1..3
@@ -260,7 +256,7 @@ function initMenuStars() {
       break;
     }
     if (!placed) continue;
-    menuStars.push(makeStar(x, y, r, Math.floor(Math.random() * PALETTE.length)));
+    menuStars.push(makeStar(x, y, r, Math.floor(Math.random() * PALETTE_LEN)));
   }
 }
 
@@ -274,10 +270,10 @@ function init() {
   replayIdx = 0;
   score = 0;
   starsVisited = 0;
+  fastStreak = 0;
   camY = 0;
   camTargetY = 0;
   hasBoosted = false;
-  initBgStars();
 
   // First star, centered-ish, low on screen
   stars.push(makeStar(W / 2, H * 0.7, 44, 0));
@@ -313,8 +309,9 @@ function init() {
 }
 
 function updateSub() {
-  document.getElementById("sub").textContent =
-    "best " + best + " · " + starsVisited + " stars";
+  let text = "best " + best + " · " + starsVisited + " stars";
+  if (fastStreak >= 2) text += " · ×" + fastStreak + " streak";
+  document.getElementById("sub").textContent = text;
 }
 
 // All gravitational physics + capture logic is in physics.js.
@@ -384,24 +381,42 @@ function captureStar(idx) {
   ball.currentStar = idx;
   // Apply the quick-launch bonus that was locked in at boost time.
   const bonus = ball.pendingBonus || 1;
-  score += bonus;
+  // Fast-launch streak — consecutive Quick/Blazing captures stack
+  // a multiplier on top of the per-capture bonus. The first fast
+  // capture keeps the historical behavior (mult = 1); each further
+  // consecutive fast capture multiplies by one more up to the cap.
+  // A regular (non-fast) capture breaks the streak.
+  if (bonus >= 2) {
+    fastStreak = Math.min(fastStreak + 1, FAST_STREAK_CAP);
+  } else {
+    fastStreak = 0;
+  }
+  const streakMult = Math.max(1, fastStreak);
+  score += bonus * streakMult;
   starsVisited += 1;
   // Reset orbit timer + bonus for the new orbit.
   ball.framesInOrbit = 0;
   ball.pendingBonus = 1;
-  updateScoreUI(true, bonus);
+  updateScoreUI(true, bonus, fastStreak);
 
-  // Visuals
-  shockwaves.push({ x: s.x, y: s.y, r: 0, mr: 90, life: 1, color: colorOf(s.colorIdx)[0] });
-  const [c1, c2] = colorOf(s.colorIdx);
+  // Visuals. Colors go into particle / shockwave storage as RGB
+  // floats in [0, 1]; the WebGL renderer reads them straight into
+  // instance attributes.
+  const c1 = c1Of(s.colorIdx);
+  const c2 = c2Of(s.colorIdx);
+  shockwaves.push({
+    x: s.x, y: s.y, r: 0, mr: 90, life: 1,
+    cr: c1[0], cg: c1[1], cb: c1[2],
+  });
   for (let i = 0; i < 18; i++) {
     const a = Math.random() * Math.PI * 2;
     const sp = 1.5 + Math.random() * 3.5;
+    const c = Math.random() > 0.5 ? c1 : c2;
     particles.push({
       x: s.x, y: s.y,
       vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
       life: 1, decay: 0.018 + Math.random() * 0.018,
-      color: Math.random() > 0.5 ? c1 : c2,
+      r: c[0], g: c[1], b: c[2],
       size: 2 + Math.random() * 3,
     });
   }
@@ -413,7 +428,7 @@ function captureStar(idx) {
   while (stars.length < idx + 8) addNextStar();
 }
 
-function updateScoreUI(bump, bonus) {
+function updateScoreUI(bump, bonus, streak) {
   const el = document.getElementById("score");
   el.textContent = score;
   updateSub();
@@ -423,11 +438,11 @@ function updateScoreUI(bump, bonus) {
     setTimeout(() => (el.style.transform = "scale(1)"), 100);
   }
   if (bonus && bonus > 1) {
-    showBonusFlash(bonus);
+    showBonusFlash(bonus, streak);
   }
 }
 
-function showBonusFlash(bonus) {
+function showBonusFlash(bonus, streak) {
   let el = document.getElementById("bonus-flash");
   if (!el) {
     el = document.createElement("div");
@@ -439,7 +454,9 @@ function showBonusFlash(bonus) {
       "text-shadow:0 0 26px rgba(255,170,60,.72)";
     document.getElementById("ui").appendChild(el);
   }
-  el.textContent = (bonus >= 3 ? "★ BLAZING " : "QUICK ") + "×" + bonus;
+  let text = (bonus >= 3 ? "★ BLAZING " : "QUICK ") + "×" + bonus;
+  if (streak >= 2) text += " · STREAK ×" + streak;
+  el.textContent = text;
   el.style.color = bonus >= 3 ? "#ffaa3c" : "#58e0fb";
   el.style.opacity = "1";
   el.style.transform = "translateY(0) scale(" + (bonus >= 3 ? 1.15 : 1) + ")";
@@ -461,7 +478,7 @@ function boost() {
   if (ball.pendingCapture >= 0) return;
 
   // Exhaust particles (visual only — record direction BEFORE the impulse).
-  const [c1] = colorOf(stars[ball.currentStar].colorIdx);
+  const c1 = c1Of(stars[ball.currentStar].colorIdx);
   for (let i = 0; i < 10; i++) {
     const a = Math.atan2(-ball.vy, -ball.vx) + (Math.random() - 0.5) * 0.7;
     const s2 = 1 + Math.random() * 2.5;
@@ -469,7 +486,8 @@ function boost() {
       x: ball.x, y: ball.y,
       vx: Math.cos(a) * s2, vy: Math.sin(a) * s2,
       life: 1, decay: 0.03 + Math.random() * 0.02,
-      color: c1, size: 2 + Math.random() * 2,
+      r: c1[0], g: c1[1], b: c1[2],
+      size: 2 + Math.random() * 2,
     });
   }
 
@@ -505,6 +523,11 @@ function boost() {
 function die() {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
+  // Any live fast-launch streak ends with the run.
+  fastStreak = 0;
+  updateSub();
+  // Death burst — magenta (#fa6db0).
+  const dR = 0xfa / 255, dG = 0x6d / 255, dB = 0xb0 / 255;
   for (let i = 0; i < 36; i++) {
     const a = Math.random() * Math.PI * 2;
     const s = 1 + Math.random() * 5;
@@ -512,7 +535,8 @@ function die() {
       x: ball.x, y: ball.y,
       vx: Math.cos(a) * s, vy: Math.sin(a) * s,
       life: 1, decay: 0.012 + Math.random() * 0.015,
-      color: "#fa6db0", size: 2 + Math.random() * 4,
+      r: dR, g: dG, b: dB,
+      size: 2 + Math.random() * 4,
     });
   }
   if (score > best) {
@@ -628,12 +652,19 @@ function renderTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
 
   const cs = stars[ball.currentStar];
-  trail.push({ x: ball.x, y: ball.y, life: 1, color: colorOf(cs.colorIdx)[0] });
-  if (trail.length > 260) trail.shift();
+  // Sample the trail at the interpolated render position so the
+  // trail tip stays glued to the ball visual. Trail is drawn as
+  // a single stroked polyline in draw() via the renderer —
+  // colors are stored as RGB floats that get passed straight
+  // into the shader uniforms.
+  const tc = c1Of(cs.colorIdx);
+  trail.push({ x: ballRenderX, y: ballRenderY, r: tc[0], g: tc[1], b: tc[2] });
+  if (trail.length > 100) trail.shift();
 
   // Replay sample (only during PLAY, not the DYING wind-down).
+  // Same rationale as trail — replay is a render-rate visual.
   if (state === STATE.PLAY) {
-    replay.push({ x: ball.x, y: ball.y, currentStar: ball.currentStar });
+    replay.push({ x: ballRenderX, y: ballRenderY, currentStar: ball.currentStar });
     if (replay.length > REPLAY_MAX) replay.shift();
   }
 
@@ -694,375 +725,151 @@ function computeReplayBounds() {
   };
 }
 
-function drawReplay() {
+function drawReplayGhost() {
   if (!replayBounds || replay.length < 2) return;
   const b = replayBounds;
-  ctx.save();
-  ctx.translate(b.ox, b.oy);
-  ctx.scale(b.scale, b.scale);
+  const mat = renderer.replayMat(b.scale, b.ox, b.oy);
 
-  // Faint star markers (just dots in their colour, no spikes/glow)
-  for (let i = 0; i < b.lastStarIdx; i++) {
-    const s = stars[i];
-    const [c1] = colorOf(s.colorIdx);
-    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 1.6);
-    g.addColorStop(0, c1 + "55");
-    g.addColorStop(1, "transparent");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r * 1.6, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r * 0.6, 0, Math.PI * 2);
-    ctx.fillStyle = c1 + "88";
-    ctx.fill();
+  // Star markers: halo + center for each star the trajectory
+  // passed. Drawn as circles (not the isPast star shader path)
+  // so we can tune their brightness independently of live-play
+  // past-star dimming. Both elements are in their star's color
+  // so the chain reads at a glance.
+  if (b.lastStarIdx > 0) {
+    const markers = [];
+    for (let i = 0; i < b.lastStarIdx; i++) {
+      const s = stars[i];
+      const c = c1Of(s.colorIdx);
+      // Soft halo
+      markers.push({
+        x: s.x, y: s.y,
+        outerR: s.r * 1.8, innerR: 0,
+        r: c[0], g: c[1], b: c[2],
+        a: 0.55,
+        kind: 2, // glow
+      });
+      // Solid center
+      markers.push({
+        x: s.x, y: s.y,
+        outerR: s.r * 0.7, innerR: 0,
+        r: c[0], g: c[1], b: c[2],
+        a: 0.9,
+        kind: 0, // solid disc
+      });
+    }
+    renderer.drawCircleBatch(markers, mat);
   }
 
-  // Trajectory path up to the current replay frame, drawn as a
-  // single fading polyline so older sections feel ghosted.
+  // Trajectory polyline up to the current replay index. Brightened
+  // from the first cut — a soft light-blue ghost tail that fades
+  // toward the start of the run.
   const upTo = Math.min(Math.floor(replayIdx), replay.length - 1);
   if (upTo > 1) {
-    ctx.lineWidth = 1.6 / b.scale;
-    ctx.strokeStyle = "rgba(160, 220, 255, 0.55)";
-    ctx.beginPath();
-    ctx.moveTo(replay[0].x, replay[0].y);
-    for (let i = 1; i <= upTo; i++) ctx.lineTo(replay[i].x, replay[i].y);
-    ctx.stroke();
+    const headA = 0.85;
+    const head = [0.63 * headA, 0.86 * headA, 1.0 * headA, headA];
+    const tail = [0, 0, 0, 0];
+    const points = replay.slice(0, upTo + 1);
+    // Line width was 1.6 screen pixels in Canvas2D. In world units
+    // under the replay bounds scale that's 1.6 / scale total, so
+    // half-width is 0.8 / scale.
+    renderer.drawPolyline(points, mat, 0.8 / b.scale, tail, head);
   }
 
-  // Marker dot at the current replay position.
+  // Marker dot at the current replay position — white glow + core.
   if (upTo >= 0) {
     const p = replay[upTo];
     const dotR = 5 / b.scale;
-    const glow = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, dotR * 4);
-    glow.addColorStop(0, "rgba(255,255,255,0.85)");
-    glow.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, dotR * 4, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, dotR, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff";
-    ctx.fill();
+    renderer.drawCircleBatch([
+      {
+        x: p.x, y: p.y,
+        outerR: dotR * 4, innerR: 0,
+        r: 1, g: 1, b: 1, a: 0.9,
+        kind: 2,
+      },
+      {
+        x: p.x, y: p.y,
+        outerR: dotR, innerR: 0,
+        r: 1, g: 1, b: 1, a: 1.0,
+        kind: 0,
+      },
+    ], mat);
   }
-
-  ctx.restore();
 }
 
-// ─────────────────────────────────────────────────────────────
-// Star rendering. Real stars have structure: a hot inner disk
-// (photosphere) darker at the limb than the center, granulation
-// cells from convection, a chromosphere / corona bleeding outward,
-// and coronal streamers that look like faint radial rays. This
-// function layers all of that as composed radial and linear
-// gradients, with a deterministic per-position phase so neighbour
-// stars don't animate in sync.
-// ─────────────────────────────────────────────────────────────
-function hex2(n) {
-  const v = Math.max(0, Math.min(255, Math.round(n)));
-  return (v < 16 ? "0" : "") + v.toString(16);
-}
-
-function drawStar(s, t, isCurrent, isNext, isPast) {
-  const [c1, c2] = colorOf(s.colorIdx);
-  // Stable pseudo-random phase from world position — same every
-  // frame for the same star, different across neighbours.
-  const phase = (Math.sin(s.x * 0.0137 + s.y * 0.0191) * 0.5 + 0.5) * Math.PI * 2;
-  const tp = t + phase;
-
-  // Dead stars: just a small dim ember + faint aura.
-  if (isPast) {
-    const g = ctx.createRadialGradient(s.x, s.y, 0, s.x, s.y, s.r * 0.9);
-    g.addColorStop(0, "rgba(255,255,255,0.22)");
-    g.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r * 0.9, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
-    ctx.fillStyle = "rgba(255,255,255,0.45)";
-    ctx.fill();
-    return;
-  }
-
-  // Capture radius hint ring for the next target.
-  if (isNext) {
-    ctx.beginPath();
-    ctx.arc(s.x, s.y, s.r * CAPTURE_MULT, 0, Math.PI * 2);
-    ctx.strokeStyle = "rgba(255,255,255,0.09)";
-    ctx.setLineDash([4, 6]);
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.setLineDash([]);
-  }
-
-  // Pulse: slow breathing of the disk radius (~4%).
-  const pulse = 1 + 0.04 * Math.sin(tp * 1.6);
-  // Flare: faster brightness modulation used by glow + core.
-  const flare = 0.8 + 0.2 * Math.sin(tp * 3.2);
-  // Catch-pulse boost from s.pulse (the shockwave on capture).
-  const catchBoost = 1 + s.pulse * 0.45;
-  const bodyR = s.r * pulse * catchBoost;
-
-  // 1 ── Corona: very large, very faint plasma halo.
-  const coronaR = bodyR * 4.6;
-  const cg = ctx.createRadialGradient(s.x, s.y, bodyR * 0.9, s.x, s.y, coronaR);
-  cg.addColorStop(0, c1 + "2e");
-  cg.addColorStop(0.35, c1 + "12");
-  cg.addColorStop(1, "transparent");
-  ctx.fillStyle = cg;
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, coronaR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ── Pre-compute the granulation cells. Each blob has an angle
-  // (`ga`) from the star centre and an orbital offset (`gr`); we
-  // reuse these in two places below: the coronal streamer that
-  // shoots outward from each blob, and the actual surface blob
-  // rendered inside the photosphere disk. Computing once keeps
-  // the streamer "rooted" to its blob instead of drifting at a
-  // separate angular rate.
-  const nGran = s.nGran;
-  const granules = new Array(nGran);
-  for (let i = 0; i < nGran; i++) {
-    const ga = tp * 0.35 + i * ((Math.PI * 2) / nGran) + 0.7 * Math.sin(tp + i);
-    const gr = bodyR * (0.2 + 0.45 * (0.5 + 0.5 * Math.sin(tp * 0.9 + i * 2.1)));
-    const gsize = bodyR * (0.28 + 0.1 * Math.sin(tp * 1.5 + i));
-    granules[i] = {
-      ga, gr, gsize,
-      gx: s.x + Math.cos(ga) * gr,
-      gy: s.y + Math.sin(ga) * gr,
-    };
-  }
-
-  // 2 ── Coronal streamers — one per granule. Each streamer roots
-  // at the disk surface in the radial direction of its blob and
-  // extends outward as a tapered triangle with a linear gradient.
-  // Streamer length scales with the blob's offset from centre
-  // (gr): blobs near the surface produce longer, brighter
-  // streamers; blobs near the centre produce short stubs. Width
-  // scales with the blob's own size, so a beefier blob spawns a
-  // beefier streamer. Skipped on stars without `hasRays` so the
-  // chain isn't uniformly spiky.
-  if (s.hasRays) {
-    for (let i = 0; i < nGran; i++) {
-      const g = granules[i];
-      const flick = 0.55 + 0.45 * Math.sin(tp * 2.0 + i * 1.13);
-      // Energy of this blob: how far it has drifted from centre,
-      // normalized so 0 = centre, 1 = at limb.
-      const energy = Math.min(1, g.gr / (bodyR * 0.65));
-      const tipDist = bodyR * (0.5 + 1.0 * energy + 0.4 * flick);
-      const cosA = Math.cos(g.ga);
-      const sinA = Math.sin(g.ga);
-      // Streamer base: just inside the disk so the disk masks the
-      // inner end cleanly when it's drawn over the top.
-      const baseX = s.x + cosA * bodyR * 0.92;
-      const baseY = s.y + sinA * bodyR * 0.92;
-      const tipX  = s.x + cosA * (bodyR + tipDist);
-      const tipY  = s.y + sinA * (bodyR + tipDist);
-      // Half-width perpendicular to the streamer axis, scaled to
-      // the blob size.
-      const halfW = g.gsize * 0.55;
-      const perpX = -sinA * halfW;
-      const perpY =  cosA * halfW;
-      const grad = ctx.createLinearGradient(baseX, baseY, tipX, tipY);
-      grad.addColorStop(0, c1 + hex2(95 * flick * (0.5 + 0.5 * energy)));
-      grad.addColorStop(1, "transparent");
-      ctx.fillStyle = grad;
-      ctx.beginPath();
-      ctx.moveTo(baseX + perpX, baseY + perpY);
-      ctx.lineTo(tipX, tipY);
-      ctx.lineTo(baseX - perpX, baseY - perpY);
-      ctx.closePath();
-      ctx.fill();
-    }
-  }
-
-  // 3 ── Outer glow: tighter, brighter than the corona.
-  const glowR = bodyR * 2.1;
-  const g2 = ctx.createRadialGradient(s.x, s.y, bodyR * 0.75, s.x, s.y, glowR);
-  const glowAlpha = (isCurrent ? 175 : isNext ? 140 : 110) * flare;
-  g2.addColorStop(0, c1 + hex2(glowAlpha));
-  g2.addColorStop(1, "transparent");
-  ctx.fillStyle = g2;
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, glowR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 4 ── Photosphere: the main disk with limb darkening (edge
-  // reddened/darker than the hot center).
-  const diskGrad = ctx.createRadialGradient(
-    s.x - bodyR * 0.12, s.y - bodyR * 0.12, 0,
-    s.x, s.y, bodyR
-  );
-  diskGrad.addColorStop(0, "#ffffff");
-  diskGrad.addColorStop(0.28, c1);
-  diskGrad.addColorStop(0.78, c1);
-  diskGrad.addColorStop(1, c2);
-  ctx.fillStyle = diskGrad;
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, bodyR, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 5 ── Granulation: paint the same blobs we computed above,
-  // clipped to the disk so they don't bleed outside.
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(s.x, s.y, bodyR * 0.985, 0, Math.PI * 2);
-  ctx.clip();
-  for (let i = 0; i < nGran; i++) {
-    const g = granules[i];
-    const gGrad = ctx.createRadialGradient(g.gx, g.gy, 0, g.gx, g.gy, g.gsize);
-    gGrad.addColorStop(0, "rgba(255,255,255,0.32)");
-    gGrad.addColorStop(1, "rgba(255,255,255,0)");
-    ctx.fillStyle = gGrad;
-    ctx.beginPath();
-    ctx.arc(g.gx, g.gy, g.gsize, 0, Math.PI * 2);
-    ctx.fill();
-  }
-  ctx.restore();
-
-  // 6 ── Bright core highlight (hot spot, top-left offset to hint
-  // at a light source and give the disk a 3D feel).
-  const coreR = bodyR * 0.22 * flare;
-  const coreGrad = ctx.createRadialGradient(
-    s.x - bodyR * 0.1, s.y - bodyR * 0.1, 0,
-    s.x - bodyR * 0.1, s.y - bodyR * 0.1, coreR * 2
-  );
-  coreGrad.addColorStop(0, "rgba(255,255,255,1)");
-  coreGrad.addColorStop(1, "rgba(255,255,255,0)");
-  ctx.fillStyle = coreGrad;
-  ctx.beginPath();
-  ctx.arc(s.x - bodyR * 0.1, s.y - bodyR * 0.1, coreR * 2, 0, Math.PI * 2);
-  ctx.fill();
-}
+// Star rendering lives in the `star` shader program in renderer.js.
+// This file no longer touches the canvas pixel-by-pixel — it just
+// orchestrates the game state and hands arrays off to the renderer.
 
 // ─────────────────────────────────────────────────────────────
-// Drawing
+// Drawing — this is entirely orchestration now. All actual pixel
+// work happens in renderer.js (WebGL2). draw() advances per-entity
+// state (particle positions, shockwave radii, star pulse decay)
+// while building the instance batches the renderer consumes.
 // ─────────────────────────────────────────────────────────────
 function draw() {
-  // Background gradient
-  const bg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H));
-  bg.addColorStop(0, "#12121f");
-  bg.addColorStop(1, "#0a0a12");
-  ctx.fillStyle = bg;
-  ctx.fillRect(0, 0, W, H);
+  if (!renderer) return;
+  const nowSec = performance.now() / 1000;
+  renderer.beginFrame(nowSec);
+  renderer.drawBackground(camY);
+  renderer.drawBgStars();
 
-  // Grid
-  ctx.save();
-  ctx.translate(0, camY % 40);
-  ctx.strokeStyle = "rgba(255,255,255,0.02)";
-  ctx.lineWidth = 1;
-  for (let y = -40; y < H + 40; y += 40) {
-    ctx.beginPath();
-    ctx.moveTo(0, y); ctx.lineTo(W, y);
-    ctx.stroke();
-  }
-  for (let x = 0; x < W; x += 40) {
-    ctx.beginPath();
-    ctx.moveTo(x, 0); ctx.lineTo(x, H);
-    ctx.stroke();
-  }
-  ctx.restore();
-
-  // Parallax background starfield — tiny twinkling dots in screen
-  // space, each moving a fraction of camY determined by its depth.
-  // Drawn outside the zoomed world transform so pixel size is
-  // preserved regardless of ZOOM, and the dots wrap vertically so
-  // the field appears infinite as the camera pans upward.
-  const nowSecBg = performance.now() / 1000;
-  const wrapH = H + 200;
-  for (let i = 0; i < bgStars.length; i++) {
-    const bgs = bgStars[i];
-    let y = bgs.y + camY * bgs.depth;
-    y = ((y % wrapH) + wrapH) % wrapH - 100;
-    if (y < -6 || y > H + 6) continue;
-    const twinkle = 0.45 + 0.55 * Math.sin(nowSecBg * bgs.twinkleSpeed + bgs.phase);
-    ctx.globalAlpha = bgs.brightness * twinkle;
-    ctx.fillStyle = bgs.color;
-    if (bgs.size < 1.0) {
-      // Sub-pixel dot — fillRect is cheaper than arc.
-      ctx.fillRect(bgs.x - 0.5, y - 0.5, 1, 1);
-    } else {
-      ctx.beginPath();
-      ctx.arc(bgs.x, y, bgs.size, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  ctx.globalAlpha = 1;
-
-  // Welcome screen: draw the decorative menu stars in screen space
-  // (no world transform, no camera offset) and bail before the
-  // gameplay-only rendering below. These stars use the same
-  // drawStar() renderer as gameplay, so they animate identically.
+  // MENU: only the decorative welcome-screen stars, in screen space.
   if (state === STATE.MENU) {
-    const nowSec = performance.now() / 1000;
-    for (let i = 0; i < menuStars.length; i++) {
-      drawStar(menuStars[i], nowSec, false, false, false);
+    if (menuStars.length) {
+      const menuBatch = menuStars.map((s) => ({
+        x: s.x, y: s.y, r: s.r,
+        colorIdx: s.colorIdx, pulse: 0,
+        hasRays: s.hasRays, nGran: s.nGran,
+        isCurrent: false, isNext: false, isPast: false,
+      }));
+      renderer.drawStarBatch(menuBatch, renderer.screenMat());
     }
     return;
   }
 
-  // Game-over replay: when state is DEAD, replace the live world
-  // drawing with a faded ghost playback of the run. The overlay
-  // sits on top with reduced opacity so the AGAIN button remains
-  // legible while the replay loops behind it.
+  // DEAD: faded ghost replay of the run.
   if (state === STATE.DEAD && replayBounds) {
-    ctx.globalAlpha = 0.55;
-    drawReplay();
-    ctx.globalAlpha = 1;
+    drawReplayGhost();
     return;
   }
 
-  // World transform — scale around the camera focus point so the
-  // ball stays roughly mid-screen but more of the upcoming chain
-  // of stars is visible above and below it.
-  ctx.save();
-  ctx.translate(W / 2, H * 0.55);
-  ctx.scale(ZOOM, ZOOM);
-  ctx.translate(-W / 2, -H * 0.55);
-  ctx.translate(0, camY);
+  // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
+  const cam = renderer.cameraMat(camY, ZOOM);
 
-  // Faint connector hints to next stars
+  // Connector hints — faint lines from the current star through
+  // the next few upcoming stars. Sent as disconnected 2-point
+  // polyline segments.
   if (state === STATE.PLAY && ball) {
     const cs = ball.currentStar;
-    for (let i = cs; i < Math.min(stars.length - 1, cs + 5); i++) {
-      const a = stars[i], b = stars[i + 1];
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = "rgba(255,255,255,0.035)";
-      ctx.lineWidth = 1;
-      ctx.stroke();
+    const lastIdx = Math.min(stars.length - 1, cs + 5);
+    if (lastIdx > cs) {
+      const segs = [];
+      for (let i = cs; i < lastIdx; i++) {
+        segs.push([
+          { x: stars[i].x, y: stars[i].y },
+          { x: stars[i + 1].x, y: stars[i + 1].y },
+        ]);
+      }
+      const col = [0.035, 0.035, 0.035, 0.035];
+      renderer.drawSegments(segs, cam, 1 / ZOOM, col, col);
     }
   }
 
-  // Trail
-  for (let i = 0; i < trail.length; i++) {
-    const t = trail[i];
-    t.life -= 0.006;
-    if (t.life <= 0) continue;
-    ctx.beginPath();
-    ctx.arc(t.x, t.y, 2.4 * t.life, 0, Math.PI * 2);
-    ctx.fillStyle = t.color;
-    ctx.globalAlpha = t.life * 0.55;
-    ctx.fill();
+  // Trail — single stroked polyline. Half-width 1.2 world units;
+  // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.
+  // Alpha baked into colors so the renderer passes it straight
+  // through as uniforms.
+  if (trail.length > 1) {
+    const last = trail[trail.length - 1];
+    const headA = 0.55;
+    const head = [last.r * headA, last.g * headA, last.b * headA, headA];
+    const tail = [0, 0, 0, 0];
+    renderer.drawPolyline(trail, cam, 1.3, tail, head);
   }
-  trail = trail.filter((t) => t.life > 0);
-  ctx.globalAlpha = 1;
 
-  // Stars — layered render inspired by real stellar structure:
-  //   • corona     : huge faint halo (outermost plasma atmosphere)
-  //   • light rays : rotating radial streamers (coronal streamers)
-  //   • outer glow : tighter bright halo
-  //   • photosphere: the star's disk with limb darkening
-  //   • granules   : animated bright blobs on the surface
-  //   • core       : tiny bright hot spot
-  // Each star uses a position-derived phase so its pulse / ray
-  // rotation / granules aren't synced with its neighbours.
-  const nowSec = performance.now() / 1000;
+  // Active stars — frustum-cull against the camera vertical band,
+  // decay catch pulses, tag role flags, build the instance batch.
+  const starBatch = [];
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
     const sY = s.y + camY;
@@ -1071,84 +878,108 @@ function draw() {
     const isCurrent = ball && i === ball.currentStar;
     const isNext = ball && i === ball.currentStar + 1;
     const isPast = s.caught && !isCurrent;
-    drawStar(s, nowSec, isCurrent, isNext, isPast);
+    starBatch.push({
+      x: s.x, y: s.y, r: s.r,
+      colorIdx: s.colorIdx, pulse: s.pulse,
+      hasRays: s.hasRays, nGran: s.nGran,
+      isCurrent, isNext, isPast,
+    });
+  }
+  if (starBatch.length) renderer.drawStarBatch(starBatch, cam);
+
+  // Dashed hint ring around the next star — drawn via the circle
+  // program with kind=3.
+  if (ball && ball.currentStar + 1 < stars.length) {
+    const nx = stars[ball.currentStar + 1];
+    const ringR = nx.r * CAPTURE_MULT;
+    // Slight alpha pulse so the hint ring draws the eye without
+    // being distracting — roughly 0.14..0.26 over a ~2.6 s period.
+    const pulse = 0.85 + 0.30 * Math.sin(nowSec * 2.4);
+    renderer.drawCircleBatch([{
+      x: nx.x, y: nx.y,
+      outerR: ringR + 1.1,
+      innerR: ringR - 1.1,
+      r: 1, g: 1, b: 1, a: 0.20 * pulse,
+      kind: 3,
+    }], cam);
   }
 
-  // Shockwaves
+  // Shockwaves — advance state and collect into a circle batch
+  // (kind=1 ring). lineWidth becomes an inner/outer radius gap.
+  const shockBatch = [];
   for (let i = shockwaves.length - 1; i >= 0; i--) {
     const w = shockwaves[i];
     w.r += 3;
     w.life -= 0.03;
     if (w.life <= 0) { shockwaves.splice(i, 1); continue; }
-    ctx.beginPath();
-    ctx.arc(w.x, w.y, w.r, 0, Math.PI * 2);
-    ctx.strokeStyle = w.color;
-    ctx.globalAlpha = w.life * 0.35;
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    const wA = w.life * 0.35;
+    shockBatch.push({
+      x: w.x, y: w.y,
+      outerR: w.r + 1.4,
+      innerR: Math.max(0, w.r - 1.4),
+      r: w.cr, g: w.cg, b: w.cb, a: wA,
+      kind: 1,
+    });
   }
-  ctx.globalAlpha = 1;
+  if (shockBatch.length) renderer.drawCircleBatch(shockBatch, cam);
 
-  // Particles
+  // Particles — advance state and collect into a circle batch.
+  const partBatch = [];
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
     p.x += p.vx; p.y += p.vy;
     p.vx *= 0.97; p.vy *= 0.97;
     p.life -= p.decay;
     if (p.life <= 0) { particles.splice(i, 1); continue; }
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
-    ctx.fillStyle = p.color;
-    ctx.globalAlpha = p.life;
-    ctx.fill();
+    partBatch.push({
+      x: p.x, y: p.y,
+      outerR: Math.max(0.5, p.size * p.life),
+      innerR: 0,
+      r: p.r, g: p.g, b: p.b, a: p.life,
+      kind: 0,
+    });
   }
-  ctx.globalAlpha = 1;
+  if (partBatch.length) renderer.drawCircleBatch(partBatch, cam);
 
-  // Ball
+  // Ball: velocity arrow + glow halo + bright core. Velocity uses
+  // the raw physics velocity so direction reacts instantly to a
+  // boost; position uses the interpolated render coords.
   if (ball && ball.alive) {
     const cs = stars[ball.currentStar];
-    const [bc] = colorOf(cs.colorIdx);
+    const bc = c1Of(cs.colorIdx);
+    const bx = ballRenderX;
+    const by = ballRenderY;
 
-    // Velocity arrow — shows direction the next boost will push
     const sp = Math.hypot(ball.vx, ball.vy);
     if (sp > 0.001) {
       const ux = ball.vx / sp;
       const uy = ball.vy / sp;
-      const len = 28;
-      const ax = ball.x + ux * len;
-      const ay = ball.y + uy * len;
-      ctx.beginPath();
-      ctx.moveTo(ball.x + ux * 9, ball.y + uy * 9);
-      ctx.lineTo(ax, ay);
-      ctx.strokeStyle = "rgba(255,255,255,0.45)";
-      ctx.lineWidth = 2;
-      ctx.lineCap = "round";
-      ctx.stroke();
-      // arrowhead
-      const px = -uy, py = ux;
-      ctx.beginPath();
-      ctx.moveTo(ax, ay);
-      ctx.lineTo(ax - ux * 6 + px * 4, ay - uy * 6 + py * 4);
-      ctx.lineTo(ax - ux * 6 - px * 4, ay - uy * 6 - py * 4);
-      ctx.closePath();
-      ctx.fillStyle = "rgba(255,255,255,0.55)";
-      ctx.fill();
+      const p0 = { x: bx + ux * 9,  y: by + uy * 9 };
+      const p1 = { x: bx + ux * 28, y: by + uy * 28 };
+      const tail = [0, 0, 0, 0];
+      const head = [0.45, 0.45, 0.45, 0.45];
+      renderer.drawPolyline([p0, p1], cam, 1.3, tail, head);
     }
 
-    const g2 = ctx.createRadialGradient(ball.x, ball.y, 0, ball.x, ball.y, 22);
-    g2.addColorStop(0, bc + "88");
-    g2.addColorStop(1, "transparent");
-    ctx.fillStyle = g2;
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, 22, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.beginPath();
-    ctx.arc(ball.x, ball.y, 7, 0, Math.PI * 2);
-    ctx.fillStyle = "#fff";
-    ctx.fill();
+    // Ball rendering: glow halo + solid white core + velocity tip dot
+    // (when direction is valid). All in one circle batch.
+    const ballBatch = [
+      // Glow halo
+      { x: bx, y: by, outerR: 22, innerR: 0, r: bc[0], g: bc[1], b: bc[2], a: 0.53, kind: 2 },
+      // Solid core
+      { x: bx, y: by, outerR: 7, innerR: 0, r: 1, g: 1, b: 1, a: 1, kind: 0 },
+    ];
+    if (sp > 0.001) {
+      const ux = ball.vx / sp;
+      const uy = ball.vy / sp;
+      ballBatch.push({
+        x: bx + ux * 28, y: by + uy * 28,
+        outerR: 3.5, innerR: 0,
+        r: 1, g: 1, b: 1, a: 0.6, kind: 0,
+      });
+    }
+    renderer.drawCircleBatch(ballBatch, cam);
   }
-
-  ctx.restore();
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1159,19 +990,55 @@ function draw() {
 // monitor refresh rate or RAF irregularity. The accumulator is
 // clamped at MAX_FRAME_GAP_MS so a tab switch / debugger pause
 // can't queue up a multi-second burst of physics on resume.
+//
+// Two things about this loop matter for mobile smoothness:
+//
+//   1. Use the RAF-provided timestamp, NOT performance.now().
+//      The RAF timestamp is aligned to the frame the browser is
+//      preparing; performance.now() gives the moment the JS
+//      callback actually ran, which jitters relative to vsync
+//      (especially on mobile after compositor handoff). That
+//      jitter poisons `elapsed` and makes a steady 60 Hz display
+//      fire 1 / 2 / 3 physics ticks per frame in an uneven
+//      pattern. At 120 Hz physics / 60 Hz rendering that reads
+//      as visible stutter even though the display is solid.
+//
+//   2. Render interpolation between the two most recent physics
+//      states. A fixed-step sim committed in discrete chunks
+//      only happens to produce the same number of ticks per
+//      frame when the accumulator grid aligns with the refresh
+//      grid, which it rarely does for long. Lerping the rendered
+//      ball position by `alpha = accumulator / PHYSICS_DT_MS`
+//      makes the visual advance at display rate regardless, and
+//      is the standard Glenn-Fiedler "Fix Your Timestep" fix.
 // ─────────────────────────────────────────────────────────────
 let physicsAccumulator = 0;
-let lastFrameTime = performance.now();
+// Sentinel: set on the first RAF callback so we don't compute
+// a bogus elapsed from module-load time to first vsync.
+let lastFrameTime = -1;
+// Interpolated render position for the ball. Equal to ball.x/y
+// only at alpha = 1 (end of a physics tick); otherwise lerped
+// between the state before the most recent tick and the current
+// state. draw() and renderTick() use these for anything visual.
+let ballRenderX = 0, ballRenderY = 0;
 
-function loop() {
-  const now = performance.now();
-  let elapsed = now - lastFrameTime;
+function loop(rafTime) {
+  if (lastFrameTime < 0) lastFrameTime = rafTime;
+  let elapsed = rafTime - lastFrameTime;
   if (elapsed > MAX_FRAME_GAP_MS) elapsed = MAX_FRAME_GAP_MS;
-  lastFrameTime = now;
+  if (elapsed < 0) elapsed = 0;
+  lastFrameTime = rafTime;
   physicsAccumulator += elapsed;
 
+  // Track the ball's pre-tick position so we can interpolate
+  // between the two most recent physics states after the tick
+  // loop finishes. Only the LAST saved prev matters — with 2
+  // ticks per frame, that's one tick's worth of sim time.
+  let ballPrevX = ball ? ball.x : 0;
+  let ballPrevY = ball ? ball.y : 0;
   let ticks = 0;
   while (physicsAccumulator >= PHYSICS_DT_MS && ticks < MAX_PHYSICS_PER_FRAME) {
+    if (ball) { ballPrevX = ball.x; ballPrevY = ball.y; }
     physicsTick();
     physicsAccumulator -= PHYSICS_DT_MS;
     ticks++;
@@ -1179,6 +1046,17 @@ function loop() {
   // If the cap fired, shed any leftover accumulator so we don't
   // try to "catch up" forever after a long stall.
   if (ticks >= MAX_PHYSICS_PER_FRAME) physicsAccumulator = 0;
+
+  // Render-position lerp. alpha ∈ [0, 1). At alpha=0 we're right
+  // after a tick (draw the pre-tick state); at alpha→1 we're
+  // about to commit the next tick (draw the current state). The
+  // visual glides smoothly across the sim grid instead of
+  // snapping once per tick.
+  if (ball) {
+    const alpha = physicsAccumulator / PHYSICS_DT_MS;
+    ballRenderX = ballPrevX + (ball.x - ballPrevX) * alpha;
+    ballRenderY = ballPrevY + (ball.y - ballPrevY) * alpha;
+  }
 
   renderTick();
   draw();
@@ -1190,13 +1068,16 @@ function loop() {
   }
   requestAnimationFrame(loop);
 }
-// Populate welcome-screen visuals before the first draw. All
-// top-level `let` declarations have run by this point, so the
-// init helpers can touch bgStars / menuStars without TDZ issues.
-// init() re-seeds bgStars on BEGIN so gameplay gets fresh twinkle.
-initBgStars();
+// Populate the welcome-screen menu stars before the first draw.
+// All top-level `let` declarations have run by this point, so
+// initMenuStars can touch menuStars without TDZ issues. The
+// renderer seeds its own parallax bgStars inside setViewport().
 initMenuStars();
-loop();
+// Kick off via RAF. Do NOT call loop() synchronously — the first
+// elapsed needs to be measured against a real vsync timestamp
+// (see the sentinel in loop()), and any catchup ticks fired
+// from module-load time would run before init() has a ball.
+requestAnimationFrame(loop);
 
 // ─────────────────────────────────────────────────────────────
 // Input
@@ -1205,14 +1086,27 @@ function handleTap() {
   if (state === STATE.PLAY) boost();
 }
 
+// All three of these preventDefaults are scoped to gameplay.
+// On the start / game-over screens we let the browser handle
+// touches normally so pull-to-refresh (and any other native
+// gesture) still works. touch-action on body + canvas already
+// permits the pan gesture at the CSS layer; these handlers
+// just need to stop swallowing it at the JS layer.
 document.addEventListener("pointerdown", (e) => {
   const t = e.target;
   if (t.closest("button")) return;
+  if (state !== STATE.PLAY) return;
   e.preventDefault();
   handleTap();
 });
-document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
-document.addEventListener("gesturestart", (e) => e.preventDefault());
+document.addEventListener("touchmove", (e) => {
+  if (state !== STATE.PLAY && state !== STATE.DYING) return;
+  e.preventDefault();
+}, { passive: false });
+document.addEventListener("gesturestart", (e) => {
+  if (state !== STATE.PLAY && state !== STATE.DYING) return;
+  e.preventDefault();
+});
 
 document.addEventListener("keydown", (e) => {
   if (e.code !== "Space" && e.key !== " ") return;

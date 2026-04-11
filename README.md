@@ -17,7 +17,11 @@ pulls you in and you orbit that one too.
   no boost in the search range can reach it, the game still fires
   a default burn and you fly free, usually off into the void.
 - **Release within one rotation for bonus points.** Half a rotation
-  pays ×3, less than one full rotation pays ×2.
+  pays ×3 (Blazing), less than one full rotation pays ×2 (Quick).
+- **Chain fast launches for a streak multiplier.** Consecutive
+  Quick or Blazing captures stack: the second doubles the bonus,
+  the third triples it, up to ×8. A slow capture (or dying) breaks
+  the streak.
 - **Watch your replay.** The game records every frame and plays
   the run back behind the AGAIN button.
 
@@ -32,6 +36,14 @@ npm start          # → http://localhost:8001/
 
 No build step. No `npm install`. The server uses only Node's
 built-in modules. Requires Node ≥ 18.
+
+### Browser support
+
+Rendering is native WebGL2, no fallback. That means any browser
+released in the last few years (Chrome 56+, Firefox 51+, Safari
+15+, any modern Chromium on mobile). If the browser can't create
+a WebGL2 context the game shows an unsupported-device screen
+instead of running.
 
 ## Run tests
 

@@ -18,7 +18,11 @@
     overflow: hidden;
     background: #0a0a12;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    touch-action: none;
+    /* Allow vertical pan at the document level so the browser's
+      pull-to-refresh gesture still works on the start screen
+      and the game-over screen. The canvas below overrides this
+      back to `none` so mid-game taps can't accidentally scroll. */
+    touch-action: pan-y;
     user-select: none;
     -webkit-user-select: none;
     -webkit-tap-highlight-color: transparent;
@@ -29,6 +33,12 @@
     display: block;
     width: 100%;
     height: 100%;
+    /* Gameplay taps must never start a browser scroll/zoom
+      gesture — otherwise a boost tap during PLAY would race
+      against pull-to-refresh. Overlays (start, game-over) sit
+      above the canvas in the #ui layer and inherit pan-y from
+      body, so they stay gesture-friendly. */
+    touch-action: none;
   }
 
   /* ─── HUD layer ─── */
@@ -114,8 +124,8 @@
     replay animation behind it stays visible while the AGAIN button
     sits in the foreground. */
   #gameover {
-    background: rgba(10, 10, 18, 0.55);
-    backdrop-filter: blur(6px);
+    background: rgba(10, 10, 18, 0.4);
+    backdrop-filter: blur(4px);
   }
 
   /* Start screen is also see-through so the ambient stars drawn
@@ -237,6 +247,12 @@
     <div id="final">0</div>
     <div class="label"><span id="stars">0</span> stars · best <span id="best">0</span></div>
     <button id="retry-btn">AGAIN</button>
+  </div>
+
+  <div id="unsupported" class="overlay hidden">
+    <h1>ASTROCATCH</h1>
+    <div class="tag">webgl2 required</div>
+    <div class="desc">This browser doesn't support WebGL2, which the game needs for rendering. Try a recent version of Chrome, Firefox, or Safari.</div>
   </div>
 </div>
 
