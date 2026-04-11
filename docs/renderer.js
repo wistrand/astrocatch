@@ -4,7 +4,7 @@
 //
 // Four shader programs cover the full render surface:
 //
-//   fullscreen  background radial gradient + scrolling grid. One draw.
+//   fullscreen  background radial gradient. One draw.
 //   circle      ball, particles, shockwaves, isNext hint ring, bgStars.
 //               Instanced quad. Kind flag in per-instance attributes
 //               picks between solid, ring, glow, dashed ring. Parallax
@@ -61,6 +61,24 @@ function mat3Scale(sx, sy) {
 }
 function mat3Multiply(A, B) {
   const out = new Float32Array(9);
+  mat3MulInto(A, B, out);
+  return out;
+}
+// In-place variants used by the hot camera path so per-frame
+// matrix math allocates zero. `out` must not alias A or B.
+function mat3SetTranslate(out, tx, ty) {
+  out[0] = 1; out[1] = 0; out[2] = tx;
+  out[3] = 0; out[4] = 1; out[5] = ty;
+  out[6] = 0; out[7] = 0; out[8] = 1;
+  return out;
+}
+function mat3SetScale(out, sx, sy) {
+  out[0] = sx; out[1] = 0;  out[2] = 0;
+  out[3] = 0;  out[4] = sy; out[5] = 0;
+  out[6] = 0;  out[7] = 0;  out[8] = 1;
+  return out;
+}
+function mat3MulInto(A, B, out) {
   for (let i = 0; i < 3; i++) {
     for (let j = 0; j < 3; j++) {
       let sum = 0;
@@ -98,6 +116,8 @@ function compileProgram(gl, vsSrc, fsSrc, name) {
   if (!gl.getProgramParameter(p, gl.LINK_STATUS)) {
     const log = gl.getProgramInfoLog(p);
     gl.deleteProgram(p);
+    gl.deleteShader(vs);
+    gl.deleteShader(fs);
     throw new Error("program link failed [" + name + "]: " + log);
   }
   gl.deleteShader(vs);
@@ -136,7 +156,6 @@ const FULLSCREEN_FS = `#version 300 es
 precision highp float;
 uniform vec2 u_resolution;  // logical CSS pixels
 uniform float u_dpr;
-uniform float u_camY;
 out vec4 outColor;
 
 void main() {
@@ -153,12 +172,6 @@ void main() {
     vec3(0.039, 0.039, 0.071),
     clamp(dist / maxD, 0.0, 1.0)
   );
-
-  // Faint grid every 40 px, scrolling with camY at 1:1.
-  vec2 gf = frag + vec2(0.0, mod(u_camY, 40.0));
-  float gx = step(mod(gf.x, 40.0), 1.0);
-  float gy = step(mod(gf.y, 40.0), 1.0);
-  col += vec3(max(gx, gy) * 0.02);
 
   outColor = vec4(col, 1.0);
 }
@@ -183,7 +196,9 @@ uniform vec2 u_resolution;
 out vec2 v_local;
 out vec2 v_radii;
 out vec4 v_color;
-out float v_kind;
+// flat: kind is an integer enum; smooth interpolation could drift
+// it across the quad and break the int() cast in the fragment.
+flat out float v_kind;
 
 void main() {
   float depth = a_animate.x;
@@ -223,7 +238,7 @@ precision highp float;
 in vec2 v_local;
 in vec2 v_radii;
 in vec4 v_color;
-in float v_kind;
+flat in float v_kind;
 out vec4 outColor;
 
 const float PI = 3.14159265;
@@ -232,7 +247,7 @@ void main() {
   float d = length(v_local);
   float outerR = v_radii.x;
   float innerR = v_radii.y;
-  int kind = int(v_kind + 0.5);
+  int kind = int(v_kind);
   float aw = fwidth(d);
   float a = 0.0;
 
@@ -281,10 +296,15 @@ out vec3 v_c1;
 out vec3 v_c2;
 out float v_baseR;
 out float v_seed;
-out float v_hasRays;
-out float v_nGran;
+// flat: these carry integer-packed data or boolean flags. Default
+// (smooth) varying interpolation can introduce tiny floating-point
+// drift even when all quad vertices share the same value, which
+// breaks an int() cast in the fragment shader. flat disables
+// interpolation so the value is exactly what was written.
+flat out float v_hasRays;
+flat out float v_nGran;
 out float v_pulse;
-out float v_flags;
+flat out float v_flags;
 
 void main() {
   float baseR = a_c1.w;
@@ -317,10 +337,10 @@ in vec3 v_c1;
 in vec3 v_c2;
 in float v_baseR;
 in float v_seed;
-in float v_hasRays;
-in float v_nGran;
+flat in float v_hasRays;
+flat in float v_nGran;
 in float v_pulse;
-in float v_flags;
+flat in float v_flags;
 
 uniform float u_time;
 
@@ -331,10 +351,9 @@ const float TAU = 6.28318530;
 
 void main() {
   float d = length(v_local);
-  float theta = atan(v_local.y, v_local.x);
   float tp = u_time + v_seed;
 
-  int flags = int(v_flags + 0.5);
+  int flags = int(v_flags);
   bool isCurrent = (flags & 1) != 0;
   bool isNext    = (flags & 2) != 0;
   bool isPast    = (flags & 4) != 0;
@@ -355,12 +374,24 @@ void main() {
   float catchBoost = 1.0 + v_pulse * 0.45;
   float bodyR = v_baseR * pulse * catchBoost;
 
+  // Early-out: the quad that wraps a star is baseR*4.3 + 8 in
+  // half-extent, but the corona only reaches bodyR*4.0. That
+  // leaves ~37% of the quad as guaranteed-transparent corner
+  // fragments, which would otherwise run the full streamer +
+  // granule loops below for no visible result. Testing against
+  // the live coronaR (not a constant) means this works correctly
+  // during catch-shockwave pulses where bodyR temporarily grows.
+  float coronaR = bodyR * 4.0;
+  if (d > coronaR) {
+    outColor = vec4(0.0);
+    return;
+  }
+
   // Premultiplied accumulator. We composite layers back-to-front.
   vec4 color = vec4(0.0);
 
   // ── Layer 1: Corona (3-stop falloff matching the Canvas2D gradient)
-  float coronaR = bodyR * 4.0;
-  if (d < coronaR) {
+  {
     float t = clamp((d - bodyR * 0.9) / max(coronaR - bodyR * 0.9, 0.001), 0.0, 1.0);
     float ca;
     if (t < 0.35) {
@@ -372,45 +403,67 @@ void main() {
     color = vec4(v_c1 * ca, ca);
   }
 
-  // ── Layer 2: Coronal streamers (only if this star has rays).
-  // One streamer per granule, rooted in the granule's radial
-  // direction, tapering from base to tip. Reproduces the Canvas2D
-  // per-granule linear gradient streamers procedurally.
-  if (v_hasRays > 0.5) {
-    float streamerAccum = 0.0;
-    int nGran = int(v_nGran + 0.5);
+  // ── Fused granule-data loop. The streamer and granulation
+  // passes both need ga / gr / gsize per granule, derived from
+  // the same three sin() formulas. Computing once and consuming
+  // twice halves the trig cost on body-interior fragments (where
+  // both passes run). The loop also folds in cos(ga) / sin(ga),
+  // which the streamer uses for its axis and the granulation
+  // uses for its blob position. We accumulate a scalar streamer
+  // contribution and a scalar granulation contribution, which
+  // are composited over the accumulator by their owning layers
+  // below in the usual back-to-front order.
+  float streamerA = 0.0;
+  float granA = 0.0;
+  bool doStreamers = v_hasRays > 0.5;
+  bool doGranules = d < bodyR * 0.985;
+  if (doStreamers || doGranules) {
+    int nGran = int(v_nGran);
     for (int i = 0; i < 8; i++) {
       if (i >= nGran) break;
       float fi = float(i);
       float ga = tp * 0.35 + fi * (TAU / v_nGran) + 0.7 * sin(tp + fi);
       float gr = bodyR * (0.2 + 0.45 * (0.5 + 0.5 * sin(tp * 0.9 + fi * 2.1)));
       float gsize = bodyR * (0.28 + 0.1 * sin(tp * 1.5 + fi));
-
-      float energy = min(1.0, gr / (bodyR * 0.65));
-      float flick = 0.55 + 0.45 * sin(tp * 2.0 + fi * 1.13);
-      float tipDist = bodyR * (0.5 + 1.0 * energy + 0.4 * flick);
-      float baseAlong = bodyR * 0.92;
-      float tipAlong = bodyR + tipDist;
-      if (tipAlong <= baseAlong) continue;
-
       float cosA = cos(ga);
       float sinA = sin(ga);
-      float along = v_local.x * cosA + v_local.y * sinA;
-      float perp = -v_local.x * sinA + v_local.y * cosA;
 
-      if (along < baseAlong || along > tipAlong) continue;
-      float segT = (along - baseAlong) / (tipAlong - baseAlong);
-      float halfW = gsize * 0.55 * (1.0 - segT * 0.85);
-      if (halfW < 0.001) continue;
-      float lateral = 1.0 - smoothstep(halfW * 0.5, halfW, abs(perp));
-      float baseAlpha = (95.0 / 255.0) * flick * (0.5 + 0.5 * energy);
-      streamerAccum += baseAlpha * (1.0 - segT) * lateral;
+      if (doStreamers) {
+        float energy = min(1.0, gr / (bodyR * 0.65));
+        float flick = 0.55 + 0.45 * sin(tp * 2.0 + fi * 1.13);
+        float tipDist = bodyR * (0.5 + 1.0 * energy + 0.4 * flick);
+        float baseAlong = bodyR * 0.92;
+        float tipAlong = bodyR + tipDist;
+        if (tipAlong > baseAlong) {
+          float along = v_local.x * cosA + v_local.y * sinA;
+          float perp = -v_local.x * sinA + v_local.y * cosA;
+          if (along >= baseAlong && along <= tipAlong) {
+            float segT = (along - baseAlong) / (tipAlong - baseAlong);
+            float halfW = gsize * 0.55 * (1.0 - segT * 0.85);
+            if (halfW > 0.001) {
+              float lateral = 1.0 - smoothstep(halfW * 0.5, halfW, abs(perp));
+              float baseAlpha = (95.0 / 255.0) * flick * (0.5 + 0.5 * energy);
+              streamerA += baseAlpha * (1.0 - segT) * lateral;
+            }
+          }
+        }
+      }
+
+      if (doGranules) {
+        vec2 gpos = vec2(cosA, sinA) * gr;
+        float gd = distance(v_local, gpos);
+        float gAlpha = (1.0 - smoothstep(0.0, max(gsize, 0.001), gd)) * 0.32;
+        granA += gAlpha;
+      }
     }
-    streamerAccum = clamp(streamerAccum, 0.0, 1.0);
-    vec4 streamer = vec4(v_c1 * streamerAccum, streamerAccum);
-    // Composite streamers OVER the corona.
-    color.rgb = streamer.rgb + color.rgb * (1.0 - streamer.a);
-    color.a = streamer.a + color.a * (1.0 - streamer.a);
+  }
+
+  // ── Layer 2: Coronal streamers over the corona.
+  if (doStreamers) {
+    streamerA = clamp(streamerA, 0.0, 1.0);
+    vec3 sRgb = v_c1 * streamerA;
+    color.rgb = sRgb + color.rgb * (1.0 - streamerA);
+    color.a = streamerA + color.a * (1.0 - streamerA);
   }
 
   // ── Layer 3: Outer glow.
@@ -421,13 +474,19 @@ void main() {
     float glowA = glowBase * flare * (1.0 - t);
     if (d < bodyR * 0.75) glowA = glowBase * flare;
     glowA = clamp(glowA, 0.0, 1.0);
-    vec4 glow = vec4(v_c1 * glowA, glowA);
-    color.rgb = glow.rgb + color.rgb * (1.0 - glow.a);
-    color.a = glow.a + color.a * (1.0 - glow.a);
+    vec3 gRgb = v_c1 * glowA;
+    color.rgb = gRgb + color.rgb * (1.0 - glowA);
+    color.a = glowA + color.a * (1.0 - glowA);
   }
 
-  // ── Layer 4: Photosphere disk with limb darkening.
-  if (d < bodyR) {
+  // ── Layer 4: Photosphere disk with a soft SDF-AA edge. Using
+  // a smoothstep at the edge (width = 1 pixel of fwidth(d)) means
+  // the disk composites cleanly over the corona/glow instead of
+  // showing a 1-pixel hard ring, which is what lets us ship with
+  // antialias: false on the GL context.
+  float aw = fwidth(d);
+  float diskMask = 1.0 - smoothstep(bodyR - aw, bodyR + aw, d);
+  if (diskMask > 0.0) {
     vec2 offset = vec2(-bodyR * 0.12, -bodyR * 0.12);
     float od = length(v_local - offset);
     float t = clamp(od / bodyR, 0.0, 1.0);
@@ -436,26 +495,16 @@ void main() {
     else if (t < 0.78) diskColor = v_c1;
     else diskColor = mix(v_c1, v_c2, (t - 0.78) / 0.22);
 
-    // Disk is opaque; overwrite the accumulator.
-    color = vec4(diskColor, 1.0);
+    // Mix the opaque disk over the current accumulator — not a
+    // plain overwrite — so the AA edge smoothly hands over to
+    // the corona/glow in the pixel immediately outside bodyR.
+    color.rgb = mix(color.rgb, diskColor, diskMask);
+    color.a = max(color.a, diskMask);
   }
 
-  // ── Layer 5: Granulation. Animated blobs inside the disk.
-  if (d < bodyR * 0.985) {
-    vec3 granSum = vec3(0.0);
-    int nGran = int(v_nGran + 0.5);
-    for (int i = 0; i < 8; i++) {
-      if (i >= nGran) break;
-      float fi = float(i);
-      float ga = tp * 0.35 + fi * (TAU / v_nGran) + 0.7 * sin(tp + fi);
-      float gr = bodyR * (0.2 + 0.45 * (0.5 + 0.5 * sin(tp * 0.9 + fi * 2.1)));
-      float gsize = bodyR * (0.28 + 0.1 * sin(tp * 1.5 + fi));
-      vec2 gpos = vec2(cos(ga), sin(ga)) * gr;
-      float gd = distance(v_local, gpos);
-      float gAlpha = (1.0 - smoothstep(0.0, max(gsize, 0.001), gd)) * 0.32;
-      granSum += vec3(gAlpha);
-    }
-    color.rgb = clamp(color.rgb + granSum, 0.0, 1.0);
+  // ── Layer 5: Granulation (already accumulated in granA above).
+  if (doGranules) {
+    color.rgb = clamp(color.rgb + vec3(granA), 0.0, 1.0);
   }
 
   // ── Layer 6: Core highlight — hot white spot offset top-left.
@@ -521,13 +570,21 @@ void main() {
 // an unsupported-device message.
 // ─────────────────────────────────────────────────────────────
 export function createRenderer(canvas) {
+  // antialias: false — every edge in this pipeline is SDF-smoothed
+  // in the fragment shader (fwidth for circles, smoothstep on |side|
+  // for polylines, smoothstep on disk edge for stars). MSAA would
+  // buy us nothing here and costs color-write bandwidth on tiled
+  // mobile GPUs, which is the platform where performance matters
+  // most. colorSpace: "srgb" is the default today but being explicit
+  // future-proofs us for when HDR canvas support lands.
   const gl = canvas.getContext("webgl2", {
-    antialias: true,
+    antialias: false,
     premultipliedAlpha: true,
     preserveDrawingBuffer: false,
     alpha: false,
     depth: false,
     stencil: false,
+    colorSpace: "srgb",
   });
   if (!gl) return null;
 
@@ -673,7 +730,7 @@ export function createRenderer(canvas) {
       const y = Math.random() * H;
       const depth = 0.05 + Math.random() * 0.35;
       const size = 0.8 + Math.random() * 1.8;
-      const brightness = 0.55 + Math.random() * 0.45;
+      const brightness = 0.4 + Math.random() * 0.4;
       let tint = tintWhite;
       const r = Math.random();
       if (r > 0.88) tint = tintBlue;
@@ -732,6 +789,20 @@ export function createRenderer(canvas) {
   let frameTime = 0;
   let frameCamY = 0;
 
+  // Pooled scratch matrices for cameraMat's hot path. Pre-
+  // allocated once so per-frame camera math does zero GC.
+  // _camResult is the stable reference returned to callers;
+  // each cameraMat() invocation overwrites it in place and the
+  // caller consumes it within the same frame before the next
+  // call. Don't hold on to the returned reference across frames.
+  const _camT2 = new Float32Array(9);
+  const _camT3 = new Float32Array(9);
+  const _camS  = new Float32Array(9);
+  const _camT4 = new Float32Array(9);
+  const _camTmpA = new Float32Array(9);
+  const _camTmpB = new Float32Array(9);
+  const _camResult = new Float32Array(9);
+
   function rebuildScreenMat() {
     // Screen pixels → clip space, Y flipped so top-left = (-1, 1).
     screenMat = new Float32Array([
@@ -754,12 +825,17 @@ export function createRenderer(canvas) {
     // Matches Canvas2D's transform chain:
     //   translate(W/2, H*0.55) * scale(zoom) * translate(-W/2, -H*0.55) * translate(0, camY)
     // applied to a world point — screen = T4 * S * T3 * T2 * world.
-    const T2 = mat3Translate(0, camY);
-    const T3 = mat3Translate(-viewW / 2, -viewH * 0.55);
-    const S  = mat3Scale(zoom, zoom);
-    const T4 = mat3Translate(viewW / 2, viewH * 0.55);
-    const world2screen = mat3Multiply(T4, mat3Multiply(S, mat3Multiply(T3, T2)));
-    return mat3Multiply(screenMat, world2screen);
+    // Composed left-associatively into the pooled scratch so the
+    // whole chain runs without a single heap allocation.
+    mat3SetTranslate(_camT2, 0, camY);
+    mat3SetTranslate(_camT3, -viewW / 2, -viewH * 0.55);
+    mat3SetScale(_camS, zoom, zoom);
+    mat3SetTranslate(_camT4, viewW / 2, viewH * 0.55);
+    mat3MulInto(_camT3, _camT2, _camTmpA);        // tmpA = T3 * T2
+    mat3MulInto(_camS,  _camTmpA, _camTmpB);      // tmpB = S  * tmpA
+    mat3MulInto(_camT4, _camTmpB, _camTmpA);      // tmpA = T4 * tmpB
+    mat3MulInto(screenMat, _camTmpA, _camResult); // result = screen * tmpA
+    return _camResult;
   }
 
   function replayMat(scale, ox, oy) {
@@ -772,6 +848,20 @@ export function createRenderer(canvas) {
     ]);
     return mat3Multiply(screenMat, bounds);
   }
+
+  // Empty VAO for buffer-less fullscreen draws (the fullscreen
+  // vertex shader uses gl_VertexID to synthesize the quad). Bound
+  // explicitly by drawBackground so the GL state is unambiguous —
+  // "null VAO" works because WebGL2 has a default VAO, but it's
+  // a silent trap the moment someone adds an `in` to FULLSCREEN_VS.
+  const emptyVao = gl.createVertexArray();
+
+  // Persistent GL state — set once here and never touched in the
+  // hot path.
+  gl.clearColor(0.039, 0.039, 0.071, 1);
+  gl.disable(gl.DEPTH_TEST);
+  gl.enable(gl.BLEND);
+  gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
   // ── Lost context handling ─────────────────────────────────
   // Mobile Safari tears down the GL context when the tab
@@ -790,12 +880,11 @@ export function createRenderer(canvas) {
   // ── Draw API ──────────────────────────────────────────────
 
   function beginFrame(timeSec) {
+    // clearColor / blend func / depth-test are persistent GL
+    // state set once in createRenderer. Here we just fire the
+    // clear and stash frame-wide scalars.
     frameTime = timeSec;
-    gl.clearColor(0.039, 0.039, 0.071, 1);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    gl.enable(gl.BLEND);
-    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.disable(gl.DEPTH_TEST);
   }
 
   function drawBackground(camY) {
@@ -803,8 +892,7 @@ export function createRenderer(canvas) {
     gl.useProgram(fullscreenProg.program);
     gl.uniform2f(fullscreenProg.uniforms.u_resolution, viewW, viewH);
     gl.uniform1f(fullscreenProg.uniforms.u_dpr, viewDPR);
-    gl.uniform1f(fullscreenProg.uniforms.u_camY, camY);
-    gl.bindVertexArray(null);
+    gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
@@ -848,8 +936,11 @@ export function createRenderer(canvas) {
     gl.useProgram(circleProg.program);
     gl.uniformMatrix3fv(circleProg.uniforms.u_view, true, viewMat);
     gl.uniform1f(circleProg.uniforms.u_time, frameTime);
-    gl.uniform1f(circleProg.uniforms.u_camY, 0);
-    gl.uniform2f(circleProg.uniforms.u_resolution, viewW, viewH);
+    // u_camY and u_resolution are only read inside the shader's
+    // `if (depth > 0.0)` branch, which is for bgStars parallax.
+    // Gameplay circles always pass depth = 0, so both uniforms
+    // are dead on this path. We leave whatever drawBgStars wrote
+    // last frame — the values don't matter, they're never sampled.
     gl.bindVertexArray(circleVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, circleInstanceBuf);
     gl.bufferData(

@@ -135,9 +135,9 @@ renderer typed batches of instances.
 
 Four shader programs cover the entire render surface:
 
-- **`fullscreen`** — background radial gradient + scrolling grid.
-  One fullscreen quad synthesized in the vertex shader from
-  `gl_VertexID`, no vertex buffer required.
+- **`fullscreen`** — background radial gradient. One fullscreen
+  quad synthesized in the vertex shader from `gl_VertexID`, no
+  vertex buffer required.
 - **`circle`** — instanced quad per entity. The `kind` per-instance
   attribute picks between solid disc, ring, glow, and dashed ring.
   Covers the ball glow and core, particles, shockwaves, the
@@ -174,6 +174,27 @@ code).
 **Unsupported devices.** If `canvas.getContext("webgl2")` returns
 `null`, `gameplay.js` unhides `#unsupported` and aborts further
 init. There's no Canvas2D fallback.
+
+### Rendering perf constraints
+
+Load-bearing — don't undo without a reason:
+
+- `antialias: false`. Every edge is SDF-smoothed in the fragment
+  shader, including the star disk.
+- Star FS early-out at `d > coronaR` before the streamer and
+  granule loops.
+- Streamer and granulation share one fused precompute loop for
+  `ga / gr / gsize / cos / sin`.
+- `flat` qualifiers on `v_flags`, `v_kind`, `v_nGran`, `v_hasRays`
+  so the `int()` casts don't drift.
+- Persistent GL state (clear color, blend func, depth test) set
+  once in `createRenderer`, not per-frame.
+- `cameraMat` returns a pooled `Float32Array(9)` — don't hoist
+  the reference across frames.
+- `drawCircleBatch` skips `u_camY` / `u_resolution` writes;
+  those are only sampled in the bgStars `depth > 0` branch.
+- Scratch pools (`circleScratch` / `starScratch` / `polylineScratch`)
+  grow by doubling and never shrink.
 
 ## Audio
 
