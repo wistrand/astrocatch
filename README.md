@@ -1,0 +1,99 @@
+# ASTROCATCH
+
+A one-tap browser game where you slingshot between stars under
+real Newtonian gravity. Tap when your orbit aims at the next star.
+The game picks a boost, the trajectory follows real gravity, and
+you get re-captured on the other side.
+
+## How to play
+
+You start in a circular orbit around a star. Each star you reach
+pulls you in and you orbit that one too.
+
+- **Tap** (or press Space) to launch from your current orbit. The
+  game picks the smallest boost that will reach the next star and
+  fires it for you.
+- **Time the tap so your direction points at the next star.** If
+  no boost in the search range can reach it, the game still fires
+  a default burn and you fly free, usually off into the void.
+- **Release within one rotation for bonus points.** Half a rotation
+  pays ×3, less than one full rotation pays ×2.
+- **Watch your replay.** The game records every frame and plays
+  the run back behind the AGAIN button.
+
+## Run locally
+
+ES modules cannot be loaded from `file://`, so you need a local
+HTTP server. There's a tiny one bundled:
+
+```sh
+npm start          # → http://localhost:8001/
+```
+
+No build step. No `npm install`. The server uses only Node's
+built-in modules. Requires Node ≥ 18.
+
+## Run tests
+
+```sh
+npm test
+```
+
+Sweeps 64 boost angles across 8 star configurations and reports
+captures, escapes, and crashes. The test runner imports
+`physics.js` directly, so any physics regression shows up here
+before it reaches a player.
+
+## How it works
+
+- **Gravity is `GM/r²` from the nearest star.** Not multi-body,
+  but each region produces an exact Kepler conic, so orbits are
+  stable.
+- **Velocity-Verlet integration** with adaptive sub-stepping
+  (sub=4 near a star, sub=1 between stars), running at a fixed
+  120 Hz decoupled from the screen refresh rate via a time
+  accumulator. Variable-refresh monitors and RAF bursts no longer
+  speed the game up.
+- **Capture is by periapsis detection**, not by hitbox proximity.
+  The game tracks the running minimum of `d(t)` to the target
+  star and rewinds to the exact periapsis snapshot before applying
+  the burn, so the resulting orbit lands at `e ≈ 0`.
+- **The burn is direction-preserving.** It only scales `|v|`,
+  clamping it into `[v_circ, v_max]` where `v_max` is the value
+  that keeps the orbit's apoapsis inside the target's Voronoi
+  cell. A neighbouring star can never steal the ball mid-orbit.
+- **Boost magnitude is auto-tuned.** A 48-step search finds the
+  smallest Δv that produces a clean prediction. The player picks
+  *when* (the velocity direction); the game picks *how hard*.
+- **Prediction matches live physics bit-for-bit.** Same
+  integrator, same sub-stepping, same nearest-star rule. The
+  predicted periapsis frame is the same frame the live ball
+  reaches its closest approach.
+
+## Project layout
+
+```
+docs/
+  index.html         tiny shell — DOM + CSS, one <script type="module">
+  gameplay.js        browser-only module: canvas, drawing, input, replay
+  physics.js         pure physics module, used by browser and node
+scripts/
+  physics-test.js    node test runner
+  check-distances.js standalone diagnostic for the difficulty curve
+  serve.js           dependency-free local static server (serves docs/)
+package.json         "type": "module" + npm scripts
+```
+
+The browser-facing game lives entirely in `docs/`, so the repo can
+be published as-is via GitHub Pages with `/docs` as the source.
+`https://<user>.github.io/<repo>/` will load the game with no
+further configuration.
+
+## Acknowledgements
+
+ASTROCATCH was inspired by [STARFLING](https://playstarfling.com),
+a one-tap arcade game with a similar verb. The two games share
+visual style and the basic interaction. The mechanics are
+different: Starfling uses parametric circular motion and
+projectile flight, ASTROCATCH uses real Newtonian orbital
+mechanics with periapsis detection and Hohmann-style transfers.

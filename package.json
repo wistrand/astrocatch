@@ -1,0 +1,9 @@
+{
+  "name": "astrocatch",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.js",
+    "test": "node scripts/physics-test.js"
+  }
+}
