@@ -152,6 +152,17 @@ const REPLAY_SPEED = 1.75;
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
+// Tracked ball speed, normalized to [0, 1] against MAX_SPEED,
+// fed to audio.setIntensity() each render frame so the music's
+// chord progression escalates as the player boosts faster.
+// Uses a decay-max tracker: each frame, either bump up to the
+// current instantaneous normalized speed (if higher) or decay
+// the previous value by SPEED_DECAY. This latches onto peaks
+// instead of averaging them away — the EMA approach we tried
+// first smoothed away the very boosts that should have been
+// driving the intensity upward.
+let trackedSpeed = 0;
+const SPEED_DECAY = 0.992; // ~1.4 s half-life on a 60 Hz loop
 // Fast-launch streak: consecutive captures with a Quick or Blazing
 // bonus (i.e. bonus >= 2). Earns a multiplier on the per-capture
 // bonus — gentle ramp (half a step per streak increment) so the
@@ -324,6 +335,7 @@ function init() {
   score = 0;
   starsVisited = 0;
   fastStreak = 0;
+  trackedSpeed = 0;
   camY = 0;
   camTargetY = 0;
   hasBoosted = false;
@@ -359,6 +371,10 @@ function init() {
   updateSub();
   document.getElementById("score-display").style.display = "block";
   document.getElementById("hint").classList.add("on");
+  // Fire up the generative music layer. Scheduler runs until
+  // die() turns it back off. Idempotent — calling startMusic
+  // again mid-run is a no-op.
+  audio.startMusic();
 }
 
 function updateSub() {
@@ -582,6 +598,9 @@ function die() {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
   audio.death();
+  // Music keeps playing through DYING → DEAD → next PLAY.
+  // The retry's startMusic() is idempotent, so the loop
+  // stitches across runs without a chord jump or seam.
   // Any live fast-launch streak ends with the run.
   fastStreak = 0;
   updateSub();
@@ -739,6 +758,19 @@ function renderTick() {
     const m = 260 / ZOOM;
     if (sy > H + m || sy < -m * 2 || ball.x < -m || ball.x > W + m) die();
   }
+
+  // Feed peak-held ball speed to the music layer so it can
+  // escalate the chord progression at high velocity. Decay-
+  // max: each frame the tracker either jumps to the current
+  // instantaneous speed (if higher) or decays the previous
+  // value. Peaks latch, valleys are ignored, so a boost
+  // pushes the intensity up immediately and holds it for
+  // about a second and a half.
+  const rawSpeed = Math.hypot(ball.vx, ball.vy);
+  const normalized = Math.min(1, rawSpeed / AC.MAX_SPEED);
+  const decayed = trackedSpeed * SPEED_DECAY;
+  trackedSpeed = normalized > decayed ? normalized : decayed;
+  audio.setIntensity(trackedSpeed);
 }
 
 // ─────────────────────────────────────────────────────────────

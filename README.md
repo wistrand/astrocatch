@@ -29,9 +29,12 @@ pulls you in and you orbit that one too.
 - **Watch your replay.** The game records every frame and plays
   the run back behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right
-  corner, or press **M**. Sound effects are generated on the fly
-  from oscillators (no audio files to download) and the mute
-  state is remembered between sessions.
+  corner, or press **M**. Both the sound effects and the
+  ambient music loop are generated on the fly from oscillators
+  (no audio files to download). The background melody is a
+  four-bar progression in A minor with a simplex-noise-driven
+  lead line — so the melodic contour drifts instead of looping
+  identically. Mute state is remembered between sessions.
 
 ## Run locally
 

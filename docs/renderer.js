@@ -164,13 +164,21 @@ void main() {
   frag.y = u_resolution.y - frag.y;
 
   // Background radial gradient: #12121f center → #0a0a12 corners.
+  // On portrait (taller-than-wide) viewports — i.e. mobile — the
+  // gradient span uses the *shorter* dimension × 1.1, so the
+  // bright center doesn't dominate the narrow screen. On
+  // landscape (desktop) it uses the larger dimension, preserving
+  // the original look where the bright area fills the whole
+  // visible canvas.
   vec2 c = u_resolution * 0.5;
   float dist = length(frag - c);
-  float maxD = max(u_resolution.x, u_resolution.y);
+  float span = (u_resolution.y > u_resolution.x)
+    ? u_resolution.x * 1.1
+    : max(u_resolution.x, u_resolution.y);
   vec3 col = mix(
     vec3(0.071, 0.071, 0.121),
     vec3(0.039, 0.039, 0.071),
-    clamp(dist / maxD, 0.0, 1.0)
+    clamp(dist / span, 0.0, 1.0)
   );
 
   outColor = vec4(col, 1.0);

@@ -204,6 +204,23 @@ no sample files, no network load, no libraries. The aesthetic
 is "space melodic": consonant intervals, sine/triangle timbres,
 filtered movement, short arpeggios rather than beeps.
 
+The signal chain is:
+
+```
+effect voices ─┐
+               ├─→ master gain ─→ DynamicsCompressor ─→ destination
+music voices ──┤
+(musicBus) ────┘
+```
+
+`musicBus` is a separate `GainNode` between the scheduled music
+nodes and `master`, so music sits below SFX and can be tuned or
+muted independently of sound effects. The compressor before
+`destination` is a soft safety limiter (threshold -12 dB, ratio
+3:1, 3 ms attack, 150 ms release) — gives headroom when Blazing
+captures stack four notes, and side-chain-like ducks the music
+whenever a big SFX fires.
+
 Three sound events:
 
 - `audio.boost()` — happy ascending launch. Two sine voices
@@ -226,6 +243,144 @@ Three sound events:
   F3 → D3) through a closing lowpass, with each note drifting
   down a further fifth inside its envelope. ~650 ms total.
   Sad but not jarring. Plays from `die()`.
+
+Plus a generative music layer:
+
+- `audio.startMusic()` / `audio.stopMusic()` — fire up (and
+  tear down) a procedural 4-bar loop in A minor at 100 BPM.
+  The chord progression **switches at each 4-bar section
+  boundary** based on the caller-supplied intensity (see
+  `audio.setIntensity(v)` below). Three progressions live in
+  `MUSIC_PROGRESSIONS` and are chosen by quantizing the
+  current intensity against `MUSIC_INTENSITY_THRESHOLDS`:
+  - **Tier 0 (calm)**: Am → F → C → G. The familiar minor
+    descent. Selected when `intensity < 0.20`.
+  - **Tier 1 (medium)**: Dm → Am → F → C. Minor-tinted,
+    pulls through Dm for tonal contrast. `0.20 ≤ i < 0.45`.
+  - **Tier 2 (intense)**: Am → G → F → E. Descending-bass
+    to the V chord (E major — not diatonic to A minor, it's
+    the harmonic-minor dominant). The E creates strong pull
+    wanting to resolve back to Am, so the loop seam has real
+    harmonic tension. `intensity ≥ 0.45`.
+
+  The thresholds are `[0.20, 0.45]`, not the obvious equal
+  thirds, because sustained ball speed in gameplay rarely
+  reaches the upper half of `MAX_SPEED`. Tier 2 needs to be
+  reachable when the player is actively boosting, not only
+  during rare extreme transfers.
+  Tier selection is sampled **only at section downbeats**,
+  so a mid-section intensity spike doesn't chord-jump
+  mid-bar — the current progression always plays out before
+  the new one starts. Five layers, all routed through
+  `musicBus`:
+  - **Stab**: warm triangle-wave chord hit on every bar
+    downbeat, through a filter envelope that sweeps 2200 →
+    540 Hz over ~320 ms. 18 ms attack (slow enough not to
+    click) and ~320 ms decay. Triangle instead of sawtooth
+    because the saw version was metallic — the odd-even
+    harmonic mix of triangle is much softer. This is the
+    layer that makes chord changes audible: without it the
+    pad's 350 ms attack fades in too gradually to announce
+    a new harmony, and none of the other layers play more
+    than one chord tone at a time. Every bar starts with an
+    unmistakable "new chord" hit.
+  - **Pad**: three detuned-sine pairs (one per chord tone),
+    one hit per bar, held for the full bar length (~2.4 s)
+    with a 350 ms attack and 450 ms release. This is the
+    sustained harmonic carpet under everything — without it
+    the song feels plucky.
+  - **Bass**: sawtooth + sub-sine through a filter envelope
+    that sweeps 180 Hz → 1100 Hz → 260 Hz over the note
+    length. The filter motion is what shapes the "bwamp"
+    character; amplitude envelope is short but not clicky.
+    Low Q (0.8) so there's no resonance honk. Quarter-note
+    pulse on the chord root.
+  - **Arpeggio**: triangle through a gentle lowpass (1700 Hz,
+    Q 1.0), 8th-note roll through the three chord tones —
+    rolling-sequencer character.
+  - **Lead**: two detuned sines (±6 cents) sustaining for
+    ~850 ms. Pitch always lands on **the current chord's
+    tones over two octaves** (7 notes per chord,
+    `MUSIC_LEAD[chordIdx]`), so harmony is guaranteed. Three
+    independent simplex-driven sources of variation sit on
+    top of that:
+    - **Rhythm pattern bank** (`MUSIC_LEAD_PATTERNS`) — 8
+      patterns from sparsest (1 note on the downbeat) to
+      busiest (4 notes with syncopation). Every bar's
+      downbeat re-picks a pattern via a simplex sample at
+      `time × 0.4`. Tier windows
+      (`MUSIC_LEAD_PATTERN_RANGES`) restrict which slice of
+      the bank is eligible — tier 0 picks from sparse
+      patterns, tier 2 from busy ones — but within a tier
+      there's room for variation across bars. So even during
+      a long calm stretch the rhythmic shape shifts instead
+      of locking into one figure.
+    - **Pitch contour** — simplex sampled at `(time × 0.15,
+      yBase + yDrift)`. X is the raw audio-clock time, so the
+      contour flows continuously and never repeats the same
+      sequence of notes twice across a long run.
+    - **Slow contour drift** — a second simplex sample at
+      `(time × 0.02, 100.0) × 0.8` shifts the Y coordinate
+      by up to ±0.8 over very long timescales, so the melodic
+      character (which slice of the noise field the lead is
+      walking) evolves across many bars within the same tier.
+      `yBase = 0.3 + currentTier × 2.2` gives each tier its
+      own starting neighbourhood; the drift then wanders
+      locally around that point.
+    Constraining the selection pool to chord tones means
+    every melody note lands on a consonance regardless of
+    how the simplex contours move. Noise permutation is
+    seeded from a fixed Lehmer seed, so the same song plays
+    the same way across sessions; change the seed in
+    `initNoisePerm()` for a different "song of the day".
+
+  Scheduled ahead of the audio clock via a `setTimeout` loop
+  (25 ms tick, 100 ms look-ahead) — the standard WebAudio
+  scheduling pattern. Clamped to 32 steps per tick so a
+  background-tab throttle that wakes up after a long pause
+  doesn't emit an avalanche of late notes; instead it resyncs
+  `nextStepTime` to the current audio clock.
+
+  Music is paused on `document.visibilitychange → hidden` and
+  resumed on visible (if the caller still wanted it playing),
+  handled internally via `musicIntended` vs `schedulerRunning`
+  so the caller doesn't have to track tab state.
+
+  `gameplay.js` calls `audio.startMusic()` from `init()`, i.e.
+  the first tap of START (and subsequently AGAIN). Music is
+  NOT autostarted on module load — the welcome screen is
+  intentionally silent so the player hears the music kick in
+  when they commit to playing. Once started, music plays
+  continuously through PLAY → DYING → DEAD (game-over screen)
+  → next PLAY: `die()` no longer calls `stopMusic`, and the
+  retry's `startMusic()` is idempotent (`schedulerRunning`
+  guard short-circuits the second call), so the song stitches
+  across runs without a chord jump or seam. The only things
+  that stop music are mute, tab hide (via the internal
+  `visibilitychange` handler), and page reload.
+
+- `audio.setIntensity(v)` — caller-supplied scalar in `[0, 1]`
+  that drives the chord-progression tier selection described
+  above. `gameplay.js` feeds this from `renderTick` with a
+  **decay-max** tracker on ball speed normalized to
+  `AC.MAX_SPEED`:
+
+  ```js
+  trackedSpeed = max(trackedSpeed * SPEED_DECAY, rawSpeed / MAX_SPEED)
+  ```
+
+  Each frame the tracker either jumps up to the current
+  instantaneous normalized speed (if it's higher) or decays
+  the previous value by `SPEED_DECAY = 0.992` (~1.4 s
+  half-life at 60 fps). Peaks latch, valleys are ignored, so
+  a boost pushes intensity up immediately and holds it for
+  about a second and a half. The previous EMA approach
+  averaged the peaks away and the tier rarely climbed — the
+  player's *recent highest* speed is what conveys "how fast
+  things are right now", not the mean between orbital
+  apoapses. The tier is re-read only at section boundaries,
+  so an intensity spike during bar 2 waits until bar 4 to
+  take effect.
 
 **Autoplay policy**: the AudioContext is created lazily on the
 first `play*` call, which always happens inside a user gesture
