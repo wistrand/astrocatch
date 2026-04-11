@@ -64,6 +64,18 @@ if (muteBtn) {
   });
 }
 
+// HUD reload button — just forces a page reload. Useful when
+// stuck, when a visual gets weird, or when the player wants a
+// totally fresh state without hunting for the browser refresh.
+const reloadBtn = document.getElementById("reload-btn");
+if (reloadBtn) {
+  reloadBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    location.reload();
+  });
+}
+
 // Physics constants are imported from physics.js via AC.
 const CAPTURE_MULT = AC.CAPTURE_MULT;
 const CRASH_MULT = AC.CRASH_MULT;
