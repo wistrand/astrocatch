@@ -207,19 +207,33 @@ filtered movement, short arpeggios rather than beeps.
 The signal chain is:
 
 ```
-effect voices ─┐
-               ├─→ master gain ─→ DynamicsCompressor ─→ destination
-music voices ──┤
-(musicBus) ────┘
+effect voices ─→ master gain ─→ DynamicsCompressor ─→ destination
+                                                          ↑
+music voices ─→ musicBus ─────────────────────────────────┘
 ```
 
-`musicBus` is a separate `GainNode` between the scheduled music
-nodes and `master`, so music sits below SFX and can be tuned or
-muted independently of sound effects. The compressor before
-`destination` is a soft safety limiter (threshold -12 dB, ratio
-3:1, 3 ms attack, 150 ms release) — gives headroom when Blazing
-captures stack four notes, and side-chain-like ducks the music
-whenever a big SFX fires.
+Music and SFX run on **parallel buses** directly to the
+destination node:
+
+- **SFX path**: `effect → master → compressor → destination`. The
+  compressor is a soft safety limiter (threshold -10 dB, ratio
+  2.5:1, 20 ms attack, 250 ms release, 8 dB knee). It catches the
+  rare peak when Blazing captures stack four overlapping notes
+  with bell overtones, but the slower attack and higher threshold
+  mean it barely engages on isolated SFX events.
+
+- **Music path**: `music → musicBus → destination`. Music bypasses
+  the compressor entirely. The previous routing pushed music
+  through the compressor, and its 3 ms attack was clicking on
+  every bar downbeat where bass + stab + pad hit within a 20 ms
+  window — the compressor slammed gain reduction on faster than
+  a single sample buffer could smooth. Music has plenty of
+  headroom at `MUSIC_VOLUME = 0.32` to run uncompressed; worst-
+  case chord stacking peaks well under unity.
+
+Both buses start at their respective volumes (or 0 if muted),
+and `setMuted` ramps both in parallel via `setTargetAtTime` so
+toggling mutes all sound, and unmuting brings everything back.
 
 Three sound events:
 
@@ -414,7 +428,7 @@ toggling mid-sound doesn't click.
   superposition without checking.
 - **Planets as weak perturbations, not bodies.** Planets ramp in
   with run progression: the first star never has any, probability
-  rises linearly to `PLANET_MAX_PROB = 0.5` by `PLANET_RAMP_STARS
+  rises linearly to `PLANET_MAX_PROB = 0.75` by `PLANET_RAMP_STARS
   = 50`, and stays there. Stars that pass the roll get 1–2 planets
   each (assigned in `assignPlanets` in gameplay.js). Each planet
   orbits its parent at a constant angular velocity, carries ~1.5%

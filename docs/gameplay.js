@@ -237,7 +237,7 @@ function makeStar(x, y, r, colorIdx, starIdx) {
 // in the physics integrator keeps the 1/r² accel from
 // diverging inside the planet, so prediction stays stable
 // even on a near-hit.
-const PLANET_MAX_PROB = 0.5;
+const PLANET_MAX_PROB = 0.75;
 const PLANET_RAMP_STARS = 50;
 function assignPlanets(s, starIdx) {
   const ramp = Math.min(1, starIdx / PLANET_RAMP_STARS);

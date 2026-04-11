@@ -13,7 +13,7 @@
 
 const STORAGE_KEY = "astrocatch_muted";
 const MASTER_VOLUME = 0.32;
-const MUSIC_VOLUME = 0.32;
+const MUSIC_VOLUME = 0.10;
 
 // ─────────────────────────────────────────────────────────────
 // 2D simplex noise. Used by the music layer to walk a melody
@@ -249,28 +249,31 @@ export function createAudio() {
         ctx = new Ctor();
         master = ctx.createGain();
         master.gain.value = muted ? 0 : MASTER_VOLUME;
-        // Soft safety limiter before the destination. With
-        // Blazing captures playing 4 overlapping notes, each
-        // with a bell overtone, worst-case in-phase peaks can
-        // approach unity. The compressor gives us guaranteed
-        // headroom and a slightly smoother mix when chords
-        // stack, without affecting isolated sounds.
+        // Soft safety limiter before the destination, only on
+        // the SFX path. With Blazing captures playing 4
+        // overlapping notes each with a bell overtone,
+        // worst-case in-phase peaks can approach unity; the
+        // compressor keeps those peaks under control. It is
+        // NOT on the music path — the compressor's 3 ms attack
+        // was clicking on every downbeat where bass + stab
+        // hit simultaneously, and the continuous nature of
+        // music kept the compressor in a constant engage/
+        // release cycle. Music gets a direct path to the
+        // destination via musicBus below; it has plenty of
+        // headroom already.
         const comp = ctx.createDynamicsCompressor();
-        comp.threshold.value = -12;
-        comp.knee.value = 6;
-        comp.ratio.value = 3;
-        comp.attack.value = 0.003;
-        comp.release.value = 0.15;
+        comp.threshold.value = -10;
+        comp.knee.value = 8;
+        comp.ratio.value = 2.5;
+        comp.attack.value = 0.02;
+        comp.release.value = 0.25;
         master.connect(comp).connect(ctx.destination);
-        // Music bus sits under the SFX bus so the generated
-        // melody stays ambient. Routed through master (and
-        // therefore through the compressor), which side-chain-
-        // like ducks the music slightly whenever a big SFX
-        // fires. Separate gain so music volume can be tuned or
-        // muted independently of SFX if that ever comes up.
+        // Music bus — direct to destination, bypassing the
+        // SFX compressor. Muted by its own gain node, kept in
+        // sync with master via setMuted so M toggles both.
         musicBus = ctx.createGain();
-        musicBus.gain.value = MUSIC_VOLUME;
-        musicBus.connect(master);
+        musicBus.gain.value = muted ? 0 : MUSIC_VOLUME;
+        musicBus.connect(ctx.destination);
       } catch (_) {
         ctx = null;
         return null;
@@ -289,11 +292,19 @@ export function createAudio() {
     try {
       localStorage.setItem(STORAGE_KEY, muted ? "1" : "0");
     } catch (_) {}
-    if (master && ctx) {
-      // Smooth volume change so toggling mid-sound doesn't click.
+    if (ctx) {
+      // Smooth volume change so toggling mid-sound doesn't
+      // click. Now that music bypasses the SFX compressor
+      // path, mute has to drive both buses independently.
       const now = ctx.currentTime;
-      master.gain.cancelScheduledValues(now);
-      master.gain.setTargetAtTime(muted ? 0 : MASTER_VOLUME, now, 0.05);
+      if (master) {
+        master.gain.cancelScheduledValues(now);
+        master.gain.setTargetAtTime(muted ? 0 : MASTER_VOLUME, now, 0.05);
+      }
+      if (musicBus) {
+        musicBus.gain.cancelScheduledValues(now);
+        musicBus.gain.setTargetAtTime(muted ? 0 : MUSIC_VOLUME, now, 0.05);
+      }
     }
   }
 
@@ -523,21 +534,20 @@ export function createAudio() {
     filter.frequency.exponentialRampToValueAtTime(1100, time + 0.015);
     filter.frequency.exponentialRampToValueAtTime(260, time + dur);
 
-    // Amplitude envelope — click-free on mobile. Gain starts
-    // at an explicit .value = 0 so the window between
-    // createGain() and the first scheduled automation event
-    // is never at the default 1.0 (which is the click source
-    // when scheduler drift puts automation events in the past
-    // and the engine ignores them). Linear attack from zero,
-    // exponential decay for natural tail, then a tiny linear
-    // ramp to exact zero before osc.stop() fires so the
-    // waveform is silenced before the source node is cut.
+    // Amplitude envelope — all-linear. Previously had a mix of
+    // exponential decay + linear tail, which iOS Safari could
+    // click at the handoff between ramp types. All-linear
+    // avoids that entirely, at a perceptually-negligible cost
+    // for 380 ms envelopes. Ends with setValueAtTime(0) to
+    // explicitly nail the gain to zero past the ramp's end in
+    // case float precision leaves it at 1e-n instead of exact
+    // zero — the oscillator stops 30 ms after that anchor.
     const g = c.createGain();
     g.gain.value = 0;
     g.gain.setValueAtTime(0, time);
     g.gain.linearRampToValueAtTime(0.45, time + 0.018);
-    g.gain.exponentialRampToValueAtTime(0.001, time + dur - 0.005);
     g.gain.linearRampToValueAtTime(0, time + dur);
+    g.gain.setValueAtTime(0, time + dur + 0.002);
 
     osc.connect(filter);
     subGain.connect(filter);
@@ -564,11 +574,18 @@ export function createAudio() {
     for (let i = 0; i < chord.length; i++) {
       const freq = chord[i];
       const g = c.createGain();
+      // All-linear envelope. The "hold" is a linear ramp from
+      // 0.16 to 0.16 — a defined no-op in the linear
+      // automation path, but avoids the iOS Safari bug where
+      // setValueAtTime during an active automation produces a
+      // micro-step. Final setValueAtTime(0) anchors the gain
+      // to zero past the ramp's end for float-safety.
       g.gain.value = 0;
       g.gain.setValueAtTime(0, time);
       g.gain.linearRampToValueAtTime(0.16, time + attack);
-      g.gain.setValueAtTime(0.16, holdEnd);
+      g.gain.linearRampToValueAtTime(0.16, holdEnd);
       g.gain.linearRampToValueAtTime(0, time + dur);
+      g.gain.setValueAtTime(0, time + dur + 0.002);
       g.connect(musicBus);
       // Two slightly detuned sines per chord tone — gentle
       // chorus thickens the pad without changing its pitch.
@@ -604,13 +621,13 @@ export function createAudio() {
     filter.frequency.setValueAtTime(2200, time);
     filter.frequency.exponentialRampToValueAtTime(540, time + dur);
     const g = c.createGain();
-    // Click-safe envelope: linear attack from zero, exponential
-    // decay tail, final linear to exact zero before osc.stop.
+    // All-linear envelope. setValueAtTime(0) past the final
+    // ramp is a belt-and-braces anchor against float drift.
     g.gain.value = 0;
     g.gain.setValueAtTime(0, time);
     g.gain.linearRampToValueAtTime(0.24, time + 0.022);
-    g.gain.exponentialRampToValueAtTime(0.001, time + dur - 0.005);
     g.gain.linearRampToValueAtTime(0, time + dur);
+    g.gain.setValueAtTime(0, time + dur + 0.002);
     filter.connect(g).connect(musicBus);
     for (let i = 0; i < chord.length; i++) {
       const osc = c.createOscillator();
@@ -638,14 +655,15 @@ export function createAudio() {
     filter.frequency.setValueAtTime(1700, time);
     filter.Q.value = 1;
     const g = c.createGain();
-    // Click-safe envelope. Arp fires every 8th note so any
+    // All-linear envelope. Arp fires every 8th note so any
     // click here compounds 8× per bar — this is the layer
-    // most likely to produce the audible mobile click.
+    // most likely to surface a mobile click, so it's also the
+    // one most worth keeping simple and ramp-type-homogeneous.
     g.gain.value = 0;
     g.gain.setValueAtTime(0, time);
     g.gain.linearRampToValueAtTime(0.15, time + 0.018);
-    g.gain.exponentialRampToValueAtTime(0.001, time + dur - 0.005);
     g.gain.linearRampToValueAtTime(0, time + dur);
+    g.gain.setValueAtTime(0, time + dur + 0.002);
     osc.connect(filter);
     filter.connect(g);
     g.connect(musicBus);
@@ -660,11 +678,15 @@ export function createAudio() {
     // bass/arp layers instead of stabbing.
     const dur = 0.85;
     const g = c.createGain();
+    // All-linear envelope. The 850 ms decay means linear and
+    // exponential sound essentially identical to the ear; the
+    // linear version is safer on iOS Safari because it uses
+    // a single automation code path end-to-end.
     g.gain.value = 0;
     g.gain.setValueAtTime(0, time);
     g.gain.linearRampToValueAtTime(0.2, time + 0.04);
-    g.gain.exponentialRampToValueAtTime(0.001, time + dur - 0.008);
     g.gain.linearRampToValueAtTime(0, time + dur);
+    g.gain.setValueAtTime(0, time + dur + 0.002);
     g.connect(musicBus);
     [-6, 6].forEach((detune) => {
       const osc = c.createOscillator();
