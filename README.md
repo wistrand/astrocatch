@@ -28,6 +28,10 @@ pulls you in and you orbit that one too.
   chain link, caps at ×4. A slow capture (or dying) breaks it.
 - **Watch your replay.** The game records every frame and plays
   the run back behind the AGAIN button.
+- **Mute anytime** via the speaker button in the top-right
+  corner, or press **M**. Sound effects are generated on the fly
+  from oscillators (no audio files to download) and the mute
+  state is remembered between sessions.
 
 ## Run locally
 
@@ -99,6 +103,7 @@ docs/
   index.html         tiny shell — DOM + CSS, one <script type="module">
   gameplay.js        browser-only: state, input, orchestration
   renderer.js        browser-only: WebGL2 renderer + shader programs
+  audio.js           browser-only: procedural WebAudio sound effects
   physics.js         pure physics module, used by browser and node
 scripts/
   physics-test.js    node test runner

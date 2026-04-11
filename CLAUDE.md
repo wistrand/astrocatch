@@ -7,6 +7,7 @@ docs/
   index.html         # tiny shell — DOM + CSS + one <script type="module">
   gameplay.js        # browser-only ES module: state, input, orchestration
   renderer.js        # browser-only ES module: WebGL2 renderer + shaders
+  audio.js           # browser-only ES module: procedural WebAudio SFX
   physics.js         # pure physics ES module — used by browser and node
 scripts/
   physics-test.js    # node test runner — imports ../docs/physics.js
@@ -70,12 +71,14 @@ built-in modules. It serves the project root, sets the right
 and disables caching so a refresh always picks up the latest
 gameplay/physics changes.
 
-`physics.js` is the only file the node test runner uses. Both
-`gameplay.js` and `renderer.js` are browser-only (renderer.js
-calls `canvas.getContext("webgl2")` at module load, which node
-can't provide). Edits to rendering, input, or UI do not need to
-be re-tested in node. Any change to `physics.js` MUST be
-re-verified by running `npm test`.
+`physics.js` is the only file the node test runner uses.
+`gameplay.js`, `renderer.js`, and `audio.js` are all browser-only:
+renderer.js calls `canvas.getContext("webgl2")` at module load,
+audio.js uses `window.AudioContext`, and gameplay.js drives DOM
+overlays and input — none of which node provides. Edits to
+rendering, input, audio, or UI do not need to be re-tested in
+node. Any change to `physics.js` MUST be re-verified by running
+`npm test`.
 
 ## Running tests
 
@@ -171,6 +174,57 @@ code).
 **Unsupported devices.** If `canvas.getContext("webgl2")` returns
 `null`, `gameplay.js` unhides `#unsupported` and aborts further
 init. There's no Canvas2D fallback.
+
+## Audio
+
+`audio.js` owns all sound. Every effect is synthesized at play
+time from `OscillatorNode` + `BiquadFilterNode` + `GainNode` —
+no sample files, no network load, no libraries. The aesthetic
+is "space melodic": consonant intervals, sine/triangle timbres,
+filtered movement, short arpeggios rather than beeps.
+
+Three sound events:
+
+- `audio.boost()` — soft melodic descent. Two voices sweeping
+  from E5 → A4 (upper sine) and E4 → A3 (lower triangle), a
+  falling perfect fourth, through a gentle lowpass that closes
+  from 2000 → 700 Hz. ~280 ms total. Reads as a little sigh on
+  each tap, not a blaster. Plays from `boost()`.
+- `audio.capture(bonus, streak)` — arpeggio chime through the
+  A-major triad. Regular captures play root + fifth; Quick adds
+  the third; Blazing plays the full root-third-fifth-octave
+  arpeggio one octave higher. Per-note bell timbre is a sine
+  fundamental + a slightly inharmonic 2.01× overtone. `streak ≥ 2`
+  adds a rising high shimmer after the arpeggio whose pitch
+  climbs with the streak count, so a long chain audibly sparkles
+  more than a plain Quick→Quick. Plays from `captureStar()`.
+- `audio.death()` — falling three-note A-minor descent (A3 →
+  F3 → D3) through a closing lowpass, with each note drifting
+  down a further fifth inside its envelope. ~650 ms total.
+  Sad but not jarring. Plays from `die()`.
+
+**Autoplay policy**: the AudioContext is created lazily on the
+first `play*` call, which always happens inside a user gesture
+(pointer tap, keyboard, START button click). Chrome allows
+earlier creation but Safari refuses outside a gesture — the
+lazy path works on both. The master gain starts at `MASTER_VOLUME`
+(0.32) unless `localStorage.astrocatch_muted === "1"`, in which
+case it starts at 0.
+
+**Mute**: two controls, both driving the same state:
+- **HUD button** (`#mute-btn` in `index.html`) — top-right
+  corner, inline-SVG speaker icon with `.icon-on` / `.icon-off`
+  children. `gameplay.js`'s `syncMuteBtn()` adds/removes the
+  `.muted` class on the button element to swap which SVG path
+  is visible. Clickable on every screen; lives outside any
+  `.overlay` and re-enables `pointer-events: auto` explicitly
+  because the HUD default is `none`.
+- **M key** — keyboard shortcut that calls the same
+  `audio.setMuted(!audio.isMuted())` + `syncMuteBtn()` pair.
+
+Both persist to `localStorage.astrocatch_muted` inside
+`audio.setMuted`. Master gain ramps via `setTargetAtTime` so
+toggling mid-sound doesn't click.
 
 ## Physics model (non-obvious bits)
 

@@ -5,6 +5,7 @@
 // by default.
 import * as AC from "./physics.js";
 import { createRenderer, c1Of, c2Of } from "./renderer.js";
+import { createAudio } from "./audio.js";
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -38,6 +39,29 @@ if (!renderer) {
   // Viewport wasn't set on the very first resize() because the
   // renderer didn't exist yet — seed it now.
   renderer.setViewport(W, H, DPR);
+}
+
+// Procedural sound effects (WebAudio). Lazy-initializes its
+// AudioContext on the first play call so we satisfy the browser
+// autoplay policy without a visible "enable audio" prompt.
+const audio = createAudio();
+
+// Hook up the HUD mute button. Button state reflects the audio
+// module's muted flag, which persists to localStorage on toggle.
+const muteBtn = document.getElementById("mute-btn");
+function syncMuteBtn() {
+  if (!muteBtn) return;
+  if (audio.isMuted()) muteBtn.classList.add("muted");
+  else muteBtn.classList.remove("muted");
+}
+syncMuteBtn();
+if (muteBtn) {
+  muteBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    audio.setMuted(!audio.isMuted());
+    syncMuteBtn();
+  });
 }
 
 // Physics constants are imported from physics.js via AC.
@@ -416,6 +440,7 @@ function captureStar(idx) {
   // Reset orbit timer + bonus for the new orbit.
   ball.framesInOrbit = 0;
   ball.pendingBonus = 1;
+  audio.capture(bonus, fastStreak);
   updateScoreUI(true, bonus, fastStreak);
 
   // Visuals. Colors go into particle / shockwave storage as RGB
@@ -496,6 +521,8 @@ function boost() {
   if (!ball || !ball.alive) return;
   if (ball.pendingCapture >= 0) return;
 
+  audio.boost();
+
   // Exhaust particles (visual only — record direction BEFORE the impulse).
   const c1 = c1Of(stars[ball.currentStar].colorIdx);
   for (let i = 0; i < 10; i++) {
@@ -542,6 +569,7 @@ function boost() {
 function die() {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
+  audio.death();
   // Any live fast-launch streak ends with the run.
   fastStreak = 0;
   updateSub();
@@ -1128,6 +1156,15 @@ document.addEventListener("gesturestart", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
+  // M toggles the mute state across all states. It never
+  // interacts with gameplay, so it's safe to handle anywhere.
+  if (e.key === "m" || e.key === "M") {
+    if (e.repeat) return;
+    e.preventDefault();
+    audio.setMuted(!audio.isMuted());
+    syncMuteBtn();
+    return;
+  }
   if (e.code !== "Space" && e.key !== " ") return;
   if (e.repeat) return;
   e.preventDefault();
