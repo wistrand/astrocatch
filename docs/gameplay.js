@@ -208,8 +208,8 @@ let hasBoosted = false; // for the hint
 //   Type                  Prob        From star#  Notes
 //   ─────────────────────────────────────────────────────────
 //   Black hole (solo)     7%          4+          lensing + grid
-//   Binary (normal)       0→12%       20→40       ramps up, no ejecta
-//   BH + binary           0→8%        20→40       ramps up, BH accretor + ejecta
+//   Binary (normal)       0→12%       15→40       ramps up, no ejecta
+//   BH + binary           0→8%        15→40       ramps up, BH accretor + ejecta
 //   Planets               0→75%       ramp/50     1–2 per star (not on binaries)
 //   Comets                25%         2+          on any star incl. binaries
 //
@@ -218,7 +218,7 @@ const SPAWN = {
   BH_MIN_STAR:      4,      // first eligible star index
   BINARY_PROB:      0.12,   // max chance a non-BH star becomes a binary
   BH_BINARY_PROB:   0.08,   // max chance a BH gets a donor companion
-  BINARY_RAMP_START: 20,    // star index where binary ramp begins (0%)
+  BINARY_RAMP_START: 15,    // star index where binary ramp begins (0%)
   BINARY_RAMP_END:   40,    // star index where binary prob reaches max
   PLANET_MAX_PROB:  0.75,   // planet chance at full ramp
   PLANET_RAMP_STARS: 50,    // stars over which planet prob ramps 0→max
@@ -624,6 +624,7 @@ function initMenuStars() {
 }
 
 function init() {
+  paused = false;
   stars = [];
   trail = [];
   particles = [];
@@ -961,6 +962,7 @@ function boost() {
 function die(crash) {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
+  ball.pendingCapture = -1; // cancel any in-flight transfer
   if (crash) audio.deathCrash(); else audio.death();
   // Music keeps playing through DYING → DEAD → next PLAY.
   // The retry's startMusic() is idempotent, so the loop

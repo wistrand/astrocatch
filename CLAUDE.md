@@ -48,29 +48,35 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
 - **Physics** (`physics.js`): nearest-star gravity, velocity-Verlet
   with adaptive sub-stepping at 120 Hz. Planets perturb weakly;
   comets follow analytical Kepler orbits with no physics coupling.
+  Binary stars use COM gravity with per-sub-star crash detection.
   → [Details](agent_docs/physics.md)
 
 - **Rendering** (`renderer.js`): WebGL2, 5 shader programs
   (fullscreen / lensing / circle / star / polyline). Stars and
   black holes rendered procedurally per pixel. Black holes use a
-  conditional full-screen FBO + lensing composite pass for
-  gravitational distortion. Background includes procedural
-  spiral galaxies. No Canvas2D, no libraries.
+  conditional full-screen FBO + lensing composite pass with
+  procedural grid for visible distortion. Star shader supports
+  crash wobble (elliptical deformation) and tidal locking for
+  binaries. Background includes procedural spiral galaxies.
+  No Canvas2D, no libraries.
   → [Details](agent_docs/rendering.md)
 
 - **Audio** (`audio.js`): procedural WebAudio. SFX through a soft
   compressor, generative music (5 layers, simplex-driven lead)
-  direct to destination. Intensity-tiered chord progressions
-  driven by ship speed.
+  direct to destination. 8-chord harmonic pool with 6
+  intensity-tiered progressions (2 per tier, alternated).
+  Streak-driven tempo ramp.
   → [Details](agent_docs/audio.md)
 
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
   (quick-launch bonus + streak multiplier + comet bonus), star
-  generation with difficulty ramp and landscape-adaptive spread,
-  black holes (same mechanics, different visuals + lensing),
-  replay with dynamic follow-cam. Focus-click suppression
-  prevents accidental boosts when clicking to bring the browser
-  window forward.
+  generation with centralized `SPAWN` table and difficulty ramp.
+  Binary stars (two sub-stars orbiting COM, tidally locked).
+  Black holes with lensing grid; BH binaries get physics-driven
+  ejecta from donor to accretor. Crash wobble on star collision.
+  Pause (P key), orbital velocity nudge (arrow keys). Replay
+  with dynamic follow-cam. Focus-click suppression and
+  right-click filtering.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences

@@ -937,7 +937,7 @@ export function createAudio() {
       // "a new chord just started".
       musicStab(MUSIC_ARP[chordIdx], time);
       // Pad — sustained chord held for the full bar underneath.
-      musicPad(MUSIC_ARP[chordIdx], time, MUSIC_STEPS_PER_BAR * MUSIC_STEP_SEC);
+      musicPad(MUSIC_ARP[chordIdx], time, MUSIC_STEPS_PER_BAR * currentStepSec);
       // Pick lead + bass rhythm patterns for this bar.
       // Sampled at different simplex Y coordinates so lead and
       // bass don't pick patterns in lockstep.

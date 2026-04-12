@@ -29,9 +29,15 @@ pulls you in and you orbit that one too.
 - **Dodge planets, catch comets.** Some stars have orbiting
   planets that gently tug on your trajectory. Comets sweep
   through on highly eccentric orbits — fly close to one for
-  bonus points. Occasionally a star is replaced by a black
-  hole — same mechanics, but with gravitational lensing that
-  warps the background around it.
+  bonus points. Binary stars orbit each other — you orbit
+  their center of mass, but either sub-star can kill you.
+  Occasionally a star is replaced by a black hole — same
+  mechanics, but with gravitational lensing that warps the
+  background around it. A black hole paired with a companion
+  star pulls glowing ejecta from the donor.
+- **Nudge your orbit** with the left/right arrow keys to
+  fine-tune your trajectory before launching. Press **P**
+  to pause.
 - **Watch your replay.** A cinematic follow-camera plays back
   your run with simplex-driven zoom behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right
@@ -102,13 +108,17 @@ before it reaches a player.
   orbiting planets that exert weak gravity on the ship. Comets
   follow analytical Kepler orbits with multi-syndyne dust tails
   and a distance-dependent coma — purely visual + scoring.
-  Black holes play identically to normal stars but are rendered
-  with an Interstellar-style accretion disk and real-time
-  gravitational lensing of the scene via a conditional FBO
-  composite pass. Procedural spiral galaxies drift in the
+  Binary stars orbit their center of mass — gravity comes from
+  the COM, but each sub-star has its own crash zone. Black holes
+  play identically to normal stars but are rendered with an
+  Interstellar-style accretion disk, a procedural background
+  grid, and real-time gravitational lensing via a conditional
+  FBO composite pass. BH binaries have physics-driven ejecta
+  from the donor star. Procedural spiral galaxies drift in the
   background.
-- **Rendering is WebGL2**, not Canvas2D. Four shader programs
-  (fullscreen / circle / star / polyline) cover every primitive.
+- **Rendering is WebGL2**, not Canvas2D. Five shader programs
+  (fullscreen / lensing / circle / star / polyline) cover every
+  primitive.
   The star is evaluated procedurally per pixel in the fragment
   shader — corona, streamers, glow, photosphere, granulation,
   core highlight — so every star stays animated without the

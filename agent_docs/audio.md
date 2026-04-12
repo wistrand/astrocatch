@@ -26,19 +26,22 @@ Both buses muted in parallel via `setMuted`.
 - `boost()` — ascending perfect fifth, short.
 - `capture(bonus, streak)` — A-major arpeggio chime. More notes
   for higher bonus tiers. Streak shimmer on chains.
-- `death()` — falling A-minor descent.
+- `death()` — falling A-minor sawtooth descent (escape into space).
+- `deathCrash()` — soft sine droplet descent (star collision).
 - `comet()` — ascending sparkle with bell overtones.
 
 All SFX use per-call detune jitter (see constant in each function).
 
 ## Generative music
 
-Loop at `MUSIC_BPM` in A minor. Chord progression switches at
-section boundaries based on `setIntensity(v)`:
+Loop at `MUSIC_BPM` in A minor. 8-chord harmonic pool (Am, F, C,
+G, Dm, E, Em, Bb) with 6 progressions (2 per tier, alternated
+each 4-bar section via `sectionCount`). Chord progression switches
+at section boundaries based on `setIntensity(v)`:
 
-- Tier 0 (calm): Am → F → C → G
-- Tier 1 (medium): Dm → Am → F → C
-- Tier 2 (intense): Am → G → F → E
+- Tier 0 (calm): Am→F→C→G / Am→Em→F→G
+- Tier 1 (medium): Dm→Am→F→C / Dm→F→Am→G
+- Tier 2 (intense): Am→G→F→E / Dm→Bb→F→E
 
 Thresholds in `MUSIC_INTENSITY_THRESHOLDS`. Five layers: stab
 (triangle chord hit), pad (sustained sines), bass (saw + sub
@@ -50,9 +53,12 @@ with filter envelope), arp (8th-note triangle roll), lead
 Pitch from chord tones via 2D simplex noise. Three variation
 sources: rhythm pattern bank (`MUSIC_LEAD_PATTERNS`, tier-
 windowed via `MUSIC_LEAD_PATTERN_RANGES`), time-continuous pitch
-contour, slow Y-drift for long-timescale evolution. The seed
-fixes the noise field but sampling coordinates are wall-clock-
-derived, so exact notes vary between sessions.
+contour, slow Y-drift for long-timescale evolution.
+
+### Streak-driven tempo
+
+Base tempo `MUSIC_BPM`, each streak level adds 4 BPM up to
+`MUSIC_BPM_MAX`. Only changes at section boundaries.
 
 ### Scheduler
 

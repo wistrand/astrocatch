@@ -569,8 +569,8 @@ void main() {
     float ca = cos(diskTilt);
     float sa = sin(diskTilt);
     vec2 rl = vec2(
-      v_local.x * ca - v_local.y * sa,
-      v_local.x * sa + v_local.y * ca
+      loc.x * ca - loc.y * sa,
+      loc.x * sa + loc.y * ca
     );
 
     // Event horizon — opaque black disk, antialiased edge.
