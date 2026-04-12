@@ -346,14 +346,37 @@ Plus a generative music layer:
     how the simplex contours move. Noise permutation is
     seeded from a fixed Lehmer seed, so the same song plays
     the same way across sessions; change the seed in
-    `initNoisePerm()` for a different "song of the day".
+    `initNoisePerm()` for a different harmonic landscape.
+    Note: the seed fixes the noise *field*, but the sampling
+    coordinates are wall-clock-derived (raw audio time), so
+    the exact played notes vary between sessions even with
+    the same seed. Within a single session the melody is
+    deterministic and reproducible.
 
   Scheduled ahead of the audio clock via a `setTimeout` loop
-  (25 ms tick, 100 ms look-ahead) — the standard WebAudio
-  scheduling pattern. Clamped to 32 steps per tick so a
-  background-tab throttle that wakes up after a long pause
-  doesn't emit an avalanche of late notes; instead it resyncs
-  `nextStepTime` to the current audio clock.
+  (100 ms tick, 500 ms look-ahead) — the standard WebAudio
+  scheduling pattern with aggressive mobile-friendly headroom.
+  The 5× ratio between tick and lookahead (Chris Wilson's rule
+  of thumb) gives the scheduler plenty of slack for main-thread
+  jitter. The 500 ms lookahead specifically targets **touch
+  interaction on Chrome Android**: the main thread can block
+  for 100–300 ms when `boost()` fires (48 prediction
+  integrations) alongside a render frame, and with a smaller
+  lookahead the audio engine would drain its pre-queued events
+  and underrun → click.
+
+  After the resync loop catches up, `nextStepTime` is held at
+  least `MUSIC_SAFETY_MARGIN` (30 ms) into the future, and each
+  per-call commit is additionally clamped to at least 10 ms
+  ahead of `ctx.currentTime`. Together these guarantee that
+  any tiny main-thread delay between the resync check and the
+  actual `scheduleStep()` call can't push the committed
+  automation events into the past.
+
+  Clamped to 32 steps per tick so a background-tab throttle
+  that wakes up after a long pause doesn't emit an avalanche
+  of late notes; instead it resyncs `nextStepTime` to the
+  current audio clock.
 
   Music is paused on `document.visibilitychange → hidden` and
   resumed on visible (if the caller still wanted it playing),
@@ -403,6 +426,26 @@ earlier creation but Safari refuses outside a gesture — the
 lazy path works on both. The master gain starts at `MASTER_VOLUME`
 (0.32) unless `localStorage.astrocatch_muted === "1"`, in which
 case it starts at 0.
+
+**Context creation**: `new AudioContext({ latencyHint: "playback" })`
+with a try/catch fallback to the no-args form for very old
+Safari. `"playback"` tells the browser to use larger output
+buffers and prioritize playback smoothness over input response
+latency — the right choice for ambient music where ~100 ms of
+latency on the boost/capture/death SFX is imperceptible, and
+where the alternative (`"interactive"`, small buffers) causes
+underruns and clicks on Firefox Android's cubeb backend.
+
+**Silent pre-warm oscillator**: a single sine at 40 Hz running
+through a gain of 0, connected directly to the destination at
+context creation and never stopped. Keeps the audio graph in an
+"active" state so the output hardware doesn't enter power-save
+between scheduled events — some mobile backends (Firefox Android
+in particular) click when the output wakes from idle. Cost is
+one sine oscillator's worth of DSP for the lifetime of the
+context. The `warmOsc` reference is intentionally not stored:
+it's rooted in the graph via `warmOsc.connect(...)`, and there's
+no use case for stopping it.
 
 **Mute**: two controls, both driving the same state:
 - **HUD button** (`#mute-btn` in `index.html`) — top-right

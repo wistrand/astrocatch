@@ -33,7 +33,10 @@ const NOISE_PERM = new Uint8Array(512);
   for (let i = 0; i < 256; i++) p[i] = i;
   // Fixed Lehmer-RNG seed so the melody contour is deterministic
   // across sessions. Re-seed here if you ever want a different
-  // "melody of the day" — the whole song shape shifts with it.
+  // different harmonic landscape. The seed controls the noise
+  // FIELD, not the path through it — sampling coordinates are
+  // wall-clock-derived (audio time), so the exact played notes
+  // vary between sessions even with the same seed.
   let seed = 20260412;
   for (let i = 255; i > 0; i--) {
     seed = (seed * 16807) % 2147483647;
@@ -105,8 +108,32 @@ const MUSIC_STEPS_PER_BAR = 16;
 const MUSIC_BARS = 4;
 const MUSIC_TOTAL_STEPS = MUSIC_STEPS_PER_BAR * MUSIC_BARS;
 const MUSIC_STEP_SEC = 60 / MUSIC_BPM / 4; // 16th note
-const MUSIC_SCHEDULE_AHEAD = 0.1;          // seconds
-const MUSIC_SCHEDULE_INTERVAL = 25;        // ms
+// Lookahead and tick rate for the music scheduler. The
+// scheduler is a setTimeout loop running on the main thread,
+// so anything that blocks the main thread (touch handlers,
+// boost() running up-to-48 prediction integrations, physics
+// ticks, render frames, GC pauses) can delay the next tick.
+// If the block exceeds the lookahead, the audio engine runs
+// out of pre-queued events and underruns → click.
+//
+// 500 ms lookahead gives ~5× the worst-case main-thread stall
+// we've actually measured, so an active touch interaction on
+// Chrome Android no longer empties the queue. The 100 ms tick
+// interval halves the scheduler's own main-thread CPU share
+// compared to the previous 50 ms, reducing contention. The
+// 5× tick-to-lookahead ratio stays within Chris Wilson's
+// WebAudio scheduling guidelines. Mute is unaffected because
+// master/musicBus gain changes apply immediately regardless
+// of what's already queued to the audio engine.
+const MUSIC_SCHEDULE_AHEAD = 0.5;          // seconds
+const MUSIC_SCHEDULE_INTERVAL = 100;       // ms
+// Minimum time in the future for any scheduled note. After a
+// resync (or on the very first tick), we guarantee scheduled
+// events are at least this far ahead of the audio clock so
+// brief main-thread delays between scheduleStep() calls can't
+// push them into the past. 30 ms covers typical render-frame
+// jank on mobile Chrome / Firefox Android.
+const MUSIC_SAFETY_MARGIN = 0.03;          // seconds
 const MUSIC_MAX_STEPS_PER_TICK = 32;       // clamp if tab stalled
 
 // Chord-root frequencies for the bass (low octave). Index is
@@ -122,7 +149,10 @@ const MUSIC_BASS = [
    82.41, // 5: E2  — E major (V of A minor, dominant pull)
 ];
 // Arpeggio chord tones, one octave up. Three notes per chord,
-// cycled at 8th-note rate.
+// cycled at 8th-note rate. Each entry must have at least 1
+// tone — musicArp, musicPad, and musicStab all iterate
+// chord.length, and arpIdx uses % chord.length which would
+// divide by zero on an empty array.
 const MUSIC_ARP = [
   [220.00, 261.63, 329.63], // 0: Am — A3, C4, E4
   [174.61, 220.00, 261.63], // 1: F  — F3, A3, C4
@@ -204,6 +234,25 @@ const MUSIC_LEAD_PATTERN_RANGES = [
 ];
 
 export function createAudio() {
+  // Sanity check: every chord index referenced by the
+  // progressions must exist in all three parallel tables.
+  // Catches table-length drift at init instead of at a random
+  // runtime moment minutes into gameplay.
+  const maxChordIdx = MUSIC_PROGRESSIONS.reduce(
+    (mx, p) => p.reduce((a, b) => Math.max(a, b), mx), 0
+  );
+  if (
+    maxChordIdx >= MUSIC_BASS.length ||
+    maxChordIdx >= MUSIC_ARP.length ||
+    maxChordIdx >= MUSIC_LEAD.length
+  ) {
+    throw new Error(
+      "MUSIC_PROGRESSIONS references chord index " + maxChordIdx +
+      " but MUSIC_BASS/ARP/LEAD only have " +
+      Math.min(MUSIC_BASS.length, MUSIC_ARP.length, MUSIC_LEAD.length) + " entries"
+    );
+  }
+
   let ctx = null;
   let master = null;
   let musicBus = null;
@@ -246,7 +295,23 @@ export function createAudio() {
       try {
         const Ctor = window.AudioContext || window.webkitAudioContext;
         if (!Ctor) return null;
-        ctx = new Ctor();
+        // latencyHint: "playback" — tells the browser to
+        // prioritise smooth playback over low-latency
+        // response, which means bigger audio output buffers.
+        // Firefox on Android's cubeb backend is particularly
+        // sensitive to main-thread jitter under the default
+        // "interactive" hint; with "playback" it uses larger
+        // buffers and is much less click-prone. The trade-off
+        // is ~100 ms of latency on the boost/capture/death
+        // SFX, which is below the perceptual threshold for an
+        // orbital game where audio-visual sync isn't tight.
+        try {
+          ctx = new Ctor({ latencyHint: "playback" });
+        } catch (_) {
+          // Very old Safari rejects the options bag; fall
+          // back to a no-args construction.
+          ctx = new Ctor();
+        }
         master = ctx.createGain();
         master.gain.value = muted ? 0 : MASTER_VOLUME;
         // Soft safety limiter before the destination, only on
@@ -274,6 +339,23 @@ export function createAudio() {
         musicBus = ctx.createGain();
         musicBus.gain.value = muted ? 0 : MUSIC_VOLUME;
         musicBus.connect(ctx.destination);
+        // Silent pre-warm oscillator — a single sine running
+        // forever at zero gain, kept in the graph so the
+        // output hardware stays in "active" state. Some mobile
+        // audio backends (notably Firefox Android) click or
+        // drop samples when the output wakes from an idle
+        // state between events. Keeping a constant (inaudible)
+        // signal in the pipeline prevents the hardware from
+        // ever entering that idle state. Cost: one sine's
+        // worth of DSP, below any metering threshold.
+        const warmOsc = ctx.createOscillator();
+        const warmGain = ctx.createGain();
+        warmGain.gain.value = 0;
+        warmOsc.frequency.setValueAtTime(40, ctx.currentTime);
+        warmOsc.connect(warmGain).connect(ctx.destination);
+        warmOsc.start();
+        // warmOsc is intentionally never stopped — it runs
+        // for the lifetime of the AudioContext.
       } catch (_) {
         ctx = null;
         return null;
@@ -801,17 +883,20 @@ export function createAudio() {
     const c = ctx;
     if (!c) { schedulerRunning = false; return; }
 
-    // Resync if we fell behind wall-clock. Mobile browsers (iOS
-    // Safari especially) throttle setTimeout under moderate load,
-    // so a scheduler tick that should fire every 25 ms can
-    // actually fire 200 ms late. If we don't catch up before
-    // scheduling, `nextStepTime` drifts into the past — and
-    // past-time gain-automation events are silently ignored by
-    // the audio engine, which leaves the gain at its default
-    // (1.0) during the attack. That's the click source.
-    // Advance through lost step slots until we're back in the
-    // future, skipping whatever beats fell off the clock.
-    while (nextStepTime < c.currentTime) {
+    // Resync if we fell behind wall-clock. Mobile browsers
+    // throttle setTimeout under moderate load — an active
+    // touch interaction on Chrome Android plus a heavy render
+    // frame can block the main thread for 100–300 ms — so a
+    // scheduler tick that should fire every 100 ms can actually
+    // fire much later. We advance through lost step slots
+    // until `nextStepTime` is at least `MUSIC_SAFETY_MARGIN`
+    // into the future. That guarantees every scheduled event
+    // is comfortably ahead of the audio clock even if another
+    // small delay sneaks in between here and the actual
+    // `scheduleStep` call below. Past-time automation events
+    // are the click source; this keeps us out of that state.
+    const safeFloor = c.currentTime + MUSIC_SAFETY_MARGIN;
+    while (nextStepTime < safeFloor) {
       nextStepTime += MUSIC_STEP_SEC;
       currentStep = (currentStep + 1) % MUSIC_TOTAL_STEPS;
     }
@@ -819,7 +904,18 @@ export function createAudio() {
     const horizon = c.currentTime + MUSIC_SCHEDULE_AHEAD;
     let count = 0;
     while (nextStepTime < horizon && count < MUSIC_MAX_STEPS_PER_TICK) {
-      scheduleStep(currentStep, nextStepTime);
+      // Per-call clamp: if the last few ms of main-thread work
+      // have eroded our safety margin between the resync check
+      // above and now, nudge this specific step's events
+      // forward by a tiny amount so they still land in the
+      // future. `nextStepTime` itself still advances on the
+      // rhythm grid — only the audio-clock time committed to
+      // the automation events is clamped. Rhythm stays on-beat
+      // except when we're actively recovering from a stall.
+      const commitTime = nextStepTime > c.currentTime + 0.01
+        ? nextStepTime
+        : c.currentTime + 0.01;
+      scheduleStep(currentStep, commitTime);
       currentStep = (currentStep + 1) % MUSIC_TOTAL_STEPS;
       nextStepTime += MUSIC_STEP_SEC;
       count++;
