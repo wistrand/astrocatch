@@ -49,7 +49,7 @@ const NOISE_PERM = new Uint8Array(512);
 })();
 const NOISE_F2 = 0.5 * (Math.sqrt(3) - 1);
 const NOISE_G2 = (3 - Math.sqrt(3)) / 6;
-function simplex2(x, y) {
+export function simplex2(x, y) {
   const s = (x + y) * NOISE_F2;
   const i = Math.floor(x + s);
   const j = Math.floor(y + s);

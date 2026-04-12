@@ -834,16 +834,21 @@ export function createRenderer(canvas) {
     initBgStars(W, H);
   }
 
-  function cameraMat(camY, zoom) {
+  function cameraMat(camY, zoom, focusY) {
     // Matches Canvas2D's transform chain:
-    //   translate(W/2, H*0.55) * scale(zoom) * translate(-W/2, -H*0.55) * translate(0, camY)
+    //   translate(W/2, H*focusY) * scale(zoom) * translate(-W/2, -H*focusY) * translate(0, camY)
     // applied to a world point — screen = T4 * S * T3 * T2 * world.
+    // `focusY` is the fraction of screen height where the current
+    // star sits. 0.55 is the default (slightly below center);
+    // portrait/mobile passes a larger value (e.g. 0.62) so the
+    // star sits lower, leaving more sky visible above.
     // Composed left-associatively into the pooled scratch so the
     // whole chain runs without a single heap allocation.
+    if (focusY === undefined) focusY = 0.55;
     mat3SetTranslate(_camT2, 0, camY);
-    mat3SetTranslate(_camT3, -viewW / 2, -viewH * 0.55);
+    mat3SetTranslate(_camT3, -viewW / 2, -viewH * focusY);
     mat3SetScale(_camS, zoom, zoom);
-    mat3SetTranslate(_camT4, viewW / 2, viewH * 0.55);
+    mat3SetTranslate(_camT4, viewW / 2, viewH * focusY);
     mat3MulInto(_camT3, _camT2, _camTmpA);        // tmpA = T3 * T2
     mat3MulInto(_camS,  _camTmpA, _camTmpB);      // tmpB = S  * tmpA
     mat3MulInto(_camT4, _camTmpB, _camTmpA);      // tmpA = T4 * tmpB

@@ -5,7 +5,7 @@
 // by default.
 import * as AC from "./physics.js";
 import { createRenderer, c1Of, c2Of } from "./renderer.js";
-import { createAudio } from "./audio.js";
+import { createAudio, simplex2 } from "./audio.js";
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -91,6 +91,10 @@ const IS_TOUCH = typeof window !== "undefined"
   && window.matchMedia
   && window.matchMedia("(pointer: coarse)").matches;
 const ZOOM = IS_TOUCH ? 0.58 : 0.65;
+// Vertical focus point — fraction of screen height where the
+// current star sits. On portrait (mobile) the star is pushed
+// lower so the player sees more upcoming stars above.
+const CAM_FOCUS_Y = IS_TOUCH ? 0.62 : 0.55;
 // Fixed-timestep physics rate. Decoupled from requestAnimationFrame so a
 // 144 Hz monitor doesn't run the orbits at 240 Hz, and an RAF burst right
 // after page load can't sneak in extra physics work.
@@ -142,8 +146,12 @@ let menuStars = []; // 1–3 decorative animated stars on the welcome screen
 // in front of it.
 const REPLAY_MAX = 6000;
 let replay = [];          // [{x, y, currentStar}, ...]
-let replayBounds = null;  // {scale, ox, oy} computed once on death
+let replayBounds = null;  // {lastStarIdx} computed once on death
 let replayIdx = 0;
+// Dynamic replay camera — smooth-follows the marker dot with
+// simplex-driven zoom variation for a cinematic replay feel.
+let replayCamX = 0;
+let replayCamY = 0;
 // Replay frames advanced per render frame. Replay was recorded at
 // 1 sample/render-frame, so 1 = real-time, 1.75 = ~1.75× fast,
 // 2 = 2× fast.
@@ -576,7 +584,7 @@ function captureStar(idx) {
   }
 
   // Camera follow
-  camTargetY = -(s.y - H * 0.55);
+  camTargetY = -(s.y - H * CAM_FOCUS_Y);
 
   // Keep the star buffer populated
   while (stars.length < idx + 8) addNextStar();
@@ -830,7 +838,7 @@ function renderTick() {
 
   // Camera: follow upward progress (even while DYING, so the wind-down
   // pan matches the ball's drift).
-  const desired = -(stars[ball.currentStar].y - H * 0.55);
+  const desired = -(stars[ball.currentStar].y - H * CAM_FOCUS_Y);
   if (desired > camTargetY) camTargetY = desired;
   camY += (camTargetY - camY) * 0.08;
 
@@ -866,107 +874,100 @@ function renderTick() {
 // ─────────────────────────────────────────────────────────────
 function computeReplayBounds() {
   if (replay.length < 2) { replayBounds = null; return; }
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  for (let i = 0; i < replay.length; i++) {
-    const p = replay[i];
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  // Include any star within range of the trajectory.
+  // We only need lastStarIdx from the bounds now — the dynamic
+  // camera in drawReplayGhost does its own zoom/offset per frame.
   const lastIdx = ball ? Math.min(stars.length, ball.currentStar + 2) : stars.length;
-  for (let i = 0; i < lastIdx; i++) {
-    const s = stars[i];
-    if (s.x - s.r < minX) minX = s.x - s.r;
-    if (s.x + s.r > maxX) maxX = s.x + s.r;
-    if (s.y - s.r < minY) minY = s.y - s.r;
-    if (s.y + s.r > maxY) maxY = s.y + s.r;
-  }
-  const padX = 60, padY = 60;
-  const wRange = (maxX - minX) + padX * 2;
-  const hRange = (maxY - minY) + padY * 2;
-  if (wRange <= 0 || hRange <= 0) { replayBounds = null; return; }
-  const scale = Math.min(W / wRange, H / hRange);
-  const cx = (minX + maxX) / 2;
-  const cy = (minY + maxY) / 2;
   replayBounds = {
-    scale,
-    ox: W / 2 - cx * scale,
-    oy: H / 2 - cy * scale,
     lastStarIdx: lastIdx,
   };
+  // Seed the replay camera at the start of the trajectory so
+  // the smooth-follow doesn't have to pan from (0, 0).
+  replayCamX = replay[0].x;
+  replayCamY = replay[0].y;
 }
 
 function drawReplayGhost() {
   if (!replayBounds || replay.length < 2) return;
   const b = replayBounds;
-  const mat = renderer.replayMat(b.scale, b.ox, b.oy);
+  const upTo = Math.min(Math.floor(replayIdx), replay.length - 1);
+  if (upTo < 0) return;
+
+  // Current marker position (the "ship").
+  const p = replay[upTo];
+
+  // Smooth-follow camera: ease toward the marker. At 60 fps
+  // with 0.06 weight, the camera responds in ~300 ms — fast
+  // enough to track sharp turns, slow enough to give the
+  // replay a cinematic glide instead of a locked follow.
+  replayCamX += (p.x - replayCamX) * 0.005;
+  replayCamY += (p.y - replayCamY) * 0.005;
+
+  // Simplex-driven zoom variation. The noise makes the camera
+  // slowly breathe in and out, giving the replay depth and
+  // preventing the "locked zoom" look. Base zoom is slightly
+  // wider on mobile so the smaller screen doesn't feel cramped.
+  const zoomBase = IS_TOUCH ? 0.42 : 0.52;
+  const zoomAmplitude = 0.16;
+  const zoomNoise = simplex2(replayIdx * 0.0004, 50.0);
+  const currentZoom = zoomBase + zoomNoise * zoomAmplitude;
+
+  // Build a dynamic camera matrix: center at (camX, camY),
+  // scale = currentZoom. Reuses renderer.replayMat which
+  // wants (scale, ox, oy) where screen = world*scale + offset.
+  const scale = currentZoom;
+  const ox = -replayCamX * scale + W / 2;
+  const oy = -replayCamY * scale + H / 2;
+  const mat = renderer.replayMat(scale, ox, oy);
 
   // Star markers: halo + center for each star the trajectory
-  // passed. Drawn as circles (not the isPast star shader path)
-  // so we can tune their brightness independently of live-play
-  // past-star dimming. Both elements are in their star's color
-  // so the chain reads at a glance.
+  // passed. Most will be off-screen with the close follow
+  // camera, but the GPU culls them at rasterization so no
+  // performance hit from submitting the full list.
   if (b.lastStarIdx > 0) {
     const markers = [];
     for (let i = 0; i < b.lastStarIdx; i++) {
       const s = stars[i];
       const c = c1Of(s.colorIdx);
-      // Soft halo
       markers.push({
         x: s.x, y: s.y,
         outerR: s.r * 1.8, innerR: 0,
         r: c[0], g: c[1], b: c[2],
-        a: 0.55,
-        kind: 2, // glow
+        a: 0.55, kind: 2,
       });
-      // Solid center
       markers.push({
         x: s.x, y: s.y,
         outerR: s.r * 0.7, innerR: 0,
         r: c[0], g: c[1], b: c[2],
-        a: 0.9,
-        kind: 0, // solid disc
+        a: 0.9, kind: 0,
       });
     }
     renderer.drawCircleBatch(markers, mat);
   }
 
-  // Trajectory polyline up to the current replay index. Brightened
-  // from the first cut — a soft light-blue ghost tail that fades
-  // toward the start of the run.
-  const upTo = Math.min(Math.floor(replayIdx), replay.length - 1);
+  // Trajectory polyline — capped to a trailing window of 300
+  // points instead of the full replay. The close-follow camera
+  // only shows a small portion of the trajectory at any zoom,
+  // so rendering all 6000 points would waste vertex work and
+  // allocate a large slice array every frame for no visible
+  // gain. 300 points ≈ 5 seconds of replay at REPLAY_SPEED
+  // 1.75, which is more than enough for the comet-tail effect
+  // the head/tail color uniforms produce.
   if (upTo > 1) {
     const headA = 0.85;
     const head = [0.63 * headA, 0.86 * headA, 1.0 * headA, headA];
     const tail = [0, 0, 0, 0];
-    const points = replay.slice(0, upTo + 1);
-    // Line width was 1.6 screen pixels in Canvas2D. In world units
-    // under the replay bounds scale that's 1.6 / scale total, so
-    // half-width is 0.8 / scale.
-    renderer.drawPolyline(points, mat, 0.8 / b.scale, tail, head);
+    const trailStart = Math.max(0, upTo - 2000);
+    const points = replay.slice(trailStart, upTo + 1);
+    renderer.drawPolyline(points, mat, 0.8 / scale, tail, head);
   }
 
-  // Marker dot at the current replay position — white glow + core.
-  if (upTo >= 0) {
-    const p = replay[upTo];
-    const dotR = 5 / b.scale;
-    renderer.drawCircleBatch([
-      {
-        x: p.x, y: p.y,
-        outerR: dotR * 4, innerR: 0,
-        r: 1, g: 1, b: 1, a: 0.9,
-        kind: 2,
-      },
-      {
-        x: p.x, y: p.y,
-        outerR: dotR, innerR: 0,
-        r: 1, g: 1, b: 1, a: 1.0,
-        kind: 0,
-      },
-    ], mat);
-  }
+  // Marker dot — white glow + core, sized relative to current
+  // zoom so the dot stays a constant screen size.
+  const dotR = 5 / scale;
+  renderer.drawCircleBatch([
+    { x: p.x, y: p.y, outerR: dotR * 4, innerR: 0, r: 1, g: 1, b: 1, a: 0.9, kind: 2 },
+    { x: p.x, y: p.y, outerR: dotR, innerR: 0, r: 1, g: 1, b: 1, a: 1.0, kind: 0 },
+  ], mat);
 }
 
 // Star rendering lives in the `star` shader program in renderer.js.
@@ -1007,7 +1008,7 @@ function draw() {
   }
 
   // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
-  const cam = renderer.cameraMat(camY, ZOOM);
+  const cam = renderer.cameraMat(camY, ZOOM, CAM_FOCUS_Y);
 
   // Connector hints — faint lines from the current star through
   // the next few upcoming stars. Sent as disconnected 2-point
