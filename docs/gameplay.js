@@ -1747,10 +1747,20 @@ function handleTap() {
 // gesture) still works. touch-action on body + canvas already
 // permits the pan gesture at the CSS layer; these handlers
 // just need to stop swallowing it at the JS layer.
+//
+// Focus-click suppression: when the browser window is behind
+// another window and the user clicks to bring it forward, the
+// click also fires as a pointerdown on the canvas. We detect
+// this by comparing against the last window.focus timestamp —
+// the browser fires focus → pointerdown within a few ms.
+let lastWindowFocusTime = 0;
+window.addEventListener("focus", () => { lastWindowFocusTime = performance.now(); });
+
 document.addEventListener("pointerdown", (e) => {
   const t = e.target;
   if (t.closest("button")) return;
   if (state !== STATE.PLAY) return;
+  if (performance.now() - lastWindowFocusTime < 150) return;
   e.preventDefault();
   handleTap();
 });
