@@ -1747,6 +1747,11 @@ function loop(rafTime) {
 // initMenuStars can touch menuStars without TDZ issues. The
 // renderer seeds its own parallax bgStars inside setViewport().
 initMenuStars();
+if (best > 0) {
+  const el = document.getElementById("start-best");
+  el.textContent = "best " + best;
+  el.style.visibility = "visible";
+}
 // Kick off via RAF. Do NOT call loop() synchronously — the first
 // elapsed needs to be measured against a real vsync timestamp
 // (see the sentinel in loop()), and any catchup ticks fired
