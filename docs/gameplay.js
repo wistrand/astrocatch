@@ -200,8 +200,32 @@ let camTargetY = 0;
 let hasBoosted = false; // for the hint
 
 // ─────────────────────────────────────────────────────────────
-// Star generation
+// Star generation — spawn probability table
 // ─────────────────────────────────────────────────────────────
+// All spawn chances and thresholds in one place. Decision order
+// in makeStar: black hole → binary → planets → comets.
+//
+//   Type                  Prob        From star#  Notes
+//   ─────────────────────────────────────────────────────────
+//   Black hole (solo)     7%          4+          lensing + grid
+//   Binary (normal)       0→12%       20→40       ramps up, no ejecta
+//   BH + binary           0→8%        20→40       ramps up, BH accretor + ejecta
+//   Planets               0→75%       ramp/50     1–2 per star (not on binaries)
+//   Comets                25%         2+          on any star incl. binaries
+//
+const SPAWN = {
+  BH_PROB:          0.07,   // chance a star is a black hole
+  BH_MIN_STAR:      4,      // first eligible star index
+  BINARY_PROB:      0.12,   // max chance a non-BH star becomes a binary
+  BH_BINARY_PROB:   0.08,   // max chance a BH gets a donor companion
+  BINARY_RAMP_START: 20,    // star index where binary ramp begins (0%)
+  BINARY_RAMP_END:   40,    // star index where binary prob reaches max
+  PLANET_MAX_PROB:  0.75,   // planet chance at full ramp
+  PLANET_RAMP_STARS: 50,    // stars over which planet prob ramps 0→max
+  COMET_PROB:       0.25,   // chance per star (from COMET_MIN_STAR)
+  COMET_MIN_STAR:   2,      // first eligible star index
+};
+
 function makeStar(x, y, r, colorIdx, starIdx) {
   const s = {
     x, y, r,
@@ -230,13 +254,17 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // capture, boost) but rendered with an event horizon,
     // accretion disk, and gravitational lensing.
     isBlackHole: false,
+    // Binary flag — two sub-stars orbiting the COM. Physics uses
+    // the COM; crash detection checks both sub-stars.
+    isBinary: false,
+    binary: null,
   };
   if (starIdx !== undefined && starIdx >= 0) {
-    // low percent of stars after some index become black holes.
-    if (starIdx >= 4 && Math.random() < .07) {
+    if (starIdx >= SPAWN.BH_MIN_STAR && Math.random() < SPAWN.BH_PROB) {
       s.isBlackHole = true;
     }
-    assignPlanets(s, starIdx);
+    assignBinary(s, starIdx);
+    if (!s.isBinary) assignPlanets(s, starIdx);
     assignComets(s, starIdx);
   }
   return s;
@@ -257,11 +285,9 @@ function makeStar(x, y, r, colorIdx, starIdx) {
 // in the physics integrator keeps the 1/r² accel from
 // diverging inside the planet, so prediction stays stable
 // even on a near-hit.
-const PLANET_MAX_PROB = 0.75;
-const PLANET_RAMP_STARS = 50;
 function assignPlanets(s, starIdx) {
-  const ramp = Math.min(1, starIdx / PLANET_RAMP_STARS);
-  const probability = ramp * PLANET_MAX_PROB;
+  const ramp = Math.min(1, starIdx / SPAWN.PLANET_RAMP_STARS);
+  const probability = ramp * SPAWN.PLANET_MAX_PROB;
   if (Math.random() >= probability) return;
   const nPlanets = 1 + (Math.random() < 0.25 ? 1 : 0);
   const planets = [];
@@ -357,8 +383,8 @@ const COMET_BONUS = 2;
 const BH_VISUAL_SCALE = 0.5;
 
 function assignComets(s, starIdx) {
-  if (starIdx < 2) return; // no comets on the first two stars
-  if (Math.random() > 0.25) return;
+  if (starIdx < SPAWN.COMET_MIN_STAR) return;
+  if (Math.random() > SPAWN.COMET_PROB) return;
 
   // Scan 8 directions to find the one with the most room — the
   // deepest gap between neighboring stars. That's where the
@@ -439,6 +465,66 @@ function separationOk(x, y, r) {
     if (d2 < need * need) return false;
   }
   return true;
+}
+
+// ─── Binary stars ───────────────────────────────────────
+// ~12% of stars from index 8+ become binaries. A binary is
+// two sub-stars orbiting their common center of mass. The
+// "star" entry in stars[] sits at the COM with combined GM;
+// physics sees a single point mass. Sub-stars carry their
+// own visual radius and color for rendering, plus crash
+// zones that move with the orbit. No planets on binaries.
+function assignBinary(s, starIdx) {
+  if (starIdx < SPAWN.BINARY_RAMP_START) return;
+  // Ramp: 0% at RAMP_START → max at RAMP_END.
+  const ramp = Math.min(1, (starIdx - SPAWN.BINARY_RAMP_START)
+    / (SPAWN.BINARY_RAMP_END - SPAWN.BINARY_RAMP_START));
+  const maxProb = s.isBlackHole ? SPAWN.BH_BINARY_PROB : SPAWN.BINARY_PROB;
+  if (Math.random() >= ramp * maxProb) return;
+  // Mass ratio q = m1/m2 in [0.4, 1.0] — never too extreme.
+  const q = 0.2 + Math.random() * 0.45;
+  const totalGM = s.gm;
+  const gm1 = totalGM * q / (1 + q);
+  const gm2 = totalGM / (1 + q);
+  // Visual radii proportional to cube root of mass (like real
+  // stars). The pair's combined visual area roughly matches the
+  // original single star.
+  let r1 = s.r * Math.cbrt(q / (1 + q)) * 0.72;
+  let r2 = s.r * Math.cbrt(1 / (1 + q)) * 0.72;
+  // Separation: must keep both sub-stars well inside the
+  // ship's orbital radius (INITIAL_ORBIT_MULT * s.r = 2R),
+  // and far enough apart that they never visually overlap.
+  const minSep = (r1 + r2) * 2.2;
+  const sep = Math.max(minSep, s.r * (0.8 + Math.random() * 0.4));
+  // Orbital radii from COM (inversely proportional to mass).
+  const d1 = sep / (1 + q);   // heavier star closer to COM
+  const d2 = sep * q / (1 + q);
+  const periodFrames = 400 + Math.random() * 400;
+  const spin = Math.random() < 0.5 ? 1 : -1;
+  s.isBinary = true;
+  s.planets = null; // no planets on binaries
+  s.binary = {
+    q, sep, r1, r2, gm1, gm2, d1, d2,
+    omega: spin * (Math.PI * 2) / periodFrames,
+    phase: Math.random() * Math.PI * 2,
+    colorIdx1: s.colorIdx,
+    colorIdx2: Math.floor(Math.random() * PALETTE_LEN),
+    accretorIsBH: s.isBlackHole,
+    stream: null,
+  };
+  computeStream(s.binary);
+}
+
+// Pure function of (star, frame) — same pattern as planets.
+function binaryPositions(star, frame) {
+  const b = star.binary;
+  if (!b) return null;
+  const angle = frame * b.omega + b.phase;
+  const ca = Math.cos(angle), sa = Math.sin(angle);
+  return [
+    { x: star.x + ca * b.d1, y: star.y + sa * b.d1, r: b.r1 },
+    { x: star.x - ca * b.d2, y: star.y - sa * b.d2, r: b.r2 },
+  ];
 }
 
 function addNextStar() {
@@ -648,8 +734,27 @@ function checkCollisions() {
   // Crash into any star surface. Scoring no longer fires from
   // radius proximity — it fires from captureStar() at the end of
   // the retrograde burn, which prediction armed on the tap.
+  const frame = ball ? ball.frame || 0 : 0;
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
+    // Binary: check sub-stars instead of the COM point.
+    if (s.isBinary) {
+      const subs = binaryPositions(s, frame);
+      if (subs) {
+        for (let j = 0; j < subs.length; j++) {
+          const dx = ball.x - subs[j].x;
+          const dy = ball.y - subs[j].y;
+          const d = Math.hypot(dx, dy);
+          if (d < subs[j].r * CRASH_MULT) {
+            s.wobble = 1.0;
+            s.wobbleAngle = Math.atan2(dy, dx);
+            die(true);
+            return;
+          }
+        }
+      }
+      continue;
+    }
     const dx = ball.x - s.x;
     const dy = ball.y - s.y;
     const d = Math.hypot(dx, dy);
@@ -678,6 +783,8 @@ function captureStar(idx) {
   if (leavingIdx !== idx && stars[leavingIdx]) {
     stars[leavingIdx].planets = null;
     stars[leavingIdx].comets = null;
+    stars[leavingIdx].binary = null;
+    stars[leavingIdx].isBinary = false;
   }
 
   s.caught = true;
@@ -962,8 +1069,19 @@ function physicsTick() {
   // During DYING, freeze the ball if it has drifted into a star's
   // crash radius so it doesn't bounce around inside the photosphere.
   if (state === STATE.DYING) {
+    const frame = ball.frame || 0;
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i];
+      if (s.isBinary && s.binary) {
+        const subs = binaryPositions(s, frame);
+        for (let j = 0; j < subs.length; j++) {
+          const dx = ball.x - subs[j].x, dy = ball.y - subs[j].y;
+          if (dx * dx + dy * dy < (subs[j].r * CRASH_MULT) * (subs[j].r * CRASH_MULT)) {
+            ball.vx = 0; ball.vy = 0; return;
+          }
+        }
+        continue;
+      }
       const dx = ball.x - s.x;
       const dy = ball.y - s.y;
       if (dx * dx + dy * dy < (s.r * CRASH_MULT) * (s.r * CRASH_MULT)) {
@@ -984,8 +1102,88 @@ function physicsTick() {
 
 // Per-render-frame work: trail/replay sampling, camera follow,
 // and the off-screen death check. Runs once per RAF callback.
+// ─── Binary ejecta — live particle simulation ──────────
+// Particles continuously spawn on the donor's surface facing
+// the accretor with a gentle push. The accretor pulls them in
+// with an inflated GM (visual-only, not the game's physics GM)
+// so they arc naturally and spiral inward. Runs every frame in
+// renderTick; purely visual, no gameplay effect.
+const EJECTA_MAX = 160;
+const EJECTA_SPAWN_PER_FRAME = 2;
+// Accretor pull multiplier — higher = particles reach and
+// spiral more convincingly. Only affects ejecta, not ship.
+const EJECTA_GM_MULT = .2;
+
+function computeStream() {} // no-op, kept for the init call
+
+function updateEjecta() {
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.isBinary || !s.binary || !s.binary.accretorIsBH) continue;
+    const b = s.binary;
+    if (!b.ejecta) b.ejecta = [];
+    const frame = ball ? ball.frame || 0 : 0;
+    const subs = binaryPositions(s, frame);
+    const donor = subs[0], accr = subs[1];
+    // Spawn particles on donor surface facing accretor.
+    for (let j = 0; j < EJECTA_SPAWN_PER_FRAME; j++) {
+      if (b.ejecta.length >= EJECTA_MAX) break;
+      // ±30° spread from the point facing the accretor.
+      const toAcc = Math.atan2(accr.y - donor.y, accr.x - donor.x);
+      const a = toAcc + (Math.random() - 0.5) * Math.PI * 0.33;
+      const spd = 0.3 + Math.random() * 0.3;
+      b.ejecta.push({
+        x: donor.x + Math.cos(a) * donor.r * 1.05,
+        y: donor.y + Math.sin(a) * donor.r * 1.05,
+        vx: Math.cos(a) * spd,
+        vy: Math.sin(a) * spd,
+        life: 1,
+      });
+    }
+    // Step particles — pulled by accretor (inflated GM),
+    // weakly repelled by donor so they don't fall back.
+    const accrGM = b.gm2 * EJECTA_GM_MULT;
+    const donorGM = b.gm1 * 0.3;
+    const soft = 8;
+    for (let j = b.ejecta.length - 1; j >= 0; j--) {
+      const p = b.ejecta[j];
+      p.life -= 0.006;
+      if (p.life <= 0) { b.ejecta.splice(j, 1); continue; }
+      // Gravity toward accretor.
+      let dx = accr.x - p.x, dy = accr.y - p.y;
+      let d2 = dx * dx + dy * dy + soft;
+      let d = Math.sqrt(d2);
+      let a = accrGM / d2;
+      p.vx += dx / d * a * 0.12;
+      p.vy += dy / d * a * 0.12;
+      // Weak push away from donor (prevents fall-back).
+      dx = p.x - donor.x; dy = p.y - donor.y;
+      d2 = dx * dx + dy * dy + soft;
+      d = Math.sqrt(d2);
+      a = donorGM / d2;
+      p.vx += dx / d * a * 0.05;
+      p.vy += dy / d * a * 0.05;
+      // Distance-dependent drag — stronger near accretor so
+      // particles always spiral in rather than fly past.
+      const dAccr = Math.hypot(p.x - accr.x, p.y - accr.y);
+      const dragT = Math.min(1, accr.r * 3 / Math.max(dAccr, 1));
+      const drag = 0.998 - dragT * 0.03; // 0.998 far, 0.968 close
+      p.vx *= drag;
+      p.vy *= drag;
+      p.x += p.vx;
+      p.y += p.vy;
+      // Remove if inside accretor.
+      dx = p.x - accr.x; dy = p.y - accr.y;
+      if (dx * dx + dy * dy < accr.r * accr.r * 0.5) {
+        b.ejecta.splice(j, 1);
+      }
+    }
+  }
+}
+
 function renderTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
+  updateEjecta();
 
   const cs = stars[ball.currentStar];
   // Sample the trail at the interpolated render position so the
@@ -1208,7 +1406,8 @@ function draw() {
   if (state === STATE.PLAY || state === STATE.DYING) {
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i];
-      if (!s.isBlackHole) continue;
+      const hasBH = s.isBlackHole || (s.isBinary && s.binary && s.binary.accretorIsBH);
+      if (!hasBH) continue;
       if (s.caught && !(ball && i === ball.currentStar)) continue;
       const sY = s.y + camY;
       if (sY > -300 && sY < H + 300) { hasVisibleBH = true; break; }
@@ -1297,17 +1496,68 @@ function draw() {
     const wob = s.wobble || 0;
     const wobbleVis = wob > 0
       ? Math.sin(wob * 18) * wob : 0;
-    starBatch.push({
-      x: s.x, y: s.y,
-      r: s.isBlackHole ? s.r * BH_VISUAL_SCALE : s.r,
-      colorIdx: s.colorIdx, pulse: s.pulse,
-      wobble: wobbleVis, wobbleAngle: s.wobbleAngle || 0,
-      hasRays: s.hasRays, nGran: s.nGran,
-      isCurrent, isNext, isPast,
-      isBlackHole: s.isBlackHole,
-    });
+    // Binary stars: push two sub-star entries instead of one.
+    if (s.isBinary && s.binary) {
+      const frame = ball ? ball.frame || 0 : 0;
+      const subs = binaryPositions(s, frame);
+      const b = s.binary;
+      // Tidal lock: set seed = orbitalAngle - nowSec so that
+      // tp = u_time + seed = orbitalAngle. Each sub-star's
+      // features rotate exactly once per orbit.
+      const orbAngle = frame * b.omega + b.phase;
+      for (let j = 0; j < 2; j++) {
+        const subBH = j === 1 && b.accretorIsBH;
+        // Each sub-star faces the other: offset by π for the
+        // second so its "front" points at the first.
+        const tidalSeed = orbAngle + j * Math.PI - nowSec;
+        starBatch.push({
+          x: subs[j].x, y: subs[j].y,
+          r: subBH ? subs[j].r * BH_VISUAL_SCALE : subs[j].r,
+          colorIdx: j === 0 ? b.colorIdx1 : b.colorIdx2,
+          seed: tidalSeed,
+          pulse: s.pulse,
+          wobble: wobbleVis, wobbleAngle: s.wobbleAngle || 0,
+          hasRays: s.hasRays, nGran: s.nGran,
+          isCurrent, isNext, isPast,
+          isBlackHole: subBH,
+        });
+      }
+    } else {
+      starBatch.push({
+        x: s.x, y: s.y,
+        r: s.isBlackHole ? s.r * BH_VISUAL_SCALE : s.r,
+        colorIdx: s.colorIdx, pulse: s.pulse,
+        wobble: wobbleVis, wobbleAngle: s.wobbleAngle || 0,
+        hasRays: s.hasRays, nGran: s.nGran,
+        isCurrent, isNext, isPast,
+        isBlackHole: s.isBlackHole,
+      });
+    }
   }
   if (starBatch.length) renderer.drawStarBatch(starBatch, cam);
+
+  // Binary ejecta — live particles rendered as glowing dots.
+  const ejectaBatch = [];
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.isBinary || !s.binary || !s.binary.accretorIsBH) continue;
+    const b = s.binary;
+    if (!b.ejecta) continue;
+    const sY = s.y + camY;
+    if (sY < -260 || sY > H + 260) continue;
+    const ec = c1Of(b.colorIdx1);
+    for (let j = 0; j < b.ejecta.length; j++) {
+      const p = b.ejecta[j];
+      const fade = Math.min(p.life * 3, 1);
+      ejectaBatch.push({
+        x: p.x, y: p.y,
+        outerR: 2.5 + fade * 3.5, innerR: 0,
+        r: ec[0], g: ec[1], b: ec[2], a: 0.35 * fade,
+        kind: 2,
+      });
+    }
+  }
+  if (ejectaBatch.length) renderer.drawCircleBatch(ejectaBatch, cam);
 
   // Planets — rendered at their current physics frame so their
   // visual position exactly matches what the physics integrator
@@ -1640,18 +1890,31 @@ function draw() {
   const fbH = Math.round(H * DPR);
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
-    if (!s.isBlackHole) continue;
-    // Past black holes show as dim embers — no lensing.
     if (s.caught && !(ball && i === ball.currentStar)) continue;
     const sY = s.y + camY;
     if (sY < -300 || sY > H + 300) continue;
-    const clipX = cam[0] * s.x + cam[1] * s.y + cam[2];
-    const clipY = cam[3] * s.x + cam[4] * s.y + cam[5];
-    bhData.push({
-      fbX: (clipX + 1) * 0.5 * fbW,
-      fbY: (clipY + 1) * 0.5 * fbH,
-      fbR: s.r * BH_VISUAL_SCALE * ZOOM * DPR,
-    });
+    if (s.isBlackHole && !s.isBinary) {
+      // Standalone black hole.
+      const clipX = cam[0] * s.x + cam[1] * s.y + cam[2];
+      const clipY = cam[3] * s.x + cam[4] * s.y + cam[5];
+      bhData.push({
+        fbX: (clipX + 1) * 0.5 * fbW,
+        fbY: (clipY + 1) * 0.5 * fbH,
+        fbR: s.r * BH_VISUAL_SCALE * ZOOM * DPR,
+      });
+    } else if (s.isBinary && s.binary && s.binary.accretorIsBH) {
+      // Binary with BH accretor — lens around the BH sub-star.
+      const frame = ball ? ball.frame || 0 : 0;
+      const subs = binaryPositions(s, frame);
+      const bh = subs[1];
+      const clipX = cam[0] * bh.x + cam[1] * bh.y + cam[2];
+      const clipY = cam[3] * bh.x + cam[4] * bh.y + cam[5];
+      bhData.push({
+        fbX: (clipX + 1) * 0.5 * fbW,
+        fbY: (clipY + 1) * 0.5 * fbH,
+        fbR: bh.r * BH_VISUAL_SCALE * ZOOM * DPR,
+      });
+    }
   }
   renderer.finalizeFrame(bhData);
 }

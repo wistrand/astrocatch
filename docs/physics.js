@@ -295,6 +295,18 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
     // Crash into any star → abandon prediction.
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i];
+      if (s.isBinary && s.binary) {
+        const b = s.binary;
+        const ba = (startFrame + f) * b.omega + b.phase;
+        const bc = Math.cos(ba), bs = Math.sin(ba);
+        const sx1 = s.x + bc * b.d1, sy1 = s.y + bs * b.d1;
+        const sx2 = s.x - bc * b.d2, sy2 = s.y - bs * b.d2;
+        let d1x = x - sx1, d1y = y - sy1;
+        if (d1x * d1x + d1y * d1y < (b.r1 * CRASH_MULT) * (b.r1 * CRASH_MULT)) return null;
+        let d2x = x - sx2, d2y = y - sy2;
+        if (d2x * d2x + d2y * d2y < (b.r2 * CRASH_MULT) * (b.r2 * CRASH_MULT)) return null;
+        continue;
+      }
       const ddx = x - s.x, ddy = y - s.y;
       const crashR = s.r * CRASH_MULT;
       if (ddx * ddx + ddy * ddy < crashR * crashR) return null;

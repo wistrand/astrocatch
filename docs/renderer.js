@@ -1311,7 +1311,8 @@ export function createRenderer(canvas) {
       const c2 = c2Of(s.colorIdx);
       // Same position-derived phase as drawStar used in Canvas2D,
       // so every star stays out of sync with its neighbours.
-      const seed = (Math.sin(s.x * 0.0137 + s.y * 0.0191) * 0.5 + 0.5) * Math.PI * 2;
+      const seed = s.seed != null ? s.seed
+        : (Math.sin(s.x * 0.0137 + s.y * 0.0191) * 0.5 + 0.5) * Math.PI * 2;
       let flags = 0;
       if (s.isCurrent)  flags |= 1;
       if (s.isNext)     flags |= 2;
