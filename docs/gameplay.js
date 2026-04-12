@@ -1690,6 +1690,7 @@ let physicsAccumulator = 0;
 // Sentinel: set on the first RAF callback so we don't compute
 // a bogus elapsed from module-load time to first vsync.
 let lastFrameTime = -1;
+let paused = false;
 // Interpolated render position for the ball. Equal to ball.x/y
 // only at alpha = 1 (end of a physics tick); otherwise lerped
 // between the state before the most recent tick and the current
@@ -1697,6 +1698,11 @@ let lastFrameTime = -1;
 let ballRenderX = 0, ballRenderY = 0;
 
 function loop(rafTime) {
+  if (paused) {
+    lastFrameTime = -1;
+    requestAnimationFrame(loop);
+    return;
+  }
   if (lastFrameTime < 0) lastFrameTime = rafTime;
   let elapsed = rafTime - lastFrameTime;
   if (elapsed > MAX_FRAME_GAP_MS) elapsed = MAX_FRAME_GAP_MS;
@@ -1782,6 +1788,7 @@ window.addEventListener("focus", () => { lastWindowFocusTime = performance.now()
 
 document.addEventListener("pointerdown", (e) => {
   const t = e.target;
+  if (e.button && e.button !== 0) return;
   if (t.closest("button")) return;
   if (state !== STATE.PLAY) return;
   if (performance.now() - lastWindowFocusTime < 150) return;
@@ -1805,6 +1812,12 @@ document.addEventListener("keydown", (e) => {
     e.preventDefault();
     audio.setMuted(!audio.isMuted());
     syncMuteBtn();
+    return;
+  }
+  if (e.key === "p" || e.key === "P") {
+    if (e.repeat) return;
+    if (state !== STATE.PLAY && state !== STATE.DYING) return;
+    paused = !paused;
     return;
   }
   // Arrow keys nudge orbital velocity while in orbit.
