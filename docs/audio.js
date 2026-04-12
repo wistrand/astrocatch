@@ -99,7 +99,7 @@ export function simplex2(x, y) {
 // fires every half note picking from an A-minor pentatonic
 // scale. One complete loop = 4 bars × 16 steps = 64 steps.
 // ─────────────────────────────────────────────────────────────
-const MUSIC_BPM = 108;
+const MUSIC_BPM = 114;
 const MUSIC_STEPS_PER_BAR = 16;
 // One "section" is a 4-bar progression. At section boundaries
 // the scheduler re-reads the caller-supplied intensity and
@@ -317,7 +317,7 @@ export function createAudio() {
   // adds a small BPM bump, capped so the music doesn't become
   // frantic. Updated at section boundaries so tempo never
   // shifts mid-bar.
-  const MUSIC_BPM_MAX = 125;
+  const MUSIC_BPM_MAX = 132;
   let currentStreak = 0;
   let currentStepSec = MUSIC_STEP_SEC;
   // Which lead-rhythm pattern is active for the current bar.
@@ -623,10 +623,8 @@ export function createAudio() {
     }
   }
 
-  // ── death: falling three-note minor descent through a
-  // closing lowpass. Notes are A3, F3, D3 — a descending A minor
-  // partial — so the fall has a clear melodic shape rather than
-  // a generic sawtooth slide.
+  // ── death (escape): falling three-note minor descent through a
+  // closing lowpass. Notes are A3, F3, D3 — wilting away into space.
   function death() {
     const c = ensure();
     if (!c || muted) return;
@@ -649,7 +647,6 @@ export function createAudio() {
       const osc = c.createOscillator();
       osc.type = "sawtooth";
       osc.frequency.setValueAtTime(freq, start);
-      // Downward drift within each note for a "wilting" feel.
       osc.frequency.exponentialRampToValueAtTime(freq * 0.6, start + 0.45);
       const g = c.createGain();
       g.gain.setValueAtTime(0.0001, start);
@@ -658,6 +655,42 @@ export function createAudio() {
       osc.connect(g).connect(filter);
       osc.start(start);
       osc.stop(start + 0.6);
+    });
+  }
+
+  // ── deathCrash (star collision): soft descending droplet —
+  // sine tones with a gentle pitch slide, like a bubble being
+  // absorbed. Notes are A4, E4, C4 through a warm lowpass.
+  function deathCrash() {
+    const c = ensure();
+    if (!c || muted) return;
+    const t = c.currentTime;
+
+    const filter = c.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.Q.value = 3.0;
+    filter.frequency.setValueAtTime(2400, t);
+    filter.frequency.exponentialRampToValueAtTime(400, t + 0.9);
+
+    const mix = c.createGain();
+    mix.gain.value = 1.0;
+    filter.connect(mix).connect(master);
+
+    const notes = [440, 329.63, 261.63]; // A4, E4, C4
+    const step = 0.14;
+    notes.forEach((freq, i) => {
+      const start = t + i * step;
+      const osc = c.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(freq, start);
+      osc.frequency.exponentialRampToValueAtTime(freq * 0.82, start + 0.35);
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.linearRampToValueAtTime(0.25, start + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + 0.45);
+      osc.connect(g).connect(filter);
+      osc.start(start);
+      osc.stop(start + 0.5);
     });
   }
 
@@ -1082,7 +1115,7 @@ export function createAudio() {
   }
 
   return {
-    boost, capture, death, comet,
+    boost, capture, death, deathCrash, comet,
     startMusic, stopMusic, setIntensity, setStreak,
     setMuted, isMuted,
   };

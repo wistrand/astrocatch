@@ -654,7 +654,9 @@ function checkCollisions() {
     const dy = ball.y - s.y;
     const d = Math.hypot(dx, dy);
     if (d < s.r * CRASH_MULT) {
-      die();
+      s.wobble = 1.0;
+      s.wobbleAngle = Math.atan2(dy, dx);
+      die(true);
       return;
     }
   }
@@ -849,10 +851,10 @@ function boost() {
 // for DYING_FRAMES_MS so the ball drifts a bit before the game
 // over screen appears — much less abrupt than a hard freeze.
 // ─────────────────────────────────────────────────────────────
-function die() {
+function die(crash) {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
-  audio.death();
+  if (crash) audio.deathCrash(); else audio.death();
   // Music keeps playing through DYING → DEAD → next PLAY.
   // The retry's startMusic() is idempotent, so the loop
   // stitches across runs without a chord jump or seam.
@@ -1279,13 +1281,27 @@ function draw() {
     const sY = s.y + camY;
     if (sY < -240 || sY > H + 240) continue;
     if (s.pulse > 0) s.pulse -= 0.03;
+    // Crash wobble — soft decaying squeeze into an ellipse along
+    // the impact direction. Decays over ~1.5 s with a gentle
+    // oscillation so the star settles back to round.
+    if (s.wobble > 0) {
+      s.wobble *= 0.97;
+      if (s.wobble < 0.01) s.wobble = 0;
+    }
     const isCurrent = ball && i === ball.currentStar;
     const isNext = ball && i === ball.currentStar + 1;
     const isPast = s.caught && !isCurrent;
+    // Compute oscillating wobble for the shader — the star
+    // squeezes flat on the impact side, then relaxes with a
+    // soft bounce.
+    const wob = s.wobble || 0;
+    const wobbleVis = wob > 0
+      ? Math.sin(wob * 18) * wob : 0;
     starBatch.push({
       x: s.x, y: s.y,
       r: s.isBlackHole ? s.r * BH_VISUAL_SCALE : s.r,
       colorIdx: s.colorIdx, pulse: s.pulse,
+      wobble: wobbleVis, wobbleAngle: s.wobbleAngle || 0,
       hasRays: s.hasRays, nGran: s.nGran,
       isCurrent, isNext, isPast,
       isBlackHole: s.isBlackHole,

@@ -307,7 +307,7 @@ void main() {
 
   vec4 scene = texture(u_sceneTex, distUV);
   // Mix grid into scene (subtle blue-white tint)
-  scene.rgb = mix(scene.rgb, vec3(0.35, 0.45, 0.65), gridAlpha * 0.32);
+  scene.rgb = mix(scene.rgb, vec3(0.4, 0.5, 0.7), gridAlpha * 0.48);
 
   // Photon ring per black hole
   for (int i = 0; i < 4; i++) {
@@ -436,6 +436,7 @@ in vec2 a_center;
 in vec4 a_c1;        // (r, g, b, baseR)
 in vec4 a_c2;        // (r, g, b, seed)
 in vec4 a_params;    // (hasRays, nGran, pulse, flags)
+in vec2 a_wobble;    // (amount, angle) — crash wobble
 
 uniform mat3 u_view;
 
@@ -453,6 +454,7 @@ flat out float v_hasRays;
 flat out float v_nGran;
 out float v_pulse;
 flat out float v_flags;
+out vec2 v_wobble;
 
 void main() {
   float baseR = a_c1.w;
@@ -474,6 +476,7 @@ void main() {
   v_nGran = a_params.y;
   v_pulse = a_params.z;
   v_flags = a_params.w;
+  v_wobble = a_wobble;
 }
 `;
 
@@ -489,6 +492,7 @@ flat in float v_hasRays;
 flat in float v_nGran;
 in float v_pulse;
 flat in float v_flags;
+in vec2 v_wobble;   // (amount, angle)
 
 uniform float u_time;
 
@@ -498,7 +502,24 @@ const float PI = 3.14159265;
 const float TAU = 6.28318530;
 
 void main() {
-  float d = length(v_local);
+  // Wobble deformation — squeeze the star into an ellipse along
+  // the impact axis. The component of v_local parallel to the
+  // impact direction is stretched, making the star bulge outward
+  // at the sides and flatten where the ship hit.
+  vec2 loc = v_local;
+  float wobAmt = v_wobble.x;
+  if (wobAmt > 0.001) {
+    float wa = v_wobble.y;
+    vec2 impactDir = vec2(cos(wa), sin(wa));
+    float para = dot(loc, impactDir);
+    float perp = dot(loc, vec2(-impactDir.y, impactDir.x));
+    // Squeeze along impact axis, bulge perpendicular
+    float squeeze = 1.0 - wobAmt * 0.25;
+    float bulge   = 1.0 + wobAmt * 0.18;
+    loc = impactDir * para * squeeze
+        + vec2(-impactDir.y, impactDir.x) * perp * bulge;
+  }
+  float d = length(loc);
   float tp = u_time + v_seed;
 
   int flags = int(v_flags);
@@ -907,10 +928,10 @@ export function createRenderer(canvas) {
   gl.bindVertexArray(null);
 
   // ── Star VAO ──────────────────────────────────────────────
-  // Instance stride is 14 floats (56 bytes):
-  //   vec2 center, vec4 c1, vec4 c2, vec4 params
+  // Instance stride is 16 floats (64 bytes):
+  //   vec2 center, vec4 c1, vec4 c2, vec4 params, vec2 wobble
   const starInstanceBuf = gl.createBuffer();
-  const STAR_FLOATS_PER_INSTANCE = 14;
+  const STAR_FLOATS_PER_INSTANCE = 16;
   const starVao = gl.createVertexArray();
   gl.bindVertexArray(starVao);
   gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -931,6 +952,9 @@ export function createRenderer(canvas) {
   gl.enableVertexAttribArray(starProg.attribs.a_params);
   gl.vertexAttribPointer(starProg.attribs.a_params, 4, gl.FLOAT, false, sStride, 40);
   gl.vertexAttribDivisor(starProg.attribs.a_params, 1);
+  gl.enableVertexAttribArray(starProg.attribs.a_wobble);
+  gl.vertexAttribPointer(starProg.attribs.a_wobble, 2, gl.FLOAT, false, sStride, 56);
+  gl.vertexAttribDivisor(starProg.attribs.a_wobble, 1);
   gl.bindVertexArray(null);
 
   // ── Polyline VAO ──────────────────────────────────────────
@@ -1307,6 +1331,8 @@ export function createRenderer(canvas) {
       starScratch[base + 11] = s.nGran;
       starScratch[base + 12] = s.pulse || 0;
       starScratch[base + 13] = flags;
+      starScratch[base + 14] = s.wobble || 0;
+      starScratch[base + 15] = s.wobbleAngle || 0;
     }
     gl.useProgram(starProg.program);
     gl.uniformMatrix3fv(starProg.uniforms.u_view, true, viewMat);
