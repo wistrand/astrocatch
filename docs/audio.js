@@ -99,7 +99,7 @@ export function simplex2(x, y) {
 // fires every half note picking from an A-minor pentatonic
 // scale. One complete loop = 4 bars × 16 steps = 64 steps.
 // ─────────────────────────────────────────────────────────────
-const MUSIC_BPM = 100;
+const MUSIC_BPM = 108;
 const MUSIC_STEPS_PER_BAR = 16;
 // One "section" is a 4-bar progression. At section boundaries
 // the scheduler re-reads the caller-supplied intensity and
@@ -126,7 +126,7 @@ const MUSIC_STEP_SEC = 60 / MUSIC_BPM / 4; // 16th note
 // master/musicBus gain changes apply immediately regardless
 // of what's already queued to the audio engine.
 const MUSIC_SCHEDULE_AHEAD = 0.5;          // seconds
-const MUSIC_SCHEDULE_INTERVAL = 100;       // ms
+const MUSIC_SCHEDULE_INTERVAL = 108;       // ms
 // Minimum time in the future for any scheduled note. After a
 // resync (or on the very first tick), we guarantee scheduled
 // events are at least this far ahead of the audio clock so
@@ -148,7 +148,7 @@ const MUSIC_BASS = [
    73.42, // 4: D2  — Dm
    82.41, // 5: E2  — E major (V of A minor, dominant pull)
    82.41, // 6: E2  — E minor (v of A minor, natural minor)
-   58.27, // 7: Bb1 — Bb major (bII Neapolitan, dramatic color)
+  116.54, // 7: Bb2 — Bb major (bII Neapolitan, dramatic color)
 ];
 // Arpeggio chord tones, one octave up. Three notes per chord,
 // cycled at 8th-note rate. Each entry must have at least 1
@@ -163,7 +163,7 @@ const MUSIC_ARP = [
   [146.83, 174.61, 220.00], // 4: Dm — D3, F3, A3
   [164.81, 207.65, 246.94], // 5: E  — E3, G#3, B3
   [164.81, 196.00, 246.94], // 6: Em — E3, G3, B3
-  [116.54, 146.83, 174.61], // 7: Bb — Bb2, D3, F3
+  [233.08, 293.66, 349.23], // 7: Bb — Bb3, D4, F4
 ];
 // Per-chord lead scale — chord tones over two octaves, so every
 // lead note the simplex picks is guaranteed to sit on the
@@ -186,7 +186,7 @@ const MUSIC_LEAD = [
   // 6: Em — E, G, B
   [164.81, 196.00, 246.94, 329.63, 392.00, 493.88, 659.26],
   // 7: Bb — Bb, D, F
-  [116.54, 146.83, 174.61, 233.08, 293.66, 349.23, 466.16],
+  [233.08, 293.66, 349.23, 466.16, 587.33, 698.46, 932.33],
 ];
 
 // Intensity-tiered chord progressions. Each tier is a 4-bar
@@ -210,10 +210,10 @@ const MUSIC_PROGRESSIONS = [
   [0, 6, 1, 3],    // 0B: Am Em F G
   // Tier 1 (medium) — minor-tinted with more movement
   [4, 0, 1, 2],    // 1A: Dm Am F C
-  [0, 1, 4, 6],    // 1B: Am F Dm Em
+  [4, 1, 0, 3],    // 1B: Dm F Am G
   // Tier 2 (intense) — dominant pull + Neapolitan tension
   [0, 3, 1, 5],    // 2A: Am G F E
-  [0, 7, 4, 5],    // 2B: Am Bb Dm E (Neapolitan Bb for drama)
+  [4, 7, 1, 5],    // 2B: Dm Bb F E (Neapolitan Bb via smoother Dm→Bb)
 ];
 // Thresholds at which the tier index bumps up. Read as:
 // intensity < 0.20 → tier 0, < 0.45 → tier 1, else tier 2.

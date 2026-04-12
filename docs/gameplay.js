@@ -233,7 +233,7 @@ function makeStar(x, y, r, colorIdx, starIdx) {
   };
   if (starIdx !== undefined && starIdx >= 0) {
     // low percent of stars after some index become black holes.
-    if (starIdx >= 5 && Math.random() < 0.10) {
+    if (starIdx >= 4 && Math.random() < .07) {
       s.isBlackHole = true;
     }
     assignPlanets(s, starIdx);
@@ -1522,7 +1522,8 @@ function draw() {
 
   // Dashed hint ring around the next star — drawn via the circle
   // program with kind=3.
-  if (ball && ball.currentStar + 1 < stars.length) {
+  if (ball && ball.currentStar + 1 < stars.length
+      && !stars[ball.currentStar + 1].isBlackHole) {
     const nx = stars[ball.currentStar + 1];
     const ringR = nx.r * CAPTURE_MULT;
     // Slight alpha pulse so the hint ring draws the eye without

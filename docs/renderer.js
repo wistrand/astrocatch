@@ -274,12 +274,40 @@ void main() {
     // Lensing distortion
     if (d > R * 0.9 && d < lensR) {
       float t = R / d;
-      float strength = t * t * R * 3.0;
+      float strength = t * t * R * 8.0;
       distUV -= dir * strength / u_resolution;
     }
   }
 
+  // Procedural grid behind each BH — sampled at distorted UV so
+  // the grid lines warp visibly under gravitational lensing.
+  // Fades in near the BH and out beyond the lensing radius.
+  float gridAlpha = 0.0;
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_bhCount) break;
+    vec2 center = u_bh[i].xy;
+    float R = u_bh[i].z;
+    float lensR = R * 8.0;
+    float gridR = lensR * 1.3;
+    float d = length(gl_FragCoord.xy - center);
+    if (d < gridR) {
+      // Fade: strongest near lensing zone, transparent at edges
+      float fade = smoothstep(gridR, lensR * 0.6, d)
+                 * smoothstep(R * 0.8, R * 1.5, d);
+      // Grid in distorted UV space — fixed spacing for all BHs
+      float spacing = 40.0;
+      vec2 gp = distUV * u_resolution;
+      float gx = abs(fract(gp.x / spacing + 0.5) - 0.5) * spacing;
+      float gy = abs(fract(gp.y / spacing + 0.5) - 0.5) * spacing;
+      float line = min(gx, gy);
+      float g = 1.0 - smoothstep(0.0, 1.5, line);
+      gridAlpha = max(gridAlpha, .8 * g * fade);
+    }
+  }
+
   vec4 scene = texture(u_sceneTex, distUV);
+  // Mix grid into scene (subtle blue-white tint)
+  scene.rgb = mix(scene.rgb, vec3(0.35, 0.45, 0.65), gridAlpha * 0.32);
 
   // Photon ring per black hole
   for (int i = 0; i < 4; i++) {
