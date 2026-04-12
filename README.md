@@ -29,7 +29,9 @@ pulls you in and you orbit that one too.
 - **Dodge planets, catch comets.** Some stars have orbiting
   planets that gently tug on your trajectory. Comets sweep
   through on highly eccentric orbits — fly close to one for
-  bonus points.
+  bonus points. Occasionally a star is replaced by a black
+  hole — same mechanics, but with gravitational lensing that
+  warps the background around it.
 - **Watch your replay.** A cinematic follow-camera plays back
   your run with simplex-driven zoom behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right
@@ -97,12 +99,14 @@ before it reaches a player.
   predicted periapsis frame is the same frame the live ball
   reaches its closest approach.
 - **Planets perturb, comets don't.** Some stars have 1–2
-  orbiting planets that exert weak gravity (~1.5% of the
-  star's mass) on the ship, gently bending its orbit on close
-  passes. Comets follow analytically-solved Kepler orbits with
-  high eccentricity, multi-syndyne dust tails, and a
-  distance-dependent coma — but they're purely visual + a
-  scoring opportunity, with no physics coupling to the ship.
+  orbiting planets that exert weak gravity on the ship. Comets
+  follow analytical Kepler orbits with multi-syndyne dust tails
+  and a distance-dependent coma — purely visual + scoring.
+  Black holes play identically to normal stars but are rendered
+  with an Interstellar-style accretion disk and real-time
+  gravitational lensing of the scene via a conditional FBO
+  composite pass. Procedural spiral galaxies drift in the
+  background.
 - **Rendering is WebGL2**, not Canvas2D. Four shader programs
   (fullscreen / circle / star / polyline) cover every primitive.
   The star is evaluated procedurally per pixel in the fragment

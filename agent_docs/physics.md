@@ -44,6 +44,16 @@ distance-dependent coma glow, and solar-wind-pushed wake
 particles near periapsis. Past-star comets stripped alongside
 planets.
 
+## Black holes
+
+Black holes are stars with `isBlackHole: true`. Physics is
+identical to normal stars — same GM, same collision radius, same
+capture mechanics. The only difference is visual (rendering +
+lensing, handled in `renderer.js` and `gameplay.js draw()`).
+`BH_VISUAL_SCALE` makes the event horizon appear smaller than
+the physics radius, so the gravity well extends well beyond the
+visible body — physically correct for a compact object.
+
 ## Key invariants
 
 - `SAFE_SEP` guarantees minimum star separation.
