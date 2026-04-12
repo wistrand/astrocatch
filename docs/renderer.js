@@ -190,6 +190,67 @@ void main() {
 }
 `;
 
+// Lensing composite — fullscreen pass that reads the scene FBO
+// texture and applies gravitational lensing distortion around
+// each visible black hole. Only runs on frames where at least
+// one active black hole is on screen (~5% of gameplay frames);
+// all other frames render directly to the default framebuffer
+// with zero FBO overhead.
+const LENSING_FS = `#version 300 es
+precision highp float;
+uniform sampler2D u_sceneTex;
+uniform vec2 u_resolution;  // framebuffer pixels
+uniform float u_time;
+uniform int u_bhCount;
+uniform vec4 u_bh[4];       // (fbX, fbY, fbR, 0) per black hole
+
+out vec4 outColor;
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / u_resolution;
+  vec2 distUV = uv;
+  float mask = 1.0;
+
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_bhCount) break;
+    vec2 center = u_bh[i].xy;
+    float R = u_bh[i].z;
+    float lensR = R * 8.0;
+
+    vec2 delta = gl_FragCoord.xy - center;
+    float d = length(delta);
+    vec2 dir = delta / max(d, 0.001);
+
+    // Event horizon
+    float eh = 1.0 - smoothstep(R * 0.75, R * 1.05, d);
+    mask *= (1.0 - eh);
+
+    // Lensing distortion
+    if (d > R * 0.9 && d < lensR) {
+      float t = R / d;
+      float strength = t * t * R * 3.0;
+      distUV -= dir * strength / u_resolution;
+    }
+  }
+
+  vec4 scene = texture(u_sceneTex, distUV);
+
+  // Photon ring per black hole
+  for (int i = 0; i < 4; i++) {
+    if (i >= u_bhCount) break;
+    vec2 center = u_bh[i].xy;
+    float R = u_bh[i].z;
+    float d = length(gl_FragCoord.xy - center);
+    float ring = exp(-pow((d - R * 1.4) / max(R * 0.06, 0.5), 2.0));
+    float theta = atan(gl_FragCoord.y - center.y, gl_FragCoord.x - center.x);
+    float shimmer = 0.75 + 0.25 * sin(theta * 3.0 - u_time * 2.5);
+    scene.rgb += vec3(0.95, 0.85, 0.6) * ring * shimmer * 0.9;
+  }
+
+  outColor = vec4(scene.rgb * mask, 1.0);
+}
+`;
+
 // Circle program: instanced quad, per-instance params control size,
 // kind (solid / ring / glow / dashed ring), optional parallax depth
 // for bgStars, optional twinkle. Drawn in world or screen space
@@ -370,6 +431,7 @@ void main() {
   bool isCurrent = (flags & 1) != 0;
   bool isNext    = (flags & 2) != 0;
   bool isPast    = (flags & 4) != 0;
+  bool isBlackHole = (flags & 8) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -378,6 +440,89 @@ void main() {
     float ember = (1.0 - smoothstep(0.0, 2.5, d)) * 0.45;
     float a = clamp(aura + ember, 0.0, 1.0);
     outColor = vec4(vec3(a), a);
+    return;
+  }
+
+  // Black hole — Interstellar-style rendering. Two visual layers
+  // composited over the dark event horizon:
+  //
+  //   1. Edge-on accretion disk: a thin bright horizontal band
+  //      crossing IN FRONT of the event horizon (the disk is
+  //      seen nearly edge-on from our viewing angle). The band
+  //      has a white-hot inner edge and orange outer edge.
+  //
+  //   2. Lensed back-side arcs: the far half of the disk, whose
+  //      light bends OVER and UNDER the event horizon via
+  //      gravitational lensing. Appears as bright arcs hugging
+  //      the top and bottom poles, curving outward to meet the
+  //      horizontal band at the sides. This is the feature that
+  //      makes a black hole look unmistakably like Gargantua.
+  //
+  // The lensing composite pass adds UV distortion + the thin
+  // photon ring on top of this.
+  if (isBlackHole) {
+    float aw = fwidth(d);
+    vec4 color = vec4(0.0);
+
+    // Per-black-hole disk tilt — each black hole gets a
+    // slightly different accretion-disk angle derived from
+    // its position-based seed (v_seed, range [0, 2π]).
+    // Mapped to ±20° (±0.35 rad) so every black hole looks
+    // distinct but no disk is vertical.
+    float diskTilt = (v_seed / TAU - 0.5) * 0.7
+                   + sin(u_time * 0.3 + v_seed) * 0.12;
+    float ca = cos(diskTilt);
+    float sa = sin(diskTilt);
+    vec2 rl = vec2(
+      v_local.x * ca - v_local.y * sa,
+      v_local.x * sa + v_local.y * ca
+    );
+
+    // Event horizon — opaque black disk, antialiased edge.
+    // Uses d (rotation-invariant), not the tilted coords.
+    float ehMask = 1.0 - smoothstep(v_baseR - aw, v_baseR + aw, d);
+    color = vec4(0.0, 0.0, 0.0, ehMask);
+
+    // Main disk — thin band along the tilted axis, passing
+    // in front of the event horizon. Uses rotated local (rl)
+    // so the band direction matches the tilt angle.
+    float diskHalfH = v_baseR * 0.18;
+    float bandFade = smoothstep(diskHalfH, diskHalfH * 0.1, abs(rl.y));
+    float rFade = 1.0 - clamp(d / (v_baseR * 3.5), 0.0, 1.0);
+    rFade *= rFade;
+    vec3 diskCol = mix(vec3(1.0, 0.95, 0.85), vec3(1.0, 0.4, 0.05),
+                       clamp(d / (v_baseR * 3.0), 0.0, 1.0));
+    float sideAngle = atan(rl.y, rl.x) - u_time * 0.8;
+    float sideBoost = 0.65 + 0.35 * cos(sideAngle);
+    float diskA = bandFade * rFade * sideBoost;
+
+    // Lensed back-side arcs — asymmetric in the tilted frame.
+    // "bottom" (negative rl.y) is brighter/wider, "top" is
+    // dimmer/thinner. The tilt rotation makes each black
+    // hole's bright arc point in a different direction.
+    bool isBottom = rl.y < 0.0;
+    float arcCenter = v_baseR * (isBottom ? 1.35 : 1.18);
+    float arcWidth = v_baseR * v_baseR * (isBottom ? 0.08 : 0.035);
+    float arcBright = isBottom ? 0.7 : 0.3;
+    float wrapR = abs(d - arcCenter);
+    float wrapGlow = exp(-wrapR * wrapR / arcWidth);
+    float vertBias = abs(rl.y) / max(d, 0.001);
+    float wrapA = wrapGlow * smoothstep(0.15, 0.6, vertBias) * arcBright;
+    vec3 wrapCol = isBottom
+      ? vec3(1.0, 0.75, 0.35)
+      : vec3(0.85, 0.65, 0.35);
+
+    // Composite both disk layers over the event horizon.
+    // The disk band crosses in front of the black center;
+    // the lensed arcs hug above and below it.
+    float totalA = min(1.0, diskA + wrapA);
+    if (totalA > 0.001) {
+      vec3 combined = (diskCol * diskA + wrapCol * wrapA) / totalA;
+      color.rgb = mix(color.rgb, combined, totalA);
+      color.a = max(color.a, totalA);
+    }
+
+    outColor = color;
     return;
   }
 
@@ -606,9 +751,47 @@ export function createRenderer(canvas) {
   // drivers. In WebGL2 this is implicit, so no extension call here.
 
   const fullscreenProg = compileProgram(gl, FULLSCREEN_VS, FULLSCREEN_FS, "fullscreen");
+  const lensingProg    = compileProgram(gl, FULLSCREEN_VS, LENSING_FS, "lensing");
   const circleProg     = compileProgram(gl, CIRCLE_VS, CIRCLE_FS, "circle");
   const starProg       = compileProgram(gl, STAR_VS, STAR_FS, "star");
   const polylineProg   = compileProgram(gl, POLYLINE_VS, POLYLINE_FS, "polyline");
+
+  // ── Conditional scene FBO for gravitational lensing ─────
+  // Only created and bound on frames where at least one active
+  // black hole is on screen. All other frames render directly
+  // to the default framebuffer — zero FBO overhead. When active,
+  // the scene goes to this texture and a fullscreen lensing
+  // composite pass reads it with UV distortion.
+  let sceneFbo = null;
+  let sceneTex = null;
+  let fboActive = false;
+  function ensureSceneFbo() {
+    const fbW = Math.round(viewW * viewDPR);
+    const fbH = Math.round(viewH * viewDPR);
+    if (!sceneFbo) {
+      sceneTex = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, fbW, fbH,
+                    0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      sceneFbo = gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                              gl.TEXTURE_2D, sceneTex, 0);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    }
+  }
+  function resizeSceneFbo() {
+    if (!sceneTex) return;
+    const fbW = Math.round(viewW * viewDPR);
+    const fbH = Math.round(viewH * viewDPR);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, fbW, fbH,
+                  0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  }
 
   // Unit quad in (-1, 1). Shared between the circle and star programs.
   const quadBuf = gl.createBuffer();
@@ -832,6 +1015,8 @@ export function createRenderer(canvas) {
     gl.viewport(0, 0, Math.round(W * DPR), Math.round(H * DPR));
     rebuildScreenMat();
     initBgStars(W, H);
+    ensureSceneFbo();
+    resizeSceneFbo();
   }
 
   function cameraMat(camY, zoom, focusY) {
@@ -897,12 +1082,53 @@ export function createRenderer(canvas) {
 
   // ── Draw API ──────────────────────────────────────────────
 
-  function beginFrame(timeSec) {
-    // clearColor / blend func / depth-test are persistent GL
-    // state set once in createRenderer. Here we just fire the
-    // clear and stash frame-wide scalars.
+  function beginFrame(timeSec, useFbo) {
+    // If a black hole is visible this frame, route all draws
+    // through the scene FBO so the lensing composite can read
+    // them. Otherwise render directly to the default
+    // framebuffer — zero FBO overhead on ~95% of frames.
     frameTime = timeSec;
+    fboActive = !!useFbo;
+    if (fboActive) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, sceneFbo);
+    }
     gl.clear(gl.COLOR_BUFFER_BIT);
+  }
+
+  // Fullscreen lensing composite — reads the scene FBO texture
+  // with UV distortion around each visible black hole and
+  // writes to the default framebuffer. Only called when the
+  // FBO was active (i.e. at least one BH on screen). If
+  // blackHoles is empty, this is a no-op.
+  function finalizeFrame(blackHoles) {
+    if (!fboActive) return;
+    // Switch from FBO to the default framebuffer.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+
+    const n = Math.min(blackHoles ? blackHoles.length : 0, 4);
+    gl.useProgram(lensingProg.program);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, sceneTex);
+    gl.uniform1i(lensingProg.uniforms.u_sceneTex, 0);
+    const fbW = Math.round(viewW * viewDPR);
+    const fbH = Math.round(viewH * viewDPR);
+    gl.uniform2f(lensingProg.uniforms.u_resolution, fbW, fbH);
+    gl.uniform1f(lensingProg.uniforms.u_time, frameTime);
+    gl.uniform1i(lensingProg.uniforms.u_bhCount, n);
+    if (n > 0) {
+      const data = new Float32Array(16);
+      for (let i = 0; i < n; i++) {
+        data[i * 4 + 0] = blackHoles[i].fbX;
+        data[i * 4 + 1] = blackHoles[i].fbY;
+        data[i * 4 + 2] = blackHoles[i].fbR;
+        data[i * 4 + 3] = 0;
+      }
+      gl.uniform4fv(lensingProg.uniforms["u_bh[0]"], data);
+    }
+    gl.bindVertexArray(emptyVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    fboActive = false;
   }
 
   function drawBackground(camY) {
@@ -987,9 +1213,10 @@ export function createRenderer(canvas) {
       // so every star stays out of sync with its neighbours.
       const seed = (Math.sin(s.x * 0.0137 + s.y * 0.0191) * 0.5 + 0.5) * Math.PI * 2;
       let flags = 0;
-      if (s.isCurrent) flags |= 1;
-      if (s.isNext)    flags |= 2;
-      if (s.isPast)    flags |= 4;
+      if (s.isCurrent)  flags |= 1;
+      if (s.isNext)     flags |= 2;
+      if (s.isPast)     flags |= 4;
+      if (s.isBlackHole) flags |= 8;
       starScratch[base + 0] = s.x;
       starScratch[base + 1] = s.y;
       starScratch[base + 2] = c1[0];
@@ -1085,6 +1312,7 @@ export function createRenderer(canvas) {
     drawCircleBatch,
     drawPolyline,
     drawSegments,
+    finalizeFrame,
     cameraMat,
     replayMat,
     screenMat: () => screenMat,

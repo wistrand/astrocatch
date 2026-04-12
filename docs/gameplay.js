@@ -226,8 +226,16 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // Optional comet — see assignComets. A highly eccentric
     // Kepler orbit that's purely visual + a scoring opportunity.
     comets: null,
+    // Black hole flag — same gameplay as a normal star (orbit,
+    // capture, boost) but rendered with an event horizon,
+    // accretion disk, and gravitational lensing.
+    isBlackHole: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
+    // ~5% of stars after index 10 become black holes.
+    if (starIdx >= 10 && Math.random() < 0.1) {
+      s.isBlackHole = true;
+    }
     assignPlanets(s, starIdx);
     assignComets(s, starIdx);
   }
@@ -340,6 +348,13 @@ function cometPosition(star, comet, frame) {
 
 const COMET_SCORE_RADIUS = 22; // px — close-pass threshold
 const COMET_BONUS = 2;
+
+// Black holes use the same GM as a normal star of the same r,
+// but visually the event horizon is smaller — a compact object
+// with a big gravity well. This scale applies to the rendered
+// event horizon, accretion disk, clumps, and lensing radius.
+// Physics (collision, capture, gravity) still uses the full r.
+const BH_VISUAL_SCALE = 0.5;
 
 function assignComets(s, starIdx) {
   if (starIdx < 2) return; // no comets on the first two stars
@@ -1177,7 +1192,23 @@ function drawReplayGhost() {
 function draw() {
   if (!renderer) return;
   const nowSec = performance.now() / 1000;
-  renderer.beginFrame(nowSec);
+
+  // Quick pre-scan: any active black hole near the screen?
+  // If so, route all draws through the scene FBO so the
+  // lensing composite can distort them. Otherwise render
+  // directly to the default framebuffer — zero FBO overhead.
+  let hasVisibleBH = false;
+  if (state === STATE.PLAY || state === STATE.DYING) {
+    for (let i = 0; i < stars.length; i++) {
+      const s = stars[i];
+      if (!s.isBlackHole) continue;
+      if (s.caught && !(ball && i === ball.currentStar)) continue;
+      const sY = s.y + camY;
+      if (sY > -300 && sY < H + 300) { hasVisibleBH = true; break; }
+    }
+  }
+
+  renderer.beginFrame(nowSec, hasVisibleBH);
   renderer.drawBackground(camY);
   renderer.drawBgStars();
 
@@ -1247,10 +1278,12 @@ function draw() {
     const isNext = ball && i === ball.currentStar + 1;
     const isPast = s.caught && !isCurrent;
     starBatch.push({
-      x: s.x, y: s.y, r: s.r,
+      x: s.x, y: s.y,
+      r: s.isBlackHole ? s.r * BH_VISUAL_SCALE : s.r,
       colorIdx: s.colorIdx, pulse: s.pulse,
       hasRays: s.hasRays, nGran: s.nGran,
       isCurrent, isNext, isPast,
+      isBlackHole: s.isBlackHole,
     });
   }
   if (starBatch.length) renderer.drawStarBatch(starBatch, cam);
@@ -1423,6 +1456,65 @@ function draw() {
     }
   }
 
+  // Orbiting accretion clumps + scattered field stars around
+  // each active black hole. Drawn to the FBO before the
+  // lensing composite pass, so the lensing shader warps them
+  // into visible arcs — making the gravitational distortion
+  // dramatically apparent. Inner clumps orbit faster (Kepler-
+  // ish), outer field stars are stationary landmarks.
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.isBlackHole) continue;
+    if (s.caught && !(ball && i === ball.currentStar)) continue;
+    const sY = s.y + camY;
+    if (sY < -300 || sY > H + 300) continue;
+
+    const bhBatch = [];
+
+    // Orbiting gas clumps in the accretion disk. Golden-angle
+    // spread + Kepler-speed orbiting gives a natural-looking
+    // swirl of hot debris. Radii scaled by BH_VISUAL_SCALE so
+    // the clumps orbit close to the visually smaller event
+    // horizon, not at the (larger) physics radius.
+    const vr = s.r * BH_VISUAL_SCALE;
+    for (let c = 0; c < 16; c++) {
+      const cr = vr * (1.3 + c * 0.18);
+      const speed = 0.004 / Math.sqrt(cr / vr);
+      const angle = c * 2.399 + frame * speed;
+      const size = 1.0 + (c % 3) * 0.4;
+      const bright = 0.55 + 0.25 * (1.0 - c / 16);
+      bhBatch.push({
+        x: s.x + Math.cos(angle) * cr,
+        y: s.y + Math.sin(angle) * cr,
+        outerR: size, innerR: 0,
+        r: 1.0, g: 0.82, b: 0.4,
+        a: bright, kind: 0,
+      });
+    }
+
+    // Scattered field stars — deterministic positions that act
+    // as visual reference for the lensing distortion.
+    const seedBase = s.x * 0.137 + s.y * 0.191;
+    for (let f = 0; f < 12; f++) {
+      const h = Math.sin(seedBase + f * 127.1) * 43758.5453;
+      const fAngle = (h - Math.floor(h)) * Math.PI * 2;
+      const h2 = Math.sin(seedBase + f * 311.7) * 43758.5453;
+      const fR = vr * (3.0 + (h2 - Math.floor(h2)) * 5.0);
+      const h3 = Math.sin(seedBase + f * 73.3) * 43758.5453;
+      const fSize = 0.6 + (h3 - Math.floor(h3)) * 0.9;
+      bhBatch.push({
+        x: s.x + Math.cos(fAngle) * fR,
+        y: s.y + Math.sin(fAngle) * fR,
+        outerR: fSize, innerR: 0,
+        r: 1, g: 1, b: 1,
+        a: 0.45 + (h3 - Math.floor(h3)) * 0.3,
+        kind: 0,
+      });
+    }
+
+    renderer.drawCircleBatch(bhBatch, cam);
+  }
+
   // Dashed hint ring around the next star — drawn via the circle
   // program with kind=3.
   if (ball && ball.currentStar + 1 < stars.length) {
@@ -1516,6 +1608,30 @@ function draw() {
     }
     renderer.drawCircleBatch(ballBatch, cam);
   }
+
+  // Collect on-screen black holes for the lensing composite.
+  // Transform their world positions through the camera matrix
+  // to framebuffer-pixel coords so the lensing shader knows
+  // where to distort.
+  const bhData = [];
+  const fbW = Math.round(W * DPR);
+  const fbH = Math.round(H * DPR);
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.isBlackHole) continue;
+    // Past black holes show as dim embers — no lensing.
+    if (s.caught && !(ball && i === ball.currentStar)) continue;
+    const sY = s.y + camY;
+    if (sY < -300 || sY > H + 300) continue;
+    const clipX = cam[0] * s.x + cam[1] * s.y + cam[2];
+    const clipY = cam[3] * s.x + cam[4] * s.y + cam[5];
+    bhData.push({
+      fbX: (clipX + 1) * 0.5 * fbW,
+      fbY: (clipY + 1) * 0.5 * fbH,
+      fbR: s.r * BH_VISUAL_SCALE * ZOOM * DPR,
+    });
+  }
+  renderer.finalizeFrame(bhData);
 }
 
 // ─────────────────────────────────────────────────────────────
