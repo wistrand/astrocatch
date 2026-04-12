@@ -147,6 +147,8 @@ const MUSIC_BASS = [
    98.00, // 3: G2  — G
    73.42, // 4: D2  — Dm
    82.41, // 5: E2  — E major (V of A minor, dominant pull)
+   82.41, // 6: E2  — E minor (v of A minor, natural minor)
+   58.27, // 7: Bb1 — Bb major (bII Neapolitan, dramatic color)
 ];
 // Arpeggio chord tones, one octave up. Three notes per chord,
 // cycled at 8th-note rate. Each entry must have at least 1
@@ -160,6 +162,8 @@ const MUSIC_ARP = [
   [196.00, 246.94, 293.66], // 3: G  — G3, B3, D4
   [146.83, 174.61, 220.00], // 4: Dm — D3, F3, A3
   [164.81, 207.65, 246.94], // 5: E  — E3, G#3, B3
+  [164.81, 196.00, 246.94], // 6: Em — E3, G3, B3
+  [116.54, 146.83, 174.61], // 7: Bb — Bb2, D3, F3
 ];
 // Per-chord lead scale — chord tones over two octaves, so every
 // lead note the simplex picks is guaranteed to sit on the
@@ -179,6 +183,10 @@ const MUSIC_LEAD = [
   [146.83, 174.61, 220.00, 293.66, 349.23, 440.00, 587.33],
   // 5: E  — E, G#, B
   [164.81, 207.65, 246.94, 329.63, 415.30, 493.88, 659.26],
+  // 6: Em — E, G, B
+  [164.81, 196.00, 246.94, 329.63, 392.00, 493.88, 659.26],
+  // 7: Bb — Bb, D, F
+  [116.54, 146.83, 174.61, 233.08, 293.66, 349.23, 466.16],
 ];
 
 // Intensity-tiered chord progressions. Each tier is a 4-bar
@@ -193,10 +201,19 @@ const MUSIC_LEAD = [
 //                                  harmonic tension wanting to
 //                                  resolve back to Am on the
 //                                  next section's downbeat.
+// Two progressions per tier, alternated each 4-bar section.
+// The wider harmonic pool (8 chords, 6 progressions) means the
+// music doesn't repeat the same 4-bar sequence back-to-back.
 const MUSIC_PROGRESSIONS = [
-  [0, 1, 2, 3], // calm
-  [4, 0, 1, 2], // medium
-  [0, 3, 1, 5], // intense
+  // Tier 0 (calm) — gentle minor descents
+  [0, 1, 2, 3],    // 0A: Am F C G
+  [0, 6, 1, 3],    // 0B: Am Em F G
+  // Tier 1 (medium) — minor-tinted with more movement
+  [4, 0, 1, 2],    // 1A: Dm Am F C
+  [0, 1, 4, 6],    // 1B: Am F Dm Em
+  // Tier 2 (intense) — dominant pull + Neapolitan tension
+  [0, 3, 1, 5],    // 2A: Am G F E
+  [0, 7, 4, 5],    // 2B: Am Bb Dm E (Neapolitan Bb for drama)
 ];
 // Thresholds at which the tier index bumps up. Read as:
 // intensity < 0.20 → tier 0, < 0.45 → tier 1, else tier 2.
@@ -295,6 +312,14 @@ export function createAudio() {
   let currentIntensity = 0;
   let currentTier = 0;
   let activeProgression = MUSIC_PROGRESSIONS[0];
+  let sectionCount = 0;
+  // Streak-driven tempo. Base is MUSIC_BPM; each streak level
+  // adds a small BPM bump, capped so the music doesn't become
+  // frantic. Updated at section boundaries so tempo never
+  // shifts mid-bar.
+  const MUSIC_BPM_MAX = 125;
+  let currentStreak = 0;
+  let currentStepSec = MUSIC_STEP_SEC;
   // Which lead-rhythm pattern is active for the current bar.
   // Re-picked from MUSIC_LEAD_PATTERNS at each bar downbeat via
   // a simplex sample, so the rhythmic shape of the melody
@@ -858,7 +883,14 @@ export function createAudio() {
       if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[1]) tier = 2;
       else if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[0]) tier = 1;
       currentTier = tier;
-      activeProgression = MUSIC_PROGRESSIONS[tier];
+      activeProgression = MUSIC_PROGRESSIONS[tier * 2 + (sectionCount & 1)];
+      sectionCount++;
+      // Streak-driven tempo ramp. Each streak level adds 4 BPM
+      // up to the cap. Resets to base when streak is 0 (broken
+      // or fresh run). Only changes at section boundaries so
+      // the tempo transition is musically clean.
+      const streakBPM = Math.min(MUSIC_BPM + currentStreak * 4, MUSIC_BPM_MAX);
+      currentStepSec = 60 / streakBPM / 4;
     }
 
     const chordIdx = activeProgression[bar];
@@ -952,6 +984,10 @@ export function createAudio() {
     currentIntensity = v < 0 ? 0 : (v > 1 ? 1 : v);
   }
 
+  function setStreak(n) {
+    currentStreak = typeof n === "number" ? Math.max(0, n) : 0;
+  }
+
   function scheduler() {
     schedulerTimerId = null;
     if (!schedulerRunning) return;
@@ -972,7 +1008,7 @@ export function createAudio() {
     // are the click source; this keeps us out of that state.
     const safeFloor = c.currentTime + MUSIC_SAFETY_MARGIN;
     while (nextStepTime < safeFloor) {
-      nextStepTime += MUSIC_STEP_SEC;
+      nextStepTime += currentStepSec;
       currentStep = (currentStep + 1) % MUSIC_TOTAL_STEPS;
     }
 
@@ -992,14 +1028,14 @@ export function createAudio() {
         : c.currentTime + 0.01;
       scheduleStep(currentStep, commitTime);
       currentStep = (currentStep + 1) % MUSIC_TOTAL_STEPS;
-      nextStepTime += MUSIC_STEP_SEC;
+      nextStepTime += currentStepSec;
       count++;
     }
     if (count >= MUSIC_MAX_STEPS_PER_TICK) {
       // Belt-and-braces: if the resync loop above didn't catch
       // every drop (e.g. extreme throttling), shed any leftover
       // accumulation rather than emit a note avalanche.
-      nextStepTime = c.currentTime + MUSIC_STEP_SEC;
+      nextStepTime = c.currentTime + currentStepSec;
     }
     schedulerTimerId = setTimeout(scheduler, MUSIC_SCHEDULE_INTERVAL);
   }
@@ -1047,7 +1083,7 @@ export function createAudio() {
 
   return {
     boost, capture, death, comet,
-    startMusic, stopMusic, setIntensity,
+    startMusic, stopMusic, setIntensity, setStreak,
     setMuted, isMuted,
   };
 }

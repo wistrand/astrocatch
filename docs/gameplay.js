@@ -700,6 +700,7 @@ function captureStar(idx) {
   ball.framesInOrbit = 0;
   ball.pendingBonus = 1;
   audio.capture(bonus, fastStreak);
+  audio.setStreak(fastStreak);
   updateScoreUI(true, bonus, fastStreak);
 
   // Visuals. Colors go into particle / shockwave storage as RGB
@@ -857,6 +858,7 @@ function die() {
   // stitches across runs without a chord jump or seam.
   // Any live fast-launch streak ends with the run.
   fastStreak = 0;
+  audio.setStreak(0);
   updateSub();
   // Death burst — magenta (#fa6db0).
   const dR = 0xfa / 255, dG = 0x6d / 255, dB = 0xb0 / 255;
