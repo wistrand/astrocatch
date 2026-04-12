@@ -1802,6 +1802,19 @@ document.addEventListener("keydown", (e) => {
     syncMuteBtn();
     return;
   }
+  // Arrow keys nudge orbital velocity while in orbit.
+  // Unclamped — extreme nudging can make the orbit eccentric
+  // enough to crash (fine) or escape / cross into another
+  // star's Voronoi zone (triggers normal death). Could cap at
+  // ~1.25× / 0.75× v_circ if this becomes a problem.
+  if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+    if (state !== STATE.PLAY || !ball || ball.pendingCapture >= 0) return;
+    e.preventDefault();
+    const scale = e.key === "ArrowLeft" ? 0.98 : 1.02;
+    ball.vx *= scale;
+    ball.vy *= scale;
+    return;
+  }
   if (e.code !== "Space" && e.key !== " ") return;
   if (e.repeat) return;
   e.preventDefault();
