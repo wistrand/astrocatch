@@ -343,7 +343,7 @@ const COMET_BONUS = 2;
 
 function assignComets(s, starIdx) {
   if (starIdx < 2) return; // no comets on the first two stars
-  if (Math.random() > 0.95) return;
+  if (Math.random() > 0.25) return;
 
   // Scan 8 directions to find the one with the most room — the
   // deepest gap between neighboring stars. That's where the
@@ -399,6 +399,10 @@ function assignComets(s, starIdx) {
     phase: Math.random() * Math.PI * 2,
     radius: 2 + Math.random() * 2,
     tailLength: 25 + Math.random() * 25,
+    // 1–3 syndynes (dust-size populations) per comet. More
+    // syndynes = wider, richer fan-shaped tail. Fewer = a
+    // thinner, simpler streak.
+    numSyndynes: 1 + Math.floor(Math.random() * 3),
     scored: false,
   }];
 }
@@ -1319,28 +1323,56 @@ function draw() {
       const apoDist = comet.a * (1 + comet.e);
       const activity = Math.max(0, 1 - (pos.r - periDist) / (apoDist - periDist));
 
-      // Particle trail — past orbital positions pushed by
-      // solar-wind radiation pressure. Colored by parent star.
+      // Multi-syndyne dust tail — three layers at different
+      // radiation-pressure strengths (β values), creating a
+      // fan-shaped tail. Real dust tails are a continuous fan
+      // of syndynes (one per particle size); three discrete
+      // layers approximate the visual width:
+      //   narrow (low β, large dust)  → close to orbital path
+      //   medium (mid β)              → the main visible tail
+      //   wide   (high β, fine dust)  → faint outer fan
+      // Past orbital positions are computed once and reused
+      // across all three layers.
       const TRAIL_N = 20;
       const TRAIL_STEP = 6;
-      const WIND_STRENGTH = 3.0;
+      const BASE_WIND = 3.0;
+      const ALL_SYNDYNES = [
+        { wm: 0.4, al: 0.3 },   // narrow — large particles
+        { wm: 1.0, al: 0.5 },   // middle — main tail
+        { wm: 1.8, al: 0.22 },  // wide — fine dust
+      ];
+      // Each comet has 1–3 syndynes (set at creation). 1 = thin
+      // streak, 2 = main + one wing, 3 = full fan.
+      const nSyn = Math.min(comet.numSyndynes || 1, ALL_SYNDYNES.length);
+      const SYNDYNES = nSyn === 1
+        ? [ALL_SYNDYNES[1]]                           // just the main
+        : nSyn === 2
+          ? [ALL_SYNDYNES[0], ALL_SYNDYNES[1]]        // narrow + main
+          : ALL_SYNDYNES;                              // full fan
+      const pastPos = [];
       for (let t = TRAIL_N - 1; t >= 1; t--) {
         const pp = cometPosition(s, comet, frame - t * TRAIL_STEP);
         const wdx = pp.x - s.x;
         const wdy = pp.y - s.y;
         const wd = Math.hypot(wdx, wdy) || 1;
-        const blow = t * WIND_STRENGTH;
-        const bx = pp.x + (wdx / wd) * blow;
-        const by = pp.y + (wdy / wd) * blow;
-        const fade = 1 - t / TRAIL_N;
-        const pr = comet.radius * (0.4 + 0.6 * fade);
-        cometBatch.push({
-          x: bx, y: by,
-          outerR: pr * 2.8, innerR: 0,
-          r: sc[0] * fade, g: sc[1] * fade, b: sc[2] * fade,
-          a: fade * 0.55,
-          kind: 2,
-        });
+        pastPos.push({ t, px: pp.x, py: pp.y, nx: wdx / wd, ny: wdy / wd });
+      }
+      for (let syn = 0; syn < SYNDYNES.length; syn++) {
+        const wind = BASE_WIND * SYNDYNES[syn].wm;
+        const synAlpha = SYNDYNES[syn].al;
+        for (let k = 0; k < pastPos.length; k++) {
+          const { t, px, py, nx, ny } = pastPos[k];
+          const fade = 1 - t / TRAIL_N;
+          const pr = comet.radius * (0.4 + 0.6 * fade);
+          cometBatch.push({
+            x: px + nx * t * wind,
+            y: py + ny * t * wind,
+            outerR: pr * 2.8, innerR: 0,
+            r: sc[0] * fade, g: sc[1] * fade, b: sc[2] * fade,
+            a: fade * synAlpha,
+            kind: 2,
+          });
+        }
       }
 
       // Coma glow — grows near periapsis as the comet
