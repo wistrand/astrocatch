@@ -26,8 +26,12 @@ pulls you in and you orbit that one too.
   Quick or Blazing captures build a streak that multiplies the
   bonus on each capture — starts at ×1, grows half a step per
   chain link, caps at ×4. A slow capture (or dying) breaks it.
-- **Watch your replay.** The game records every frame and plays
-  the run back behind the AGAIN button.
+- **Dodge planets, catch comets.** Some stars have orbiting
+  planets that gently tug on your trajectory. Comets sweep
+  through on highly eccentric orbits — fly close to one for
+  bonus points.
+- **Watch your replay.** A cinematic follow-camera plays back
+  your run with simplex-driven zoom behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right
   corner, or press **M**. Both the sound effects and the
   ambient music loop are generated on the fly from oscillators
@@ -92,6 +96,13 @@ before it reaches a player.
   integrator, same sub-stepping, same nearest-star rule. The
   predicted periapsis frame is the same frame the live ball
   reaches its closest approach.
+- **Planets perturb, comets don't.** Some stars have 1–2
+  orbiting planets that exert weak gravity (~1.5% of the
+  star's mass) on the ship, gently bending its orbit on close
+  passes. Comets follow analytically-solved Kepler orbits with
+  high eccentricity, multi-syndyne dust tails, and a
+  distance-dependent coma — but they're purely visual + a
+  scoring opportunity, with no physics coupling to the ship.
 - **Rendering is WebGL2**, not Canvas2D. Four shader programs
   (fullscreen / circle / star / polyline) cover every primitive.
   The star is evaluated procedurally per pixel in the fragment
