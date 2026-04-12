@@ -78,7 +78,8 @@
     safe-area-inset-bottom so the home indicator on iOS doesn't
     eat into the tap target. */
   #mute-btn,
-  #reload-btn {
+  #reload-btn,
+  #fullscreen-btn {
     position: absolute;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
     width: 40px;
@@ -99,25 +100,32 @@
     letter-spacing: 0;
   }
   #mute-btn:hover,
-  #reload-btn:hover {
+  #reload-btn:hover,
+  #fullscreen-btn:hover {
     color: rgba(255, 255, 255, 0.95);
   }
   #mute-btn:active,
-  #reload-btn:active {
+  #reload-btn:active,
+  #fullscreen-btn:active {
     transform: scale(0.92);
   }
   #mute-btn svg,
-  #reload-btn svg {
+  #reload-btn svg,
+  #fullscreen-btn svg {
     width: 24px;
     height: 24px;
     display: block;
     margin: 8px auto;
   }
   #mute-btn { right: 16px; }
+  #fullscreen-btn { right: 64px; }
   #reload-btn { left: 16px; }
   #mute-btn .icon-off { display: none; }
   #mute-btn.muted .icon-on { display: none; }
   #mute-btn.muted .icon-off { display: inline; }
+  #fullscreen-btn .icon-exit { display: none; }
+  #fullscreen-btn.is-fullscreen .icon-enter { display: none; }
+  #fullscreen-btn.is-fullscreen .icon-exit { display: inline; }
 
   #score-display {
     position: absolute;
@@ -315,6 +323,14 @@
     <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
       <!-- Circular arrow / refresh icon -->
       <path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+    </svg>
+  </button>
+  <button id="fullscreen-btn" aria-label="toggle fullscreen">
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <!-- Enter fullscreen: four corner brackets pointing outward -->
+      <path class="icon-enter" fill="currentColor" d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/>
+      <!-- Exit fullscreen: four corner brackets pointing inward -->
+      <path class="icon-exit" fill="currentColor" d="M5 16h3v3h2v-5H5v2zm3-8H5v2h5V5H8v3zm6 11h2v-3h3v-2h-5v5zm2-11V5h-2v5h5V8h-3z"/>
     </svg>
   </button>
   <button id="mute-btn" aria-label="toggle sound">

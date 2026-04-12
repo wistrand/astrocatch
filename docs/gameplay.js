@@ -76,6 +76,33 @@ if (reloadBtn) {
   });
 }
 
+// Fullscreen toggle. Uses the standard Fullscreen API on the
+// document root. Browsers that don't support it (older iOS Safari
+// quirks) silently no-op. Icon swaps via CSS class on the button.
+const fullscreenBtn = document.getElementById("fullscreen-btn");
+function syncFullscreenBtn() {
+  if (!fullscreenBtn) return;
+  if (document.fullscreenElement) fullscreenBtn.classList.add("is-fullscreen");
+  else fullscreenBtn.classList.remove("is-fullscreen");
+}
+if (fullscreenBtn) {
+  fullscreenBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (document.fullscreenElement) {
+      document.exitFullscreen?.();
+    } else {
+      document.documentElement.requestFullscreen?.();
+    }
+  });
+  document.addEventListener("fullscreenchange", syncFullscreenBtn);
+  // Hide the button on iOS Safari, which doesn't support the
+  // standard Fullscreen API on document elements.
+  if (!document.documentElement.requestFullscreen) {
+    fullscreenBtn.style.display = "none";
+  }
+}
+
 // Physics constants are imported from physics.js via AC.
 const CAPTURE_MULT = AC.CAPTURE_MULT;
 const CRASH_MULT = AC.CRASH_MULT;
