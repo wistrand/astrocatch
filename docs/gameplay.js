@@ -223,9 +223,13 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // starIdx < 0 signals "decorative star, never has planets"
     // (used for the welcome-screen menu stars).
     planets: null,
+    // Optional comet — see assignComets. A highly eccentric
+    // Kepler orbit that's purely visual + a scoring opportunity.
+    comets: null,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     assignPlanets(s, starIdx);
+    assignComets(s, starIdx);
   }
   return s;
 }
@@ -283,6 +287,115 @@ function assignPlanets(s, starIdx) {
     });
   }
   s.planets = planets;
+}
+
+// ─── Comets ──────────────────────────────────────────────
+// ~90% of stars (from index 5+) get a comet — a small body
+// on a highly eccentric Kepler orbit around its parent star.
+// Comets do NOT affect ship physics at all; they're purely
+// visual + a scoring opportunity. The orbit direction is
+// chosen by scanning 8 directions to find the biggest gap
+// between neighboring stars, so the comet's apoapsis always
+// extends into free space rather than toward another star.
+
+// Kepler equation solver: given mean anomaly M and eccentricity
+// e, returns eccentric anomaly E via Newton's method. Converges
+// in 5-6 iterations for e < 0.93. Called once per visible comet
+// per render frame — negligible cost.
+function solveKepler(M, e) {
+  let E = M;
+  for (let i = 0; i < 6; i++) {
+    E += (M - E + e * Math.sin(E)) / (1 - e * Math.cos(E));
+  }
+  return E;
+}
+
+// Compute a comet's world position from its orbital elements
+// and the current physics frame. Pure function — no stored
+// state, same answer at the same frame.
+function cometPosition(star, comet, frame) {
+  const M = (frame * comet.meanMotion + comet.phase) % (Math.PI * 2);
+  const E = solveKepler(M, comet.e);
+  const cosE = Math.cos(E);
+  const r = comet.a * (1 - comet.e * cosE);
+  const sqrtFac = Math.sqrt((1 + comet.e) / (1 - comet.e));
+  const theta = 2 * Math.atan2(
+    sqrtFac * Math.sin(E / 2),
+    Math.cos(E / 2)
+  );
+  const xOrb = r * Math.cos(theta);
+  const yOrb = r * Math.sin(theta);
+  const cw = Math.cos(comet.omega);
+  const sw = Math.sin(comet.omega);
+  return {
+    x: star.x + xOrb * cw - yOrb * sw,
+    y: star.y + xOrb * sw + yOrb * cw,
+  };
+}
+
+const COMET_SCORE_RADIUS = 22; // px — close-pass threshold
+const COMET_BONUS = 2;
+
+function assignComets(s, starIdx) {
+  if (starIdx < 5) return; // no comets in the first few stars
+  if (Math.random() > 0.25) return;
+
+  // Scan 8 directions to find the one with the most room — the
+  // deepest gap between neighboring stars. That's where the
+  // comet's apoapsis will extend. A 60° half-cone per sample
+  // gives overlapping coverage of the full circle.
+  const NUM_DIRS = 8;
+  const CONE_HALF = Math.PI / 3;
+  let bestAngle = 0;
+  let bestClearance = 0;
+  for (let d = 0; d < NUM_DIRS; d++) {
+    const angle = d * Math.PI * 2 / NUM_DIRS;
+    const ax = Math.cos(angle);
+    const ay = Math.sin(angle);
+    let minInCone = 9999;
+    for (let k = 0; k < stars.length; k++) {
+      const dx = stars[k].x - s.x;
+      const dy = stars[k].y - s.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < 1) continue;
+      const dot = (dx * ax + dy * ay) / dist;
+      if (dot > Math.cos(CONE_HALF) && dist < minInCone) {
+        minInCone = dist;
+      }
+    }
+    if (minInCone > bestClearance) {
+      bestClearance = minInCone;
+      bestAngle = angle;
+    }
+  }
+
+  // Apoapsis extends into the best direction, capped at 45% of
+  // the clearance (or 600 px hard cap). Periapsis just outside
+  // the star's visual disk. Require apo:peri > 2.5 for a
+  // properly eccentric orbit — if no direction has enough room,
+  // skip the comet rather than drawing a near-circular one.
+  const maxApo = Math.min(bestClearance * 0.45, 600);
+  const peri = s.r * (1.05 + Math.random() * 0.2);
+  if (maxApo < peri * 2.5) return; // not eccentric enough
+
+  const a = (maxApo + peri) / 2;
+  const e = (maxApo - peri) / (maxApo + peri);
+
+  // omega: apoapsis at bestAngle → omega = bestAngle - π,
+  // plus a small random spread.
+  const omega = bestAngle - Math.PI + (Math.random() - 0.5) * 0.3;
+  // Period via Kepler's third law in physics-frame units.
+  const T = Math.PI * 2 * Math.sqrt(a * a * a / s.gm);
+  s.comets = [{
+    a,
+    e,
+    omega,
+    meanMotion: (Math.PI * 2) / T,
+    phase: Math.random() * Math.PI * 2,
+    radius: 2 + Math.random() * 2,
+    tailLength: 25 + Math.random() * 25,
+    scored: false,
+  }];
 }
 
 // Minimum allowed distance between two stars of radii ra, rb.
@@ -535,6 +648,7 @@ function captureStar(idx) {
   const leavingIdx = ball.currentStar;
   if (leavingIdx !== idx && stars[leavingIdx]) {
     stars[leavingIdx].planets = null;
+    stars[leavingIdx].comets = null;
   }
 
   s.caught = true;
@@ -628,6 +742,29 @@ function showBonusFlash(bonus, streak) {
     el.style.opacity = "0";
     el.style.transform = "translateY(-30px) scale(1)";
   }, 450);
+}
+
+function showCometFlash() {
+  let el = document.getElementById("bonus-flash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "bonus-flash";
+    el.style.cssText =
+      "position:absolute;top:140px;left:0;right:0;text-align:center;" +
+      "font-size:22px;font-weight:700;letter-spacing:3px;text-transform:uppercase;" +
+      "pointer-events:none;opacity:0;transition:opacity .25s,transform .6s;" +
+      "text-shadow:0 0 26px rgba(255,170,60,.72)";
+    document.getElementById("ui").appendChild(el);
+  }
+  el.textContent = "COMET +" + COMET_BONUS;
+  el.style.color = "#58e0fb";
+  el.style.opacity = "1";
+  el.style.transform = "translateY(0) scale(1.1)";
+  void el.offsetWidth;
+  setTimeout(() => {
+    el.style.opacity = "0";
+    el.style.transform = "translateY(-30px) scale(1)";
+  }, 350);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -861,6 +998,56 @@ function renderTick() {
   const decayed = trackedSpeed * SPEED_DECAY;
   trackedSpeed = normalized > decayed ? normalized : decayed;
   audio.setIntensity(trackedSpeed);
+
+  // Comet close-pass scoring. Check distance from ball to
+  // each active comet on the current + next star. If within
+  // COMET_SCORE_RADIUS, award COMET_BONUS points and mark the
+  // comet so it doesn't re-award. The comet position uses the
+  // same ball.frame as the draw loop so visual and scoring
+  // agree on where the comet is.
+  if (state === STATE.PLAY) {
+    const fr = ball.frame || 0;
+    const checkRange = Math.min(stars.length, ball.currentStar + 3);
+    for (let i = ball.currentStar; i < checkRange; i++) {
+      const s = stars[i];
+      if (!s.comets) continue;
+      for (let j = 0; j < s.comets.length; j++) {
+        const comet = s.comets[j];
+        if (comet.scored) continue;
+        const cp = cometPosition(s, comet, fr);
+        const cdx = ball.x - cp.x;
+        const cdy = ball.y - cp.y;
+        if (cdx * cdx + cdy * cdy < COMET_SCORE_RADIUS * COMET_SCORE_RADIUS) {
+          // Score + HUD flash.
+          score += COMET_BONUS;
+          updateScoreUI(true, 0, 0);
+          showCometFlash();
+          audio.comet();
+          // Sparkle burst at the comet's position — small
+          // bright particles in the star's color, radiating
+          // outward. Lighter and smaller than capture particles
+          // to feel "celestial" rather than "explosive".
+          const cc = c1Of(s.colorIdx);
+          for (let p = 0; p < 14; p++) {
+            const pa = Math.random() * Math.PI * 2;
+            const psp = 1 + Math.random() * 3;
+            particles.push({
+              x: cp.x, y: cp.y,
+              vx: Math.cos(pa) * psp, vy: Math.sin(pa) * psp,
+              life: 1, decay: 0.03 + Math.random() * 0.03,
+              r: cc[0], g: cc[1], b: cc[2],
+              size: 1.5 + Math.random() * 2,
+            });
+          }
+          // Remove the comet from the star entirely — it's
+          // been "collected". Break the inner loop since
+          // s.comets is now null.
+          s.comets = null;
+          break;
+        }
+      }
+    }
+  }
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1101,6 +1288,69 @@ function draw() {
     }
   }
   if (planetBatch.length) renderer.drawCircleBatch(planetBatch, cam);
+
+  // Comets — eccentric Kepler orbits with a fading particle
+  // trail. Each trail particle is a past orbital position
+  // computed by solving the Kepler equation at (frame - t*step),
+  // so the trail naturally follows the comet's curved path and
+  // stretches at periapsis (fast) / compresses at apoapsis
+  // (slow), matching real dust-tail behavior. 20 samples at 6
+  // physics-frame intervals ≈ 1 second of trail. Rendered as
+  // glow circles that shrink and fade, batched into a single
+  // drawCircleBatch call per comet.
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    if (!s.comets) continue;
+    const sY = s.y + camY;
+    if (sY < -400 || sY > H + 400) continue;
+    const sc = c1Of(s.colorIdx);
+    for (let j = 0; j < s.comets.length; j++) {
+      const comet = s.comets[j];
+      const pos = cometPosition(s, comet, frame);
+      const cometBatch = [];
+      // Particle trail — each particle starts at a past orbital
+      // position, then gets pushed radially outward from the
+      // star proportional to its age, simulating solar-wind
+      // radiation pressure. The combination of curved orbital
+      // past + radial blow gives the classic bent dust-tail
+      // shape: tight near the head, fanning outward at the end.
+      // Oldest particles drawn first so brighter ones layer on
+      // top. Colored by the parent star's palette.
+      const TRAIL_N = 20;
+      const TRAIL_STEP = 6;
+      const WIND_STRENGTH = 3.0; // px per sample of radial push
+      for (let t = TRAIL_N - 1; t >= 1; t--) {
+        const pp = cometPosition(s, comet, frame - t * TRAIL_STEP);
+        const wdx = pp.x - s.x;
+        const wdy = pp.y - s.y;
+        const wd = Math.hypot(wdx, wdy) || 1;
+        const blow = t * WIND_STRENGTH;
+        const bx = pp.x + (wdx / wd) * blow;
+        const by = pp.y + (wdy / wd) * blow;
+        const fade = 1 - t / TRAIL_N;
+        const pr = comet.radius * (0.4 + 0.6 * fade);
+        cometBatch.push({
+          x: bx, y: by,
+          outerR: pr * 2.8, innerR: 0,
+          r: sc[0] * fade, g: sc[1] * fade, b: sc[2] * fade,
+          a: fade * 0.35,
+          kind: 2,
+        });
+      }
+      // Bright core — star color with a white center.
+      cometBatch.push({
+        x: pos.x, y: pos.y,
+        outerR: comet.radius * 3, innerR: 0,
+        r: sc[0], g: sc[1], b: sc[2], a: 0.55, kind: 2,
+      });
+      cometBatch.push({
+        x: pos.x, y: pos.y,
+        outerR: comet.radius, innerR: 0,
+        r: 1, g: 1, b: 1, a: 1, kind: 0,
+      });
+      renderer.drawCircleBatch(cometBatch, cam);
+    }
+  }
 
   // Dashed hint ring around the next star — drawn via the circle
   // program with kind=3.

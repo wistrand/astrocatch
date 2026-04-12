@@ -537,6 +537,45 @@ export function createAudio() {
     }
   }
 
+  // ── comet: quick ascending sparkle. Three high sine notes
+  // in rapid succession — a bright "ting-ting-ting" that reads
+  // as "collected something shiny". E6 → G#6 → C7 traces a
+  // major triad upward for a resolved, positive feel.
+  function comet() {
+    const c = ensure();
+    if (!c || muted) return;
+    const t = c.currentTime;
+    const notes = [1318.51, 1661.22, 2093.00]; // E6, G#6, C7
+    for (let i = 0; i < notes.length; i++) {
+      const start = t + i * 0.055;
+      const osc = c.createOscillator();
+      osc.type = "sine";
+      osc.frequency.setValueAtTime(notes[i], start);
+      // Slight inharmonic overtone for bell shimmer.
+      const osc2 = c.createOscillator();
+      osc2.type = "sine";
+      osc2.frequency.setValueAtTime(notes[i] * 2.01, start);
+      const g = c.createGain();
+      g.gain.value = 0;
+      g.gain.setValueAtTime(0, start);
+      g.gain.linearRampToValueAtTime(0.28, start + 0.005);
+      g.gain.linearRampToValueAtTime(0, start + 0.25);
+      g.gain.setValueAtTime(0, start + 0.26);
+      const g2 = c.createGain();
+      g2.gain.value = 0;
+      g2.gain.setValueAtTime(0, start);
+      g2.gain.linearRampToValueAtTime(0.08, start + 0.005);
+      g2.gain.linearRampToValueAtTime(0, start + 0.18);
+      g2.gain.setValueAtTime(0, start + 0.19);
+      osc.connect(g).connect(master);
+      osc2.connect(g2).connect(master);
+      osc.start(start);
+      osc.stop(start + 0.3);
+      osc2.start(start);
+      osc2.stop(start + 0.22);
+    }
+  }
+
   // ── death: falling three-note minor descent through a
   // closing lowpass. Notes are A3, F3, D3 — a descending A minor
   // partial — so the fall has a clear melodic shape rather than
@@ -971,7 +1010,7 @@ export function createAudio() {
   }
 
   return {
-    boost, capture, death,
+    boost, capture, death, comet,
     startMusic, stopMusic, setIntensity,
     setMuted, isMuted,
   };
