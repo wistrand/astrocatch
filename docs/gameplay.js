@@ -343,7 +343,7 @@ const COMET_BONUS = 2;
 
 function assignComets(s, starIdx) {
   if (starIdx < 2) return; // no comets on the first two stars
-  if (Math.random() > 0.25) return;
+  if (Math.random() > 0.35) return;
 
   // Scan 8 directions to find the one with the most room — the
   // deepest gap between neighboring stars. That's where the
