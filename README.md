@@ -1,6 +1,6 @@
 # ASTROCATCH
 
-**[Play it in your browser →](https://wistrand.github.io/astrocatch/)**
+**[Play it in your browser →](https://astrocatch.live/)**
 
 <img src="docs/image.png" width="250" alt="ASTROCATCH gameplay screenshot — the ball tracing a magenta trail from a pink star toward a green star with a dashed capture ring">
 
