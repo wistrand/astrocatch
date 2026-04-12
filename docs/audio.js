@@ -233,6 +233,27 @@ const MUSIC_LEAD_PATTERN_RANGES = [
   [4, 8], // tier 2: patterns 4-7
 ];
 
+// Bass rhythm pattern bank — same idea as the lead bank. Each
+// entry is a list of step positions in a bar where the bass
+// fires. Calm tiers use sparser patterns, intense tiers use
+// busier ones. On non-downbeat hits, the bass occasionally
+// plays the fifth of the chord instead of the root (see
+// scheduleStep) for melodic movement.
+const MUSIC_BASS_PATTERNS = [
+  [0],              // 0: just the downbeat
+  [0, 8],           // 1: half notes
+  [0, 4, 12],       // 2: skip beat 3
+  [0, 4, 8, 12],    // 3: quarter notes (the old default)
+  [0, 6, 12],       // 4: dotted-quarter syncopation
+  [0, 4, 10, 14],   // 5: busy syncopated
+  [0, 4, 6, 12],    // 6: with a ghost-note
+];
+const MUSIC_BASS_PATTERN_RANGES = [
+  [0, 3], // tier 0: patterns 0-2 (sparse)
+  [1, 5], // tier 1: patterns 1-4
+  [3, 7], // tier 2: patterns 3-6 (busy)
+];
+
 export function createAudio() {
   // Sanity check: every chord index referenced by the
   // progressions must exist in all three parallel tables.
@@ -279,6 +300,7 @@ export function createAudio() {
   // a simplex sample, so the rhythmic shape of the melody
   // varies across bars even within a single tier.
   let currentLeadPattern = MUSIC_LEAD_PATTERNS[1];
+  let currentBassPattern = MUSIC_BASS_PATTERNS[3];
   try {
     muted = localStorage.getItem(STORAGE_KEY) === "1";
   } catch (_) {
@@ -851,26 +873,40 @@ export function createAudio() {
       musicStab(MUSIC_ARP[chordIdx], time);
       // Pad — sustained chord held for the full bar underneath.
       musicPad(MUSIC_ARP[chordIdx], time, MUSIC_STEPS_PER_BAR * MUSIC_STEP_SEC);
-      // Pick a lead rhythm pattern for this bar. Bar-scale
-      // simplex sampled at `time * 0.9` moves fast enough that
-      // consecutive bars usually land on different patterns,
-      // but slow enough that it's not thrashing.
-      // Tier windows restrict which slice of the bank is
-      // eligible, so the rhythmic character tracks intensity.
-      const range = MUSIC_LEAD_PATTERN_RANGES[currentTier];
-      const lo = range[0];
-      const hi = range[1];
-      const rNoise = simplex2(time * 0.9, 7.3);
-      const rT = (rNoise + 1) * 0.5;
-      let rIdx = lo + Math.floor(rT * (hi - lo));
-      if (rIdx >= hi) rIdx = hi - 1;
-      if (rIdx < lo) rIdx = lo;
-      currentLeadPattern = MUSIC_LEAD_PATTERNS[rIdx];
+      // Pick lead + bass rhythm patterns for this bar.
+      // Sampled at different simplex Y coordinates so lead and
+      // bass don't pick patterns in lockstep.
+      function pickPattern(bank, ranges, noiseY) {
+        const range = ranges[currentTier];
+        const lo = range[0];
+        const hi = range[1];
+        const rNoise = simplex2(time * 0.9, noiseY);
+        const rT = (rNoise + 1) * 0.5;
+        let rIdx = lo + Math.floor(rT * (hi - lo));
+        if (rIdx >= hi) rIdx = hi - 1;
+        if (rIdx < lo) rIdx = lo;
+        return bank[rIdx];
+      }
+      currentLeadPattern = pickPattern(MUSIC_LEAD_PATTERNS, MUSIC_LEAD_PATTERN_RANGES, 7.3);
+      currentBassPattern = pickPattern(MUSIC_BASS_PATTERNS, MUSIC_BASS_PATTERN_RANGES, 13.1);
     }
 
-    // Bass — quarter notes on the chord root.
-    if (stepInBar % 4 === 0) {
-      musicBass(MUSIC_BASS[chordIdx], time);
+    // Bass — rhythm from the per-bar pattern, with occasional
+    // fifths on non-downbeat hits for melodic movement.
+    {
+      let bassFires = false;
+      for (let bp = 0; bp < currentBassPattern.length; bp++) {
+        if (currentBassPattern[bp] === stepInBar) { bassFires = true; break; }
+      }
+      if (bassFires) {
+        let freq = MUSIC_BASS[chordIdx];
+        // On non-downbeat notes, ~30% chance of playing the
+        // fifth above the root for a walking-bass feel.
+        if (stepInBar !== 0 && simplex2(time * 1.7, 22.0) > 0.4) {
+          freq *= 1.5; // perfect fifth up
+        }
+        musicBass(freq, time);
+      }
     }
 
     // Arpeggio — 8th notes cycling through the chord tones.
