@@ -759,6 +759,7 @@ export function createAudio() {
     osc.stop(time + dur + 0.03);
     sub.start(time);
     sub.stop(time + dur + 0.03);
+    osc.onended = () => { osc.disconnect(); sub.disconnect(); subGain.disconnect(); filter.disconnect(); g.disconnect(); };
   }
 
   // Sustained chord pad for the full bar. Three detuned-sine
@@ -799,6 +800,7 @@ export function createAudio() {
         osc.connect(g);
         osc.start(time);
         osc.stop(time + dur + 0.03);
+        osc.onended = () => { osc.disconnect(); g.disconnect(); };
       }
     }
   }
@@ -838,7 +840,11 @@ export function createAudio() {
       osc.connect(filter);
       osc.start(time);
       osc.stop(time + dur + 0.03);
+      osc.onended = () => { osc.disconnect(); };
     }
+    // Last osc cleans up shared filter+gain chain.
+    setTimeout(() => { filter.disconnect(); g.disconnect(); },
+      (time + dur + 0.05 - ctx.currentTime) * 1000);
   }
 
   function musicArp(freq, time) {
@@ -870,6 +876,7 @@ export function createAudio() {
     g.connect(musicBus);
     osc.start(time);
     osc.stop(time + dur + 0.03);
+    osc.onended = () => { osc.disconnect(); filter.disconnect(); g.disconnect(); };
   }
 
   function musicLead(freq, time) {
@@ -889,7 +896,7 @@ export function createAudio() {
     g.gain.linearRampToValueAtTime(0, time + dur);
     g.gain.setValueAtTime(0, time + dur + 0.002);
     g.connect(musicBus);
-    [-6, 6].forEach((detune) => {
+    [-6, 6].forEach((detune, i) => {
       const osc = c.createOscillator();
       osc.type = "sine";
       osc.detune.value = detune;
@@ -897,6 +904,8 @@ export function createAudio() {
       osc.connect(g);
       osc.start(time);
       osc.stop(time + dur + 0.03);
+      if (i === 1) osc.onended = () => { osc.disconnect(); g.disconnect(); };
+      else osc.onended = () => { osc.disconnect(); };
     });
   }
 
