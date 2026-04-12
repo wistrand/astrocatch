@@ -334,6 +334,7 @@ function cometPosition(star, comet, frame) {
   return {
     x: star.x + xOrb * cw - yOrb * sw,
     y: star.y + xOrb * sw + yOrb * cw,
+    r, // orbital radius — used for coma activity calculation
   };
 }
 
@@ -341,8 +342,8 @@ const COMET_SCORE_RADIUS = 22; // px — close-pass threshold
 const COMET_BONUS = 2;
 
 function assignComets(s, starIdx) {
-  if (starIdx < 5) return; // no comets in the first few stars
-  if (Math.random() > 0.25) return;
+  if (starIdx < 2) return; // no comets on the first two stars
+  if (Math.random() > 0.95) return;
 
   // Scan 8 directions to find the one with the most room — the
   // deepest gap between neighboring stars. That's where the
@@ -1310,17 +1311,19 @@ function draw() {
       const comet = s.comets[j];
       const pos = cometPosition(s, comet, frame);
       const cometBatch = [];
-      // Particle trail — each particle starts at a past orbital
-      // position, then gets pushed radially outward from the
-      // star proportional to its age, simulating solar-wind
-      // radiation pressure. The combination of curved orbital
-      // past + radial blow gives the classic bent dust-tail
-      // shape: tight near the head, fanning outward at the end.
-      // Oldest particles drawn first so brighter ones layer on
-      // top. Colored by the parent star's palette.
+
+      // Coma activity — 0 at apoapsis (inactive), 1 at
+      // periapsis (maximum outgassing). Drives the glow size
+      // and the particle spawn rate below.
+      const periDist = comet.a * (1 - comet.e);
+      const apoDist = comet.a * (1 + comet.e);
+      const activity = Math.max(0, 1 - (pos.r - periDist) / (apoDist - periDist));
+
+      // Particle trail — past orbital positions pushed by
+      // solar-wind radiation pressure. Colored by parent star.
       const TRAIL_N = 20;
       const TRAIL_STEP = 6;
-      const WIND_STRENGTH = 3.0; // px per sample of radial push
+      const WIND_STRENGTH = 3.0;
       for (let t = TRAIL_N - 1; t >= 1; t--) {
         const pp = cometPosition(s, comet, frame - t * TRAIL_STEP);
         const wdx = pp.x - s.x;
@@ -1339,17 +1342,51 @@ function draw() {
           kind: 2,
         });
       }
-      // Bright core — star color with a white center.
+
+      // Coma glow — grows near periapsis as the comet
+      // outgasses, absent at apoapsis. Modulates the
+      // existing core glow's radius and alpha.
+      const comaR = comet.radius * (3 + activity * 8);
+      const comaA = 0.2 + activity * 0.5;
       cometBatch.push({
         x: pos.x, y: pos.y,
-        outerR: comet.radius * 3, innerR: 0,
-        r: sc[0], g: sc[1], b: sc[2], a: 0.7, kind: 2,
+        outerR: comaR, innerR: 0,
+        r: sc[0], g: sc[1], b: sc[2], a: comaA, kind: 2,
       });
+      // Bright white core.
       cometBatch.push({
         x: pos.x, y: pos.y,
         outerR: comet.radius, innerR: 0,
         r: 1, g: 1, b: 1, a: 1, kind: 0,
       });
+
+      // Sparse outgassing particles near periapsis — spawned
+      // in world space so they linger where the comet WAS,
+      // creating a natural gas wake behind the fast-moving
+      // nucleus. Each particle gets a radial-outward velocity
+      // push (solar wind / radiation pressure) plus small
+      // random scatter, so the wake drifts anti-sunward over
+      // its lifetime — matching how real outgassed material
+      // behaves. Uses the existing particles array + render.
+      if (activity > 0.4 && state === STATE.PLAY) {
+        const spawnChance = activity * 1.5;
+        if (Math.random() < spawnChance) {
+          const rdx = pos.x - s.x;
+          const rdy = pos.y - s.y;
+          const rd = Math.hypot(rdx, rdy) || 1;
+          const windVx = (rdx / rd) * 0.5;
+          const windVy = (rdy / rd) * 0.5;
+          particles.push({
+            x: pos.x + (Math.random() - 0.5) * comet.radius * 3,
+            y: pos.y + (Math.random() - 0.5) * comet.radius * 3,
+            vx: (Math.random() - 0.5) * 0.3 + windVx,
+            vy: (Math.random() - 0.5) * 0.3 + windVy,
+            life: 1, decay: 0.008 + Math.random() * 0.007,
+            r: sc[0] * 0.7, g: sc[1] * 0.7, b: sc[2] * 0.7,
+            size: 1 + Math.random() * 1.5,
+          });
+        }
+      }
       renderer.drawCircleBatch(cometBatch, cam);
     }
   }
