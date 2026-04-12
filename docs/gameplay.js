@@ -700,6 +700,7 @@ function init() {
     // planet gravity perturbation.
     frame: 0,
   };
+  computeLaunchWindow();
 
   document.getElementById("score").textContent = "0";
   updateSub();
@@ -867,6 +868,68 @@ function captureStar(idx) {
 
   // Keep the star buffer populated
   while (stars.length < idx + 8) addNextStar();
+
+  // Recompute the launch-window indicator for the new orbit.
+  computeLaunchWindow();
+}
+
+// Hidden by default; toggle by clicking the score display.
+let showLaunchWindow = false;
+const scoreToggleEl = document.getElementById("score-display");
+if (scoreToggleEl) {
+  scoreToggleEl.style.cursor = "pointer";
+  scoreToggleEl.style.pointerEvents = "auto";
+  scoreToggleEl.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    showLaunchWindow = !showLaunchWindow;
+  });
+}
+
+// ─── Launch-window indicator ────────────────────────────
+// The launch window is fixed in world space for the current
+// orbit (depends only on the current star, next star, and
+// orbit radius — none of which change while orbiting). Compute
+// once per capture, draw cached samples every frame as a ring
+// of dots around the orbit. Bright cyan = boost would succeed.
+const LAUNCH_WINDOW_SAMPLES = 36;
+
+function computeLaunchWindow() {
+  if (!ball) return;
+  ball.launchWindow = null;
+  if (ball.pendingCapture >= 0) return;
+  const cs = stars[ball.currentStar];
+  const next = stars[ball.currentStar + 1];
+  if (!cs || !next) return;
+  const orbitR = cs.r * INITIAL_ORBIT_MULT;
+  const vCirc = AC.circularV(cs.gm, orbitR);
+  // Orbital direction from current ball state (sign of r × v).
+  const rx = ball.x - cs.x, ry = ball.y - cs.y;
+  const sign = Math.sign(rx * ball.vy - ry * ball.vx) || 1;
+  // Boost factors to try at each angle. Sparser than the 48-step
+  // game search — we only need to know IF any factor works.
+  const factors = [0.30, 0.55, 0.85, 1.30, 2.00, 2.80];
+  const window = new Array(LAUNCH_WINDOW_SAMPLES);
+  const startFrame = ball.frame || 0;
+  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
+    const angle = (i / LAUNCH_WINDOW_SAMPLES) * Math.PI * 2;
+    const px = cs.x + Math.cos(angle) * orbitR;
+    const py = cs.y + Math.sin(angle) * orbitR;
+    // Tangential velocity (prograde matches ball's direction).
+    const vx = -Math.sin(angle) * vCirc * sign;
+    const vy =  Math.cos(angle) * vCirc * sign;
+    let success = false;
+    for (let k = 0; k < factors.length; k++) {
+      const f = factors[k];
+      const pred = AC.predictCapture(stars, ball.currentStar,
+        px, py, vx * (1 + f), vy * (1 + f), startFrame);
+      if (pred) { success = true; break; }
+    }
+    window[i] = success;
+  }
+  ball.launchWindow = window;
+  ball.launchWindowR = orbitR;
+  ball.launchWindowStarIdx = ball.currentStar;
 }
 
 function updateScoreUI(bump, bonus, streak) {
@@ -1499,6 +1562,37 @@ function draw() {
     const head = [last.r * headA, last.g * headA, last.b * headA, headA];
     const tail = [0, 0, 0, 0];
     renderer.drawPolyline(trail, cam, 1.3, tail, head);
+  }
+
+  // Launch-window indicator — short tangent ticks on the orbit
+  // where a tap would land a clean capture. Player watches the
+  // bright zone approach as they orbit.
+  if (showLaunchWindow && ball && ball.launchWindow
+      && ball.pendingCapture < 0
+      && ball.launchWindowStarIdx === ball.currentStar) {
+    const cs = stars[ball.currentStar];
+    if (cs) {
+      const orbitR = ball.launchWindowR;
+      const lw = ball.launchWindow;
+      const pulse = 0.7 + 0.3 * Math.sin(nowSec * 3.5);
+      const c = c1Of(cs.colorIdx);
+      const a = pulse * 0.9;
+      const headCol = [c[0] * a, c[1] * a, c[2] * a, a];
+      const tickLen = 5;
+      for (let i = 0; i < lw.length; i++) {
+        if (!lw[i]) continue;
+        const angle = (i / lw.length) * Math.PI * 2;
+        const cx = cs.x + Math.cos(angle) * orbitR;
+        const cy = cs.y + Math.sin(angle) * orbitR;
+        // Tangent direction (perpendicular to radius).
+        const tx = -Math.sin(angle);
+        const ty =  Math.cos(angle);
+        renderer.drawPolyline([
+          { x: cx - tx * tickLen, y: cy - ty * tickLen },
+          { x: cx + tx * tickLen, y: cy + ty * tickLen },
+        ], cam, 0.9, headCol, headCol);
+      }
+    }
   }
 
   // Active stars — frustum-cull against the camera vertical band,

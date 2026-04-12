@@ -718,10 +718,14 @@ export function createAudio() {
     osc.detune.value = (Math.random() - 0.5) * 4;
 
     // Sub sine an octave below — gives the low end actual
-    // weight without muddying the harmonic content.
+    // weight without muddying the harmonic content. Skip the
+    // octave-down for low roots whose sub would land below
+    // ~55 Hz, where small speakers (mobile, laptop) resonate
+    // / distort instead of reproducing cleanly.
+    const subFreq = freq * 0.5 >= 55 ? freq * 0.5 : freq;
     const sub = c.createOscillator();
     sub.type = "sine";
-    sub.frequency.setValueAtTime(freq * 0.5, time);
+    sub.frequency.setValueAtTime(subFreq, time);
     const subGain = c.createGain();
     subGain.gain.value = 0.55;
     sub.connect(subGain);
