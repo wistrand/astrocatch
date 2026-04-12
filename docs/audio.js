@@ -125,7 +125,7 @@ const MUSIC_STEP_SEC = 60 / MUSIC_BPM / 4; // 16th note
 // WebAudio scheduling guidelines. Mute is unaffected because
 // master/musicBus gain changes apply immediately regardless
 // of what's already queued to the audio engine.
-const MUSIC_SCHEDULE_AHEAD = 0.5;          // seconds
+const MUSIC_SCHEDULE_AHEAD = 1.0;          // seconds
 const MUSIC_SCHEDULE_INTERVAL = 108;       // ms
 // Minimum time in the future for any scheduled note. After a
 // resync (or on the very first tick), we guarantee scheduled
