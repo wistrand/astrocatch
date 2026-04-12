@@ -232,8 +232,8 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     isBlackHole: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
-    // ~5% of stars after index 10 become black holes.
-    if (starIdx >= 10 && Math.random() < 0.1) {
+    // low percent of stars after some index become black holes.
+    if (starIdx >= 5 && Math.random() < 0.10) {
       s.isBlackHole = true;
     }
     assignPlanets(s, starIdx);
@@ -469,8 +469,11 @@ function addNextStar() {
   // first that respects the separation invariant against every star.
   for (let tries = 0; tries < 40; tries++) {
     const dist = minD + Math.random() * (maxD - minD);
-    // 45° half-cone early → ~85° at max difficulty.
-    const halfSpread = Math.PI * 0.25 + difficulty * Math.PI * 0.22;
+    // 45° half-cone early → ~85° at max difficulty. On landscape
+    // screens, widen the cone so stars use the horizontal space
+    // instead of clustering in a narrow vertical column.
+    const aspectBoost = W > H ? (W / H - 1) * 0.3 : 0;
+    const halfSpread = Math.PI * 0.25 + difficulty * Math.PI * 0.22 + aspectBoost;
     const angle = -Math.PI / 2 + (Math.random() - 0.5) * 2 * halfSpread;
     let nx = prev.x + Math.cos(angle) * dist;
     let ny = prev.y + Math.sin(angle) * dist;

@@ -127,6 +127,13 @@ function compileProgram(gl, vsSrc, fsSrc, name) {
   for (let i = 0; i < nu; i++) {
     const info = gl.getActiveUniform(p, i);
     uniforms[info.name] = gl.getUniformLocation(p, info.name);
+    // Some drivers return array uniforms as "u_foo" instead of
+    // "u_foo[0]". Store both names so lookups work either way.
+    if (info.name.endsWith("[0]")) {
+      uniforms[info.name.slice(0, -3)] = uniforms[info.name];
+    } else if (info.size > 1 && !info.name.endsWith("[0]")) {
+      uniforms[info.name + "[0]"] = uniforms[info.name];
+    }
   }
   const attribs = {};
   const na = gl.getProgramParameter(p, gl.ACTIVE_ATTRIBUTES);
@@ -156,35 +163,74 @@ const FULLSCREEN_FS = `#version 300 es
 precision highp float;
 uniform vec2 u_resolution;  // logical CSS pixels
 uniform float u_dpr;
+uniform float u_camY;
 out vec4 outColor;
+
+// Hash for deterministic galaxy placement.
+float ghash(float x) { return fract(sin(x) * 43758.5453); }
 
 void main() {
   // Convert physical fragment coords to logical, top-down.
   vec2 frag = gl_FragCoord.xy / u_dpr;
   frag.y = u_resolution.y - frag.y;
 
-  // Background radial gradient. Center is always #12121f.
-  // On landscape (desktop) the fade reaches #0a0a12 at the
-  // longer screen dimension, preserving the original look.
-  // On portrait (mobile) the gradient:
-  //   • uses the *shorter* dimension × 1.1 for the falloff
-  //     span, so the bright center doesn't dominate the
-  //     narrow viewport
-  //   • fades all the way to pure black at the edges, not
-  //     the very-dark-blue landscape target, so the mobile
-  //     frame reads as a small lit area in dark space rather
-  //     than a full-screen bluish cast.
+  // Background radial gradient.
   vec2 c = u_resolution * 0.5;
   float dist = length(frag - c);
-  bool portrait = u_resolution.y > u_resolution.x;
-  float span = portrait
-    ? u_resolution.x * 1.1
-    : max(u_resolution.x, u_resolution.y);
+  float span = min(u_resolution.x, u_resolution.y) * 1.1;
   vec3 nearCol = vec3(0.071, 0.071, 0.121);
-  vec3 farCol = portrait
-    ? vec3(0.0, 0.0, 0.0)
-    : vec3(0.039, 0.039, 0.071);
+  vec3 farCol = vec3(0.0, 0.0, 0.0);
   vec3 col = mix(nearCol, farCol, clamp(dist / span, 0.0, 1.0));
+
+  // Procedural galaxies — distant spiral galaxies scattered
+  // across the background. Each is a logarithmic spiral with
+  // 2-4 arms, an elliptical tilt, and a bright central bulge.
+  // Positions are seeded from a hash so they're deterministic
+  // across frames. Very low parallax and subtle brightness so
+  // they read as distant cosmic structures, not foreground
+  // objects. The early-out at r > 1.5 means only ~5% of
+  // fragments do the expensive spiral math.
+  float wrapH = u_resolution.y + 200.0;
+  for (int g = 0; g < 3; g++) {
+    float fg = float(g);
+    // Deterministic position + properties from hash chain.
+    float gx = ghash(fg * 127.1 + 31.7) * u_resolution.x;
+    float gy = ghash(fg * 269.5 + 83.3) * u_resolution.y;
+    float depth = 0.08 + ghash(fg * 73.1 + 17.3) * 0.15;
+    gy = mod(gy + u_camY * depth + 100.0, wrapH) - 100.0;
+
+    vec2 d = frag - vec2(gx, gy);
+    float gSize = 80.0 + ghash(fg * 419.2 + 61.1) * 140.0;
+
+    // Elliptical tilt — squashes one axis to simulate viewing
+    // the disk at an angle.
+    float tilt = ghash(fg * 631.1 + 41.3) * 3.14159;
+    float ct = cos(tilt), st = sin(tilt);
+    float squeeze = 1.6 + ghash(fg * 337.3 + 19.7) * 1.0;
+    vec2 td = vec2(d.x * ct - d.y * st,
+                   (d.x * st + d.y * ct) * squeeze);
+    float r = length(td) / gSize;
+
+    if (r > 1.5) continue; // skip distant fragments
+
+    float theta = atan(td.y, td.x);
+    float arms = 2.0 + floor(ghash(fg * 911.3 + 53.7) * 3.0);
+    float rotation = ghash(fg * 173.7 + 97.1) * 6.28;
+
+    // Spiral arm pattern — logarithmic spiral.
+    float armP = 0.5 + 0.5 * sin(
+      arms * (theta + rotation) - log(max(r, 0.01)) * 5.0
+    );
+    // Exponential disk profile (dimmer at edges).
+    float disk = exp(-r * 3.5) * armP;
+    // Bright central bulge.
+    float bulge = exp(-r * r * 25.0);
+
+    float gb = (disk * 0.5 + bulge) * (1.0 - smoothstep(1.0, 1.5, r));
+
+    vec3 gCol = vec3(1.0);
+    col += gCol * gb * 0.14;
+  }
 
   outColor = vec4(col, 1.0);
 }
@@ -998,6 +1044,8 @@ export function createRenderer(canvas) {
   const _camTmpA = new Float32Array(9);
   const _camTmpB = new Float32Array(9);
   const _camResult = new Float32Array(9);
+  // Pooled scratch for finalizeFrame's BH uniform data.
+  const _bhScratch = new Float32Array(16);
 
   function rebuildScreenMat() {
     // Screen pixels → clip space, Y flipped so top-left = (-1, 1).
@@ -1117,14 +1165,13 @@ export function createRenderer(canvas) {
     gl.uniform1f(lensingProg.uniforms.u_time, frameTime);
     gl.uniform1i(lensingProg.uniforms.u_bhCount, n);
     if (n > 0) {
-      const data = new Float32Array(16);
       for (let i = 0; i < n; i++) {
-        data[i * 4 + 0] = blackHoles[i].fbX;
-        data[i * 4 + 1] = blackHoles[i].fbY;
-        data[i * 4 + 2] = blackHoles[i].fbR;
-        data[i * 4 + 3] = 0;
+        _bhScratch[i * 4 + 0] = blackHoles[i].fbX;
+        _bhScratch[i * 4 + 1] = blackHoles[i].fbY;
+        _bhScratch[i * 4 + 2] = blackHoles[i].fbR;
+        _bhScratch[i * 4 + 3] = 0;
       }
-      gl.uniform4fv(lensingProg.uniforms["u_bh[0]"], data);
+      gl.uniform4fv(lensingProg.uniforms["u_bh[0]"], _bhScratch);
     }
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
@@ -1136,6 +1183,7 @@ export function createRenderer(canvas) {
     gl.useProgram(fullscreenProg.program);
     gl.uniform2f(fullscreenProg.uniforms.u_resolution, viewW, viewH);
     gl.uniform1f(fullscreenProg.uniforms.u_dpr, viewDPR);
+    gl.uniform1f(fullscreenProg.uniforms.u_camY, camY);
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
