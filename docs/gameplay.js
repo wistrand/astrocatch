@@ -1333,7 +1333,7 @@ function draw() {
           x: bx, y: by,
           outerR: pr * 2.8, innerR: 0,
           r: sc[0] * fade, g: sc[1] * fade, b: sc[2] * fade,
-          a: fade * 0.35,
+          a: fade * 0.55,
           kind: 2,
         });
       }
@@ -1341,7 +1341,7 @@ function draw() {
       cometBatch.push({
         x: pos.x, y: pos.y,
         outerR: comet.radius * 3, innerR: 0,
-        r: sc[0], g: sc[1], b: sc[2], a: 0.55, kind: 2,
+        r: sc[0], g: sc[1], b: sc[2], a: 0.7, kind: 2,
       });
       cometBatch.push({
         x: pos.x, y: pos.y,
