@@ -290,7 +290,7 @@ function assignPlanets(s, starIdx) {
 }
 
 // ─── Comets ──────────────────────────────────────────────
-// ~90% of stars (from index 5+) get a comet — a small body
+// ~25% of stars (from index 5+) get a comet — a small body
 // on a highly eccentric Kepler orbit around its parent star.
 // Comets do NOT affect ship physics at all; they're purely
 // visual + a scoring opportunity. The orbit direction is
@@ -299,13 +299,17 @@ function assignPlanets(s, starIdx) {
 // extends into free space rather than toward another star.
 
 // Kepler equation solver: given mean anomaly M and eccentricity
-// e, returns eccentric anomaly E via Newton's method. Converges
-// in 5-6 iterations for e < 0.93. Called once per visible comet
-// per render frame — negligible cost.
+// e, returns eccentric anomaly E via Newton's method. 8
+// iterations handles e up to ~0.93 reliably; a convergence
+// guard breaks early if |ΔE| < 1e-8 so low-e orbits don't
+// waste cycles. Called once per visible comet per render frame
+// — negligible cost.
 function solveKepler(M, e) {
   let E = M;
-  for (let i = 0; i < 6; i++) {
-    E += (M - E + e * Math.sin(E)) / (1 - e * Math.cos(E));
+  for (let i = 0; i < 8; i++) {
+    const dE = (M - E + e * Math.sin(E)) / (1 - e * Math.cos(E));
+    E += dE;
+    if (Math.abs(dE) < 1e-8) break;
   }
   return E;
 }
@@ -1131,14 +1135,12 @@ function drawReplayGhost() {
     renderer.drawCircleBatch(markers, mat);
   }
 
-  // Trajectory polyline — capped to a trailing window of 300
+  // Trajectory polyline — capped to a trailing window of 2000
   // points instead of the full replay. The close-follow camera
-  // only shows a small portion of the trajectory at any zoom,
-  // so rendering all 6000 points would waste vertex work and
+  // only shows a portion of the trajectory at any zoom, so
+  // rendering all 6000 points would waste vertex work and
   // allocate a large slice array every frame for no visible
-  // gain. 300 points ≈ 5 seconds of replay at REPLAY_SPEED
-  // 1.75, which is more than enough for the comet-tail effect
-  // the head/tail color uniforms produce.
+  // gain.
   if (upTo > 1) {
     const headA = 0.85;
     const head = [0.63 * headA, 0.86 * headA, 1.0 * headA, headA];
