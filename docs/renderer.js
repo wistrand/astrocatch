@@ -164,10 +164,12 @@ precision highp float;
 uniform vec2 u_resolution;  // logical CSS pixels
 uniform float u_dpr;
 uniform float u_camY;
+uniform float u_seed;       // per-session random seed
 out vec4 outColor;
 
-// Hash for deterministic galaxy placement.
-float ghash(float x) { return fract(sin(x) * 43758.5453); }
+// Hash with session-seed so galaxy positions differ per page load
+// but stay stable across frames within a session.
+float ghash(float x) { return fract(sin(x + u_seed) * 43758.5453); }
 
 void main() {
   // Convert physical fragment coords to logical, top-down.
@@ -221,15 +223,26 @@ void main() {
     float armP = 0.5 + 0.5 * sin(
       arms * (theta + rotation) - log(max(r, 0.01)) * 5.0
     );
-    // Exponential disk profile (dimmer at edges).
-    float disk = exp(-r * 3.5) * armP;
-    // Bright central bulge.
-    float bulge = exp(-r * r * 25.0);
+    // Arms: exponential disk profile, always white.
+    float disk = exp(-r * 3.5) * armP * 0.5;
 
-    float gb = (disk * 0.5 + bulge) * (1.0 - smoothstep(1.0, 1.5, r));
+    // Wide white bulge — always present. Gives every galaxy a
+    // soft central glow so the arms read against a brighter core.
+    float wideBulge = exp(-r * r * 25.0);
 
-    vec3 gCol = vec3(1.0);
-    col += gCol * gb * 0.14;
+    // Small tight bulge — only on some galaxies. Concentrated
+    // hot core on top of the wide bulge. Color randomized per
+    // galaxy between bright white and bright yellow.
+    float bigBulge = step(0.55, ghash(fg * 811.9 + 29.3));
+    float smallBulge = exp(-r * r * 180.0) * 2.5 * bigBulge;
+    float warmT = ghash(fg * 503.1 + 71.7);
+    vec3 smallBulgeCol = mix(vec3(1.0, 1.0, 1.0),
+                             vec3(1.0, 0.7, 0.3), warmT);
+
+    float fade = 1.0 - smoothstep(1.0, 1.5, r);
+    vec3 armCol = vec3(1.0, 0.98, 0.95);
+    col += (armCol * (disk + wideBulge) + smallBulgeCol * smallBulge)
+         * fade * 0.14;
   }
 
   outColor = vec4(col, 1.0);
@@ -823,6 +836,10 @@ void main() {
 // an unsupported-device message.
 // ─────────────────────────────────────────────────────────────
 export function createRenderer(canvas) {
+  // Per-session seed for procedural background (galaxy positions,
+  // star tilts, etc). Random per page load so the background
+  // isn't identical every refresh.
+  const sessionSeed = Math.random() * 1000;
   // antialias: false — every edge in this pipeline is SDF-smoothed
   // in the fragment shader (fwidth for circles, smoothstep on |side|
   // for polylines, smoothstep on disk edge for stars). MSAA would
@@ -1236,6 +1253,7 @@ export function createRenderer(canvas) {
     gl.uniform2f(fullscreenProg.uniforms.u_resolution, viewW, viewH);
     gl.uniform1f(fullscreenProg.uniforms.u_dpr, viewDPR);
     gl.uniform1f(fullscreenProg.uniforms.u_camY, camY);
+    gl.uniform1f(fullscreenProg.uniforms.u_seed, sessionSeed);
     gl.bindVertexArray(emptyVao);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }

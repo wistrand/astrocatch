@@ -229,29 +229,75 @@ let hasBoosted = false; // for the hint
 // ─────────────────────────────────────────────────────────────
 // Star generation — spawn probability table
 // ─────────────────────────────────────────────────────────────
-// All spawn chances and thresholds in one place. Decision order
-// in makeStar: black hole → binary → planets → comets.
-//
-//   Type                  Prob        From star#  Notes
-//   ─────────────────────────────────────────────────────────
-//   Black hole (solo)     7%          4+          lensing + grid
-//   Binary (normal)       0→12%       15→40       ramps up, no ejecta
-//   BH + binary           0→8%        15→40       ramps up, BH accretor + ejecta
-//   Planets               0→75%       ramp/50     1–2 per star (not on binaries)
-//   Comets                25%         2+          on any star incl. binaries
-//
-const SPAWN = {
-  BH_PROB:          0.07,   // chance a star is a black hole
-  BH_MIN_STAR:      4,      // first eligible star index
-  BINARY_PROB:      0.12,   // max chance a non-BH star becomes a binary
-  BH_BINARY_PROB:   0.08,   // max chance a BH gets a donor companion
-  BINARY_RAMP_START: 15,    // star index where binary ramp begins (0%)
-  BINARY_RAMP_END:   40,    // star index where binary prob reaches max
-  PLANET_MAX_PROB:  0.75,   // planet chance at full ramp
-  PLANET_RAMP_STARS: 50,    // stars over which planet prob ramps 0→max
-  COMET_PROB:       0.25,   // chance per star (from COMET_MIN_STAR)
-  COMET_MIN_STAR:   2,      // first eligible star index
-};
+// Each row is a star-index control point; each column is a
+// weight for one variant. Weights linearly interpolate between
+// rows and plateau past the last row. Normalized at sample time,
+// so weights don't need to sum to 100. Tweak freely — add or
+// remove rows/columns, the code adapts.
+
+const SPAWN_TABLE_DEBUG = [
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0 },
+  { at: 1, plain: 0, binary: 1, bh: 1, bhBinary: 1 },
+];
+
+const SPAWN_TABLE_GAME = [
+  //          plain  binary   bh   bhBinary
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 3 },
+  { at: 10,   plain:  85, binary:  3, bh:  5, bhBinary: 3 },
+  { at: 20,   plain:  75, binary:  8, bh:  5, bhBinary: 3 },
+  { at: 50,   plain:  75, binary: 10, bh:  8, bhBinary: 4 },
+  { at: 80,   plain:  70, binary: 10, bh: 12, bhBinary: 5 },
+];
+
+const SPAWN_TABLE = SPAWN_TABLE_GAME;
+
+// Planets and comets are orthogonal to the variant roll.
+// Planets ramp in over the first PLANET_RAMP_STARS stars and only
+// attach to plain or BH variants — binaries' moving sub-stars
+// already occupy the orbit volume. Comets decorate any variant.
+const PLANET_PROB_MAX = 0.75;
+const PLANET_RAMP_STARS = 50;
+const COMET_PROB = 0.25;
+const COMET_MIN_STAR = 2;
+
+function spawnWeightsAt(starIdx) {
+  const last = SPAWN_TABLE[SPAWN_TABLE.length - 1];
+  let lo = SPAWN_TABLE[0], hi = SPAWN_TABLE[0], t = 0;
+  if (starIdx <= SPAWN_TABLE[0].at) {
+    hi = lo;
+  } else if (starIdx >= last.at) {
+    lo = hi = last;
+  } else {
+    for (let i = 0; i < SPAWN_TABLE.length - 1; i++) {
+      const a = SPAWN_TABLE[i], b = SPAWN_TABLE[i + 1];
+      if (starIdx >= a.at && starIdx < b.at) {
+        lo = a; hi = b;
+        t = (starIdx - a.at) / (b.at - a.at);
+        break;
+      }
+    }
+  }
+  const out = {};
+  for (const k of Object.keys(lo)) {
+    if (k === "at") continue;
+    out[k] = lo[k] + (hi[k] - lo[k]) * t;
+  }
+  return out;
+}
+
+function pickVariant(starIdx) {
+  const w = spawnWeightsAt(starIdx);
+  let total = 0;
+  for (const k of Object.keys(w)) total += w[k];
+  if (total <= 0) return "plain";
+  let r = Math.random() * total;
+  for (const k of Object.keys(w)) {
+    r -= w[k];
+    if (r < 0) return k;
+  }
+  return "plain";
+}
 
 function makeStar(x, y, r, colorIdx, starIdx) {
   const s = {
@@ -287,12 +333,27 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     binary: null,
   };
   if (starIdx !== undefined && starIdx >= 0) {
-    if (starIdx >= SPAWN.BH_MIN_STAR && Math.random() < SPAWN.BH_PROB) {
+    const variant = pickVariant(starIdx);
+    if (variant === "binary") {
+      assignBinary(s);
+    } else if (variant === "bh") {
       s.isBlackHole = true;
+    } else if (variant === "bhBinary") {
+      s.isBlackHole = true;
+      assignBinary(s);
     }
-    assignBinary(s, starIdx);
-    if (!s.isBinary) assignPlanets(s, starIdx);
-    assignComets(s, starIdx);
+    // Planets: orthogonal roll, allowed on plain and bh variants
+    // only. Ramps up with star index.
+    if (!s.isBinary) {
+      const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
+      if (Math.random() < planetRamp * PLANET_PROB_MAX) {
+        assignPlanets(s);
+      }
+    }
+    // Comet: orthogonal roll, applied to any variant.
+    if (starIdx >= COMET_MIN_STAR && Math.random() < COMET_PROB) {
+      assignComets(s, starIdx);
+    }
   }
   return s;
 }
@@ -312,10 +373,7 @@ function makeStar(x, y, r, colorIdx, starIdx) {
 // in the physics integrator keeps the 1/r² accel from
 // diverging inside the planet, so prediction stays stable
 // even on a near-hit.
-function assignPlanets(s, starIdx) {
-  const ramp = Math.min(1, starIdx / SPAWN.PLANET_RAMP_STARS);
-  const probability = ramp * SPAWN.PLANET_MAX_PROB;
-  if (Math.random() >= probability) return;
+function assignPlanets(s) {
   const nPlanets = 1 + (Math.random() < 0.25 ? 1 : 0);
   const planets = [];
   for (let i = 0; i < nPlanets; i++) {
@@ -410,8 +468,6 @@ const COMET_BONUS = 2;
 const BH_VISUAL_SCALE = 0.5;
 
 function assignComets(s, starIdx) {
-  if (starIdx < SPAWN.COMET_MIN_STAR) return;
-  if (Math.random() > SPAWN.COMET_PROB) return;
 
   // Scan 8 directions to find the one with the most room — the
   // deepest gap between neighboring stars. That's where the
@@ -501,14 +557,8 @@ function separationOk(x, y, r) {
 // physics sees a single point mass. Sub-stars carry their
 // own visual radius and color for rendering, plus crash
 // zones that move with the orbit. No planets on binaries.
-function assignBinary(s, starIdx) {
-  if (starIdx < SPAWN.BINARY_RAMP_START) return;
-  // Ramp: 0% at RAMP_START → max at RAMP_END.
-  const ramp = Math.min(1, (starIdx - SPAWN.BINARY_RAMP_START)
-    / (SPAWN.BINARY_RAMP_END - SPAWN.BINARY_RAMP_START));
-  const maxProb = s.isBlackHole ? SPAWN.BH_BINARY_PROB : SPAWN.BINARY_PROB;
-  if (Math.random() >= ramp * maxProb) return;
-  // Mass ratio q = m1/m2 in [0.4, 1.0] — never too extreme.
+function assignBinary(s) {
+  // Mass ratio q = m1/m2 in [0.2, 0.65] — never too extreme.
   const q = 0.2 + Math.random() * 0.45;
   const totalGM = s.gm;
   const gm1 = totalGM * q / (1 + q);

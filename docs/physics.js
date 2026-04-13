@@ -323,7 +323,11 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
 
     if (f > minDFrame && d > prevD * 1.001 && minDFrame > 0) {
       const vMagAtPeri = Math.hypot(minDVx, minDVy);
-      if (minD < next.r * MIN_PERI_MULT) return null;
+      // Binaries need a wider periapsis floor — sub-stars extend
+      // outward from the COM and a 1.5R orbit can skim them on
+      // eccentric passes.
+      const minPeriMult = next.isBinary ? 2.2 : MIN_PERI_MULT;
+      if (minD < next.r * minPeriMult) return null;
       if (minD > next.r * MAX_PERI_MULT) return null;
       // Reject if the resulting circular orbit at periDist would
       // extend beyond the target star's Voronoi cell — i.e. peri

@@ -99,7 +99,7 @@ export function simplex2(x, y) {
 // fires every half note picking from an A-minor pentatonic
 // scale. One complete loop = 4 bars × 16 steps = 64 steps.
 // ─────────────────────────────────────────────────────────────
-const MUSIC_BPM = 114;
+const MUSIC_BPM = 120;
 const MUSIC_STEPS_PER_BAR = 16;
 // One "section" is a 4-bar progression. At section boundaries
 // the scheduler re-reads the caller-supplied intensity and
