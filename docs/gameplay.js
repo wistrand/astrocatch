@@ -937,10 +937,19 @@ function captureStar(idx) {
   const streakMult = streakMultiplier(fastStreak);
   score += Math.round(bonus * streakMult);
   starsVisited += 1;
+  // Tutorial assist auto-off at the boundary. One-shot — the
+  // player can still re-enable with W and their preference
+  // will stick from here on.
+  if (isTutorialRun && starsVisited === TUTORIAL_STARS) {
+    showLaunchWindow = false;
+  }
   // Reset orbit timer + bonus for the new orbit.
   ball.framesInOrbit = 0;
   ball.pendingBonus = 1;
-  audio.capture(bonus, fastStreak);
+  // Skip the capture SFX if it was already pre-scheduled at
+  // boost time (Bluetooth latency compensation).
+  if (!ball.capturePreScheduled) audio.capture(bonus, fastStreak);
+  ball.capturePreScheduled = false;
   audio.setStreak(fastStreak);
   updateScoreUI(true, bonus, fastStreak);
 
@@ -1109,17 +1118,19 @@ function boost() {
 
   audio.boost();
 
-  // Exhaust particles (visual only — record direction BEFORE the impulse).
+  // Exhaust particles (visual only — record direction BEFORE
+  // the impulse). Slightly beefier than before for clearer tap
+  // feedback, especially under Bluetooth audio lag.
   const c1 = c1Of(stars[ball.currentStar].colorIdx);
-  for (let i = 0; i < 10; i++) {
-    const a = Math.atan2(-ball.vy, -ball.vx) + (Math.random() - 0.5) * 0.7;
-    const s2 = 1 + Math.random() * 2.5;
+  for (let i = 0; i < 14; i++) {
+    const a = Math.atan2(-ball.vy, -ball.vx) + (Math.random() - 0.5) * 0.20;
+    const s2 = 1.2 + Math.random() * 2.8;
     particles.push({
       x: ball.x, y: ball.y,
       vx: Math.cos(a) * s2, vy: Math.sin(a) * s2,
-      life: 1, decay: 0.03 + Math.random() * 0.02,
+      life: 1, decay: 0.005 + Math.random() * 0.001,
       r: c1[0], g: c1[1], b: c1[2],
-      size: 2 + Math.random() * 2,
+      size: 2.2 + Math.random() * 2.2,
     });
   }
 
@@ -1136,9 +1147,28 @@ function boost() {
   if (orbitFraction < 0.5) bonus = 3;
   else if (orbitFraction < 1.0) bonus = 2;
 
-  AC.applyBoostAndArm(stars, ball);
+  const pred = AC.applyBoostAndArm(stars, ball);
   // Only commit the bonus if the boost actually armed a capture.
   if (ball.pendingCapture >= 0) ball.pendingBonus = bonus;
+
+  // Bluetooth audio can lag 100–300 ms behind; on high-latency
+  // output, pre-schedule the capture chime so it reaches the
+  // ears at the visual moment. We know periFrame from prediction.
+  ball.capturePreScheduled = false;
+  if (pred && pred.periFrame) {
+    const outLatency = audio.getOutputLatency();
+    if (outLatency > 0.06) {
+      const dt = 1 / PHYSICS_HZ;
+      const secondsUntilCapture = pred.periFrame * dt;
+      const projectedStreak = bonus >= 2
+        ? Math.min(fastStreak + 1, FAST_STREAK_CAP) : 0;
+      const delay = secondsUntilCapture - outLatency;
+      if (delay > 0) {
+        audio.capture(bonus, projectedStreak, delay);
+        ball.capturePreScheduled = true;
+      }
+    }
+  }
 
   if (!hasBoosted) {
     hasBoosted = true;
@@ -1670,12 +1700,7 @@ function draw() {
   // Launch-window indicator — short tangent ticks on the orbit
   // where a tap would land a clean capture. Player watches the
   // bright zone approach as they orbit.
-  // During a tutorial run, auto-hide the hint past
-  // TUTORIAL_STARS even if the player hasn't manually toggled
-  // it off — the assist fades away once they've got the basics.
-  const tutorialEnded = isTutorialRun && starsVisited >= TUTORIAL_STARS;
-  if (showLaunchWindow && !tutorialEnded
-      && ball && ball.launchWindow
+  if (showLaunchWindow && ball && ball.launchWindow
       && ball.pendingCapture < 0
       && ball.launchWindowStarIdx === ball.currentStar) {
     const cs = stars[ball.currentStar];

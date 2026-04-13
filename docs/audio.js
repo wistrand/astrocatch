@@ -507,10 +507,14 @@ export function createAudio() {
   // Quick plays root+3rd+5th, Blazing plays root+3rd+5th+octave.
   // Per-note bell timbre: sine fundamental + soft 2× overtone.
   // Streak adds a high shimmer after the last arpeggio note.
-  function capture(bonus, streak) {
+  function capture(bonus, streak, delaySeconds) {
     const c = ensure();
     if (!c || muted) return;
-    const t = c.currentTime;
+    // Optional positive delay for pre-scheduling captures ahead
+    // of time (compensates for Bluetooth output latency). A
+    // negative delay is clamped to 0 — Web Audio can't schedule
+    // in the past.
+    const t = c.currentTime + Math.max(delaySeconds || 0, 0);
 
     // A-major triad pitches (Hz). Third and fifth live a major
     // third and perfect fifth ABOVE the root — not below — so
@@ -1127,9 +1131,18 @@ export function createAudio() {
     }, false);
   }
 
+  function getOutputLatency() {
+    if (!ctx) return 0;
+    // `outputLatency` is the physical delay from the audio
+    // context to the playback device (reported in seconds).
+    // Bluetooth devices typically report 0.1–0.3. Not all
+    // browsers implement it; missing = 0.
+    return typeof ctx.outputLatency === "number" ? ctx.outputLatency : 0;
+  }
+
   return {
     boost, capture, death, deathCrash, comet,
     startMusic, stopMusic, setIntensity, setStreak,
-    setMuted, isMuted,
+    setMuted, isMuted, getOutputLatency,
   };
 }
