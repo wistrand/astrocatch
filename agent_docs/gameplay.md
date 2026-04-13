@@ -137,6 +137,12 @@ capture (`computeLaunchWindow`) by sampling 36 angles × ~6
 boost factors with early-exit; cached and rotated with the
 orbit.
 
+**Tutorial default**: the hint is auto-enabled at the start of
+the first `TUTORIAL_GAMES` (3) gameplays, and auto-hides after
+`TUTORIAL_STARS` (15) captures in those runs. The player can
+still toggle it off manually at any time. Gameplay count is
+persisted in `localStorage` (`astrocatch_gameplays`).
+
 ## Death sounds
 
 - `deathCrash()` — soft sine droplet, played on star collision.
