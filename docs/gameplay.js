@@ -289,7 +289,7 @@ const SPAWN_TABLE_GAME = [
   { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
-const SPAWN_TABLE = SPAWN_TABLE_DEBUG;
+const SPAWN_TABLE = SPAWN_TABLE_GAME;
 
 // Planets and comets are orthogonal to the variant roll.
 // Planets ramp in over the first PLANET_RAMP_STARS stars and only
