@@ -276,7 +276,7 @@ let hasBoosted = false; // for the hint
 
 const SPAWN_TABLE_DEBUG = [
   { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0 },
-  { at: 1,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 25 },
+  { at: 1,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 125 },
 ];
 
 const SPAWN_TABLE_GAME = [
@@ -289,7 +289,7 @@ const SPAWN_TABLE_GAME = [
   { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
-const SPAWN_TABLE = SPAWN_TABLE_GAME;
+const SPAWN_TABLE = SPAWN_TABLE_DEBUG;
 
 // Planets and comets are orthogonal to the variant roll.
 // Planets ramp in over the first PLANET_RAMP_STARS stars and only

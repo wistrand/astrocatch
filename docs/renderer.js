@@ -583,26 +583,45 @@ void main() {
     // (0,0,-1). Transform into box-local frame.
     vec3 ro = Rinv * vec3(v_local, 1000.0);
     vec3 rd = Rinv * vec3(0.0, 0.0, -1.0);
-    // Slab intersection.
-    vec3 m = 1.0 / rd;
+    // Slab intersection. Guard rd away from zero — at certain
+    // box orientations an axis-aligned ray component becomes
+    // near zero, and 1/rd overflows in a way that produces NaN
+    // via Inf-Inf in the later max/min. Clamp each component
+    // to ±1e-4 in the correct sign direction so intersection
+    // stays numerically stable across the full rotation.
+    vec3 rdSafe = mix(min(rd, vec3(-1e-4)),
+                      max(rd, vec3(1e-4)),
+                      step(0.0, rd));
+    vec3 m = 1.0 / rdSafe;
     vec3 n = m * ro;
     vec3 k = abs(m) * b;
     vec3 t1 = -n - k;
     vec3 t2 = -n + k;
     float tN = max(max(t1.x, t1.y), t1.z);
     float tF = min(min(t2.x, t2.y), t2.z);
-    // Signed coverage: positive inside the silhouette (tN<tF),
-    // negative outside. Feather across zero for AA on both
-    // sides of the edge instead of a hard cutoff on misses.
-    float signedCov = tF - tN;
-    float edgeAW = max(fwidth(signedCov), 1e-4);
-    float aa = smoothstep(-edgeAW, edgeAW, signedCov);
-    if (aa <= 0.0 || tF < 0.0) {
+    // Hard miss cutoff. At grazing angles fwidth(tN) blows up
+    // (tN varies wildly per-pixel when rd is nearly parallel to
+    // a slab face), so we don't extrapolate AA across the miss
+    // region. Inside the slab, alpha fades from 1 to 0 as we
+    // approach the silhouette, with the AA width capped so
+    // edge-on views stay sharp.
+    if (tN > tF || tF < 0.0) {
       outColor = vec4(0.0);
       return;
     }
-    // Face normal in box-local, rotated back to world for shading.
-    vec3 normalLocal = -sign(rd) * step(vec3(tN - 1e-3), t1);
+    float edgeAW = min(fwidth(tN), v_baseR * 0.08);
+    float aa = 1.0 - smoothstep(tF - edgeAW, tF, tN);
+    // Face normal: pick the dominant axis by argmax to avoid
+    // grazing-corner ambiguity where step() would flag multiple
+    // axes simultaneously and produce a non-unit normal.
+    vec3 normalLocal;
+    if (t1.x >= t1.y && t1.x >= t1.z) {
+      normalLocal = vec3(-sign(rdSafe.x), 0.0, 0.0);
+    } else if (t1.y >= t1.z) {
+      normalLocal = vec3(0.0, -sign(rdSafe.y), 0.0);
+    } else {
+      normalLocal = vec3(0.0, 0.0, -sign(rdSafe.z));
+    }
     vec3 normal = R * normalLocal;
     float NdotL = max(dot(normal, normalize(vec3(-0.3, 0.6, 0.8))), 0.0);
     float body = 0.03 + 0.08 * NdotL;
