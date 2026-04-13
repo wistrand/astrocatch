@@ -103,6 +103,34 @@ if (fullscreenBtn) {
   }
 }
 
+// Help overlay — toggled via the ? button, H key, Esc, or
+// tapping anywhere inside the overlay itself.
+const helpBtn = document.getElementById("help-btn");
+const helpOverlay = document.getElementById("help");
+function setHelpOpen(open) {
+  if (!helpOverlay) return;
+  if (open) helpOverlay.classList.remove("hidden");
+  else helpOverlay.classList.add("hidden");
+  // Pause/unpause mid-game so reading help doesn't cost a life.
+  if (state === STATE.PLAY || state === STATE.DYING) {
+    paused = open;
+  }
+}
+if (helpBtn) {
+  helpBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setHelpOpen(helpOverlay.classList.contains("hidden"));
+  });
+}
+if (helpOverlay) {
+  helpOverlay.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setHelpOpen(false);
+  });
+}
+
 // Physics constants are imported from physics.js via AC.
 const CAPTURE_MULT = AC.CAPTURE_MULT;
 const CRASH_MULT = AC.CRASH_MULT;
@@ -2226,6 +2254,14 @@ document.addEventListener("pointerdown", (e) => {
   const t = e.target;
   if (e.button && e.button !== 0) return;
   if (t.closest("button")) return;
+  // Pointerdown while help is open: close help (and unpause),
+  // don't boost. Fires before the click handler, so the boost
+  // is suppressed in time.
+  if (helpOverlay && !helpOverlay.classList.contains("hidden")) {
+    e.preventDefault();
+    setHelpOpen(false);
+    return;
+  }
   if (state !== STATE.PLAY) return;
   if (performance.now() - lastWindowFocusTime < 150) return;
   e.preventDefault();
@@ -2250,6 +2286,25 @@ document.addEventListener("keydown", (e) => {
     syncMuteBtn();
     return;
   }
+  if (e.key === "w" || e.key === "W") {
+    if (e.repeat) return;
+    e.preventDefault();
+    showLaunchWindow = !showLaunchWindow;
+    return;
+  }
+  if (e.key === "h" || e.key === "H") {
+    if (e.repeat) return;
+    e.preventDefault();
+    setHelpOpen(helpOverlay && helpOverlay.classList.contains("hidden"));
+    return;
+  }
+  if (e.key === "Escape") {
+    if (helpOverlay && !helpOverlay.classList.contains("hidden")) {
+      e.preventDefault();
+      setHelpOpen(false);
+      return;
+    }
+  }
   if (e.key === "p" || e.key === "P") {
     if (e.repeat) return;
     if (state !== STATE.PLAY && state !== STATE.DYING) return;
@@ -2272,6 +2327,11 @@ document.addEventListener("keydown", (e) => {
   if (e.code !== "Space" && e.key !== " ") return;
   if (e.repeat) return;
   e.preventDefault();
+  // Space while help is open: close help (and unpause), don't boost.
+  if (helpOverlay && !helpOverlay.classList.contains("hidden")) {
+    setHelpOpen(false);
+    return;
+  }
   if (state === STATE.MENU) {
     document.getElementById("start-btn").click();
   } else if (state === STATE.DEAD) {
