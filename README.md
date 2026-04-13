@@ -36,8 +36,12 @@ pulls you in and you orbit that one too.
   background around it. A black hole paired with a companion
   star pulls glowing ejecta from the donor.
 - **Nudge your orbit** with the left/right arrow keys to
-  fine-tune your trajectory before launching. Press **P**
-  to pause.
+  fine-tune your trajectory before launching.
+- **Help & shortcuts** — click the **?** button or press **H**
+  for a pop-up cheat sheet (also pauses the game). **P**
+  pauses / resumes. **W** or tapping the score toggles a
+  launch-window hint that marks orbital angles where a tap
+  would land a clean capture.
 - **Watch your replay.** A cinematic follow-camera plays back
   your run with simplex-driven zoom behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right

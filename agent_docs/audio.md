@@ -57,17 +57,37 @@ contour, slow Y-drift for long-timescale evolution.
 
 ### Streak-driven tempo
 
-Base tempo `MUSIC_BPM`, each streak level adds 4 BPM up to
-`MUSIC_BPM_MAX`. Only changes at section boundaries.
+Base tempo `MUSIC_BPM` (120), each streak level adds 4 BPM up
+to `MUSIC_BPM_MAX` (132). Only changes at section boundaries.
+Pad duration uses `currentStepSec` so it tracks the current
+tempo instead of the module-init base.
+
+### Bass sub-octave clamp
+
+The bass voice adds a sub-sine an octave below the root for
+weight. If that sub would land below 55 Hz (i.e. the chord root
+is below ~110 Hz), the sub uses the root frequency instead —
+small speakers (mobile, laptop) resonate or distort at those
+very-low frequencies.
 
 ### Scheduler
 
-`setTimeout` loop at `MUSIC_SCHEDULE_INTERVAL` tick,
-`MUSIC_SCHEDULE_AHEAD` lookahead. Resync with
-`MUSIC_SAFETY_MARGIN` prevents past-time scheduling. All music
-envelopes are all-linear with `g.gain.value = 0` at creation.
-Music plays from first START through DEAD; never autostarts on
-the welcome screen.
+`setTimeout` loop at `MUSIC_SCHEDULE_INTERVAL` tick (100 ms),
+`MUSIC_SCHEDULE_AHEAD` lookahead (1.0 s — lots of headroom for
+mobile main-thread stalls). Resync with `MUSIC_SAFETY_MARGIN`
+prevents past-time scheduling. All music envelopes are
+all-linear with `g.gain.value = 0` at creation. Music plays
+from first START through DEAD; never autostarts on the welcome
+screen.
+
+### Node cleanup
+
+Every music oscillator gets an `onended` handler that
+disconnects the entire voice subgraph (oscillator + gain +
+filter, as applicable). Without this, stopped-but-connected
+nodes accumulate in the audio graph and bog down mobile GC —
+at 120 BPM that's ~33 dead chains per second. Explicit
+disconnect makes chains immediately GC-eligible.
 
 ### Intensity input
 

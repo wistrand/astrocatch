@@ -69,14 +69,14 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   → [Details](agent_docs/audio.md)
 
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
-  (quick-launch bonus + streak multiplier + comet bonus), star
-  generation with centralized `SPAWN` table and difficulty ramp.
-  Binary stars (two sub-stars orbiting COM, tidally locked).
-  Black holes with lensing grid; BH binaries get physics-driven
-  ejecta from donor to accretor. Crash wobble on star collision.
-  Pause (P key), orbital velocity nudge (arrow keys). Replay
-  with dynamic follow-cam. Focus-click suppression and
-  right-click filtering.
+  (quick-launch bonus + streak multiplier + comet bonus).
+  `SPAWN_TABLE` of interpolated variant weights (plain/binary/
+  bh/bhBinary) by star index; planets and comets are orthogonal
+  rolls on top. Binary stars (two sub-stars orbiting COM,
+  tidally locked). BH binaries get physics-driven ejecta from
+  donor to accretor. Crash wobble. Pause, arrow-key velocity
+  nudge, launch-window indicator. Help overlay. Replay with
+  dynamic follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences

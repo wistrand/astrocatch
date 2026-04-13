@@ -9,8 +9,12 @@ state and hands the renderer typed batches of instances.
 Five programs cover the entire render surface:
 
 - **`fullscreen`** — background radial gradient + procedural spiral
-  galaxies (logarithmic spiral arms, elliptical tilt, radial
-  falloff, all from hash-seeded positions with slow parallax).
+  galaxies. Each galaxy has a logarithmic-spiral disk with 2–4
+  arms, a wide soft white bulge (always), and, on ~45% of
+  galaxies, an additional tight bright bulge whose color is
+  randomized per-galaxy between white and warm yellow. Elliptical
+  tilt for a 3D look. Positions seeded per session by a
+  random `u_seed` uniform so the sky differs every page load.
   One quad from `gl_VertexID`, no vertex buffer.
 - **`lensing`** — gravitational lensing composite for black holes.
   Reads the scene FBO texture, applies UV distortion + event

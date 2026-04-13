@@ -20,25 +20,26 @@ prediction matches live physics bit-for-bit.
 
 ## Planets
 
-Probability ramps from 0% to `SPAWN.PLANET_MAX_PROB` over
-`SPAWN.PLANET_RAMP_STARS` captures (not assigned to binary
-stars). Stars that pass get 1–2 planets. Planets orbit at
-constant angular velocity, carry a small fraction of the
-parent's GM, and perturb the ship via `accelFromStarWithPlanets`.
-Plummer softening (`softR2`) prevents divergence on direct hits.
-No collision. Planet positions are a pure function of
-`ball.frame`, shared between live physics and prediction.
-Past-star planets are stripped in `captureStar`.
+Orthogonal to the variant roll. Probability ramps from 0% to
+`PLANET_PROB_MAX` over `PLANET_RAMP_STARS` captures. Skipped on
+binary variants (sub-stars already occupy that volume); allowed
+on plain and BH variants. Stars that pass get 1–2 planets.
+Planets orbit at constant angular velocity, carry a small
+fraction of the parent's GM, and perturb the ship via
+`accelFromStarWithPlanets`. Plummer softening (`softR2`) prevents
+divergence on direct hits. No collision. Planet positions are a
+pure function of `ball.frame`, shared between live physics and
+prediction. Past-star planets are stripped in `captureStar`.
 
 ## Comets
 
-Controlled by `SPAWN.COMET_PROB` and `SPAWN.COMET_MIN_STAR`.
-Analytical Kepler orbits (`solveKepler` + `cometPosition`), no
-numerical integration. Highly eccentric; direction chosen by
-scanning 8 directions for the biggest gap, apoapsis capped by
-clearance fraction, minimum apo:peri ratio required. Comets do
-NOT affect ship gravity. Close-pass within `COMET_SCORE_RADIUS`
-awards `COMET_BONUS` points with sparkle burst and removal.
+Controlled by `COMET_PROB` and `COMET_MIN_STAR`. Analytical
+Kepler orbits (`solveKepler` + `cometPosition`), no numerical
+integration. Highly eccentric; direction chosen by scanning 8
+directions for the biggest gap, apoapsis capped by clearance
+fraction, minimum apo:peri ratio required. Comets do NOT affect
+ship gravity. Close-pass within `COMET_SCORE_RADIUS` awards
+`COMET_BONUS` points with sparkle burst and removal.
 Multi-syndyne tail, distance-dependent coma glow, and solar-
 wind-pushed wake particles near periapsis. Past-star comets
 stripped alongside planets.
@@ -47,11 +48,14 @@ stripped alongside planets.
 
 Binary stars have `isBinary: true` and a `binary` object with
 sub-star data. Physics treats the COM as a single point mass
-(same GM, same gravity model). Crash detection in both
+(combined GM, same gravity model). Crash detection in both
 `predictCapture` and `checkCollisions` checks against both
 sub-star positions (computed from `ball.frame` and the binary's
-orbital parameters, same pattern as planets). No planets on
-binaries; comets allowed.
+orbital parameters, same pattern as planets). Captures against
+a binary use a wider periapsis floor (`minPeriMult = 2.2` instead
+of the default 1.5) so the captured orbit clears the sub-stars'
+reach. No planets on binaries; comets allowed. BH accretor is
+supported (`binary.accretorIsBH`).
 
 ## Black holes
 
