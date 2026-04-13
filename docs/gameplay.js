@@ -219,6 +219,21 @@ const REPLAY_SPEED = 1.75;
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
+// Persist best if the current run beats it. Called at death
+// and also on tab close / visibility change so a high score
+// from an interrupted run doesn't get lost.
+function saveBest() {
+  if (score > best) {
+    best = score;
+    try { localStorage.setItem("astrocatch_best", "" + best); }
+    catch (_) { /* quota / private mode — nothing to do */ }
+  }
+}
+window.addEventListener("pagehide", saveBest);
+window.addEventListener("beforeunload", saveBest);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") saveBest();
+});
 // Number of gameplays started. Used to auto-show the launch
 // window hint during the first few runs as a tutorial.
 const GAMEPLAYS_KEY = "astrocatch_gameplays";
@@ -276,17 +291,17 @@ let hasBoosted = false; // for the hint
 
 const SPAWN_TABLE_DEBUG = [
   { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0 },
-  { at: 1,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 125 },
+  { at: 1,   plain:  4, binary: 10, bh:  8, bhBinary: 4, monolith: 4 },
 ];
 
 const SPAWN_TABLE_GAME = [
   //          plain  binary   bh  bhBinary  monolith
   { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0 },
   { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0 },
-  { at: 10,   plain:  85, binary:  3, bh:  2, bhBinary: 1, monolith: 0 },
-  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 1 },
-  { at: 50,   plain:  74, binary: 10, bh:  8, bhBinary: 4, monolith: 3 },
-  { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
+  { at: 10,   plain:  85, binary:  3, bh:  2, bhBinary: 1, monolith: 1 },
+  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 2 },
+  { at: 50,   plain:  60, binary: 10, bh:  8, bhBinary: 4, monolith: 4 },
+  { at: 80,   plain:  50, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -1207,10 +1222,7 @@ function die(crash) {
       size: 2 + Math.random() * 4,
     });
   }
-  if (score > best) {
-    best = score;
-    localStorage.setItem("astrocatch_best", "" + best);
-  }
+  saveBest();
   setTimeout(() => {
     ball.alive = false;
     state = STATE.DEAD;
@@ -1665,25 +1677,6 @@ function draw() {
 
   // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
   const cam = renderer.cameraMat(camY, ZOOM, CAM_FOCUS_Y);
-
-  // Connector hints — faint lines from the current star through
-  // the next few upcoming stars. Sent as disconnected 2-point
-  // polyline segments.
-  if (state === STATE.PLAY && ball) {
-    const cs = ball.currentStar;
-    const lastIdx = Math.min(stars.length - 1, cs + 5);
-    if (lastIdx > cs) {
-      const segs = [];
-      for (let i = cs; i < lastIdx; i++) {
-        segs.push([
-          { x: stars[i].x, y: stars[i].y },
-          { x: stars[i + 1].x, y: stars[i + 1].y },
-        ]);
-      }
-      const col = [0.035, 0.035, 0.035, 0.035];
-      renderer.drawSegments(segs, cam, 1 / ZOOM, col, col);
-    }
-  }
 
   // Trail — single stroked polyline. Half-width 1.2 world units;
   // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.
