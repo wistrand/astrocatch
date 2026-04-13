@@ -107,13 +107,17 @@ if (fullscreenBtn) {
 // tapping anywhere inside the overlay itself.
 const helpBtn = document.getElementById("help-btn");
 const helpOverlay = document.getElementById("help");
+let pausedBeforeHelp = false;
 function setHelpOpen(open) {
   if (!helpOverlay) return;
+  const wasOpen = !helpOverlay.classList.contains("hidden");
   if (open) helpOverlay.classList.remove("hidden");
   else helpOverlay.classList.add("hidden");
-  // Pause/unpause mid-game so reading help doesn't cost a life.
+  // Pause on open / restore prior pause state on close, so a
+  // manually-paused game stays paused after closing help.
   if (state === STATE.PLAY || state === STATE.DYING) {
-    paused = open;
+    if (open && !wasOpen) { pausedBeforeHelp = paused; paused = true; }
+    else if (!open && wasOpen) { paused = pausedBeforeHelp; }
   }
 }
 if (helpBtn) {
@@ -278,7 +282,7 @@ const SPAWN_TABLE_GAME = [
   { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
-const SPAWN_TABLE = SPAWN_TABLE_GAME;
+const SPAWN_TABLE = SPAWN_TABLE_DEBUG;
 
 // Planets and comets are orthogonal to the variant roll.
 // Planets ramp in over the first PLANET_RAMP_STARS stars and only

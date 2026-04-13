@@ -591,7 +591,13 @@ void main() {
     vec3 t2 = -n + k;
     float tN = max(max(t1.x, t1.y), t1.z);
     float tF = min(min(t2.x, t2.y), t2.z);
-    if (tN > tF || tF < 0.0) {
+    // Signed coverage: positive inside the silhouette (tN<tF),
+    // negative outside. Feather across zero for AA on both
+    // sides of the edge instead of a hard cutoff on misses.
+    float signedCov = tF - tN;
+    float edgeAW = max(fwidth(signedCov), 1e-4);
+    float aa = smoothstep(-edgeAW, edgeAW, signedCov);
+    if (aa <= 0.0 || tF < 0.0) {
       outColor = vec4(0.0);
       return;
     }
@@ -604,8 +610,6 @@ void main() {
     // edges have |normal.z| near 0.
     float fresnel = pow(1.0 - abs(normal.z), 4.0);
     vec3 rim = vec3(0.45, 0.6, 0.9) * fresnel * 0.55;
-    float edgeAW = fwidth(tN);
-    float aa = 1.0 - smoothstep(tF - edgeAW, tF, tN);
     outColor = vec4(vec3(body) + rim, aa);
     return;
   }
