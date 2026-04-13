@@ -283,8 +283,8 @@ const SPAWN_TABLE_GAME = [
   //          plain  binary   bh  bhBinary  monolith
   { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0 },
   { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 3, monolith: 0 },
-  { at: 10,   plain:  85, binary:  3, bh:  5, bhBinary: 3, monolith: 1 },
-  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 2 },
+  { at: 10,   plain:  85, binary:  3, bh:  5, bhBinary: 3, monolith: 0 },
+  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 1 },
   { at: 50,   plain:  74, binary: 10, bh:  8, bhBinary: 4, monolith: 3 },
   { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
