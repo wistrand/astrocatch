@@ -1014,12 +1014,16 @@ if (scoreToggleEl) {
 }
 
 // ─── Launch-window indicator ────────────────────────────
-// The launch window is fixed in world space for the current
-// orbit (depends only on the current star, next star, and
-// orbit radius — none of which change while orbiting). Compute
-// once per capture, draw cached samples every frame as a ring
-// of dots around the orbit. Bright cyan = boost would succeed.
+// Sample positions along the ship's ACTUAL trajectory (an
+// ellipse after arrow-key nudges, otherwise the starting
+// circular orbit) by forward-simulating one orbital period,
+// then test each sample with predictCapture. Each sample
+// carries its world position + tangent direction.
 const LAUNCH_WINDOW_SAMPLES = 36;
+// Throttle state for periodic recompute under planet/binary
+// perturbation. Updated inside computeLaunchWindow().
+const LAUNCH_WINDOW_RECOMPUTE_FRAMES = 12; // ~0.1 s at 120 Hz
+let lastLaunchWindowFrame = -1;
 
 function computeLaunchWindow() {
   if (!ball) return;
@@ -1028,35 +1032,97 @@ function computeLaunchWindow() {
   const cs = stars[ball.currentStar];
   const next = stars[ball.currentStar + 1];
   if (!cs || !next) return;
-  const orbitR = cs.r * INITIAL_ORBIT_MULT;
-  const vCirc = AC.circularV(cs.gm, orbitR);
-  // Orbital direction from current ball state (sign of r × v).
-  const rx = ball.x - cs.x, ry = ball.y - cs.y;
-  const sign = Math.sign(rx * ball.vy - ry * ball.vx) || 1;
-  // Boost factors to try at each angle. Sparser than the 48-step
-  // game search — we only need to know IF any factor works.
+
+  // Forward-sim a clone of the ball using the nearest-star
+  // gravity model until we've swept a full 2π of angle around
+  // the star, sampling positions uniformly in angle. If the
+  // ball is on an escape trajectory (energy >= 0), abort.
+  const GM = cs.gm;
+  const rx0 = ball.x - cs.x, ry0 = ball.y - cs.y;
+  const v2 = ball.vx * ball.vx + ball.vy * ball.vy;
+  const r0 = Math.hypot(rx0, ry0);
+  const energy = 0.5 * v2 - GM / r0;
+  if (energy >= 0) return; // escaping, no closed orbit
+
+  // Sample at FIXED angular positions in the star's frame
+  // (0°, Δθ, 2Δθ, …) so the dots stay anchored in space as
+  // the ball orbits through them — otherwise each recompute
+  // shifts the sample set by how far the ball has moved,
+  // causing visible flicker.
+  let x = ball.x, y = ball.y, vx = ball.vx, vy = ball.vy;
+  const dirSign = Math.sign(rx0 * vy - ry0 * vx) || 1;
+  const targetStep = 2 * Math.PI / LAUNCH_WINDOW_SAMPLES;
+  // Pre-allocate samples by angular slot. Each slot is filled
+  // when the sim's theta sweeps across it.
+  const samples = new Array(LAUNCH_WINDOW_SAMPLES).fill(null);
+  let filled = 0;
+  let prevTheta = Math.atan2(ry0, rx0);
+  // Map theta into [0, 2π) for slot indexing.
+  function slot(theta) {
+    let t = theta;
+    if (t < 0) t += 2 * Math.PI;
+    if (t >= 2 * Math.PI) t -= 2 * Math.PI;
+    return Math.floor(t / targetStep);
+  }
+  // Record initial slot.
+  {
+    const idx = slot(prevTheta);
+    if (!samples[idx]) { samples[idx] = { x, y, vx, vy }; filled++; }
+  }
+  const dt = 1;
+  const maxSteps = 2000;
+  for (let step = 0; step < maxSteps; step++) {
+    // Velocity-Verlet step with gravity from cs only.
+    const dx = cs.x - x, dy = cs.y - y;
+    const r2 = dx * dx + dy * dy;
+    const r = Math.sqrt(r2);
+    const a = GM / r2;
+    const ax = a * dx / r, ay = a * dy / r;
+    const nx = x + vx * dt + 0.5 * ax * dt * dt;
+    const ny = y + vy * dt + 0.5 * ay * dt * dt;
+    const dx2 = cs.x - nx, dy2 = cs.y - ny;
+    const r22 = dx2 * dx2 + dy2 * dy2;
+    const r_ = Math.sqrt(r22);
+    const a2 = GM / r22;
+    const ax2 = a2 * dx2 / r_, ay2 = a2 * dy2 / r_;
+    vx += 0.5 * (ax + ax2) * dt;
+    vy += 0.5 * (ay + ay2) * dt;
+    x = nx; y = ny;
+    const theta = Math.atan2(y - cs.y, x - cs.x);
+    const curSlot = slot(theta);
+    if (!samples[curSlot]) {
+      samples[curSlot] = { x, y, vx, vy };
+      filled++;
+      if (filled >= LAUNCH_WINDOW_SAMPLES) break;
+    }
+    prevTheta = theta;
+  }
+  if (filled < 4) return;
+
+  // Test each sample with predictCapture at a few boost factors.
   const factors = [0.30, 0.55, 0.85, 1.30, 2.00, 2.80];
-  const window = new Array(LAUNCH_WINDOW_SAMPLES);
   const startFrame = ball.frame || 0;
-  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
-    const angle = (i / LAUNCH_WINDOW_SAMPLES) * Math.PI * 2;
-    const px = cs.x + Math.cos(angle) * orbitR;
-    const py = cs.y + Math.sin(angle) * orbitR;
-    // Tangential velocity (prograde matches ball's direction).
-    const vx = -Math.sin(angle) * vCirc * sign;
-    const vy =  Math.cos(angle) * vCirc * sign;
+  const window = new Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const s = samples[i];
+    if (!s) { window[i] = null; continue; }
     let success = false;
     for (let k = 0; k < factors.length; k++) {
       const f = factors[k];
       const pred = AC.predictCapture(stars, ball.currentStar,
-        px, py, vx * (1 + f), vy * (1 + f), startFrame);
+        s.x, s.y, s.vx * (1 + f), s.vy * (1 + f), startFrame);
       if (pred) { success = true; break; }
     }
-    window[i] = success;
+    const sp = Math.hypot(s.vx, s.vy) || 1;
+    window[i] = {
+      x: s.x, y: s.y,
+      tx: s.vx / sp, ty: s.vy / sp,
+      ok: success,
+    };
   }
   ball.launchWindow = window;
-  ball.launchWindowR = orbitR;
   ball.launchWindowStarIdx = ball.currentStar;
+  lastLaunchWindowFrame = ball.frame || 0;
 }
 
 function updateScoreUI(bump, bonus, streak) {
@@ -1422,6 +1488,20 @@ function renderTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
   updateEjecta();
 
+  // Throttled launch-window recompute when under planet
+  // perturbation. Only runs if the hint is currently visible
+  // so we don't burn CPU on invisible state.
+  if (showLaunchWindow && ball && ball.pendingCapture < 0) {
+    const cs0 = stars[ball.currentStar];
+    const perturbed = cs0 && (cs0.planets || cs0.isBinary);
+    const frame = ball.frame || 0;
+    if (perturbed && frame - lastLaunchWindowFrame
+        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES) {
+      computeLaunchWindow();
+      lastLaunchWindowFrame = frame;
+    }
+  }
+
   const cs = stars[ball.currentStar];
   // Sample the trail at the interpolated render position so the
   // trail tip stays glued to the ball visual. Trail is drawn as
@@ -1698,24 +1778,25 @@ function draw() {
       && ball.launchWindowStarIdx === ball.currentStar) {
     const cs = stars[ball.currentStar];
     if (cs) {
-      const orbitR = ball.launchWindowR;
       const lw = ball.launchWindow;
-      const pulse = 0.7 + 0.3 * Math.sin(nowSec * 3.5);
-      const c = c1Of(cs.colorIdx);
-      const a = pulse * 0.9;
-      const headCol = [c[0] * a, c[1] * a, c[2] * a, a];
+      // Same white + alpha-pulse as the next-star capture hint
+      // ring, a touch brighter so the ticks read clearly inside
+      // the orbit.
+      const pulse = 0.85 + 0.30 * Math.sin(nowSec * 2.4);
+      const a = 0.32 * pulse;
+      const headCol = [a, a, a, a];
       const tickLen = 5;
+      // Draw the ticks 10% inboard of the ship's orbit so they
+      // sit cleanly inside the trajectory instead of on top of it.
+      const inset = 0.9;
       for (let i = 0; i < lw.length; i++) {
-        if (!lw[i]) continue;
-        const angle = (i / lw.length) * Math.PI * 2;
-        const cx = cs.x + Math.cos(angle) * orbitR;
-        const cy = cs.y + Math.sin(angle) * orbitR;
-        // Tangent direction (perpendicular to radius).
-        const tx = -Math.sin(angle);
-        const ty =  Math.cos(angle);
+        const s = lw[i];
+        if (!s || !s.ok) continue;
+        const cx = cs.x + (s.x - cs.x) * inset;
+        const cy = cs.y + (s.y - cs.y) * inset;
         renderer.drawPolyline([
-          { x: cx - tx * tickLen, y: cy - ty * tickLen },
-          { x: cx + tx * tickLen, y: cy + ty * tickLen },
+          { x: cx - s.tx * tickLen, y: cy - s.ty * tickLen },
+          { x: cx + s.tx * tickLen, y: cy + s.ty * tickLen },
         ], cam, 0.9, headCol, headCol);
       }
     }
@@ -2368,9 +2449,33 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     if (state !== STATE.PLAY || !ball || ball.pendingCapture >= 0) return;
     e.preventDefault();
-    const scale = e.key === "ArrowLeft" ? 0.98 : 1.02;
+    const isBrake = e.key === "ArrowLeft";
+    const scale = isBrake ? 0.98 : 1.02;
     ball.vx *= scale;
     ball.vy *= scale;
+    // The orbit changed shape; the cached launch window was
+    // computed from a circular orbit and is now stale.
+    computeLaunchWindow();
+    // Exhaust puff — same params as a boost so the nudge is
+    // clearly visible. Right arrow (accel): retrograde puff.
+    // Left arrow (brake): prograde puff.
+    const sp = Math.hypot(ball.vx, ball.vy);
+    if (sp > 0.001) {
+      const dirSign = isBrake ? 1 : -1;
+      const baseA = Math.atan2(dirSign * ball.vy, dirSign * ball.vx);
+      const c1 = c1Of(stars[ball.currentStar].colorIdx);
+      for (let i = 0; i < 14; i++) {
+        const a = baseA + (Math.random() - 0.5) * 0.75;
+        const s2 = 1.2 + Math.random() * 2.8;
+        particles.push({
+          x: ball.x, y: ball.y,
+          vx: Math.cos(a) * s2, vy: Math.sin(a) * s2,
+          life: 1, decay: 0.025 + Math.random() * 0.02,
+          r: c1[0], g: c1[1], b: c1[2],
+          size: 2.2 + Math.random() * 2.2,
+        });
+      }
+    }
     return;
   }
   if (e.code !== "Space" && e.key !== " ") return;
