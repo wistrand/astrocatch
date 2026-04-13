@@ -264,18 +264,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0 },
-  { at: 1, plain: 0, binary: 1, bh: 1, bhBinary: 1 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0 },
+  { at: 1,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 25 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh   bhBinary
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 3 },
-  { at: 10,   plain:  85, binary:  3, bh:  5, bhBinary: 3 },
-  { at: 20,   plain:  75, binary:  8, bh:  5, bhBinary: 3 },
-  { at: 50,   plain:  75, binary: 10, bh:  8, bhBinary: 4 },
-  { at: 80,   plain:  70, binary: 10, bh: 12, bhBinary: 5 },
+  //          plain  binary   bh  bhBinary  monolith
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 3, monolith: 0 },
+  { at: 10,   plain:  85, binary:  3, bh:  5, bhBinary: 3, monolith: 1 },
+  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 2 },
+  { at: 50,   plain:  74, binary: 10, bh:  8, bhBinary: 4, monolith: 3 },
+  { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -359,6 +359,9 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // the COM; crash detection checks both sub-stars.
     isBinary: false,
     binary: null,
+    // Monolith flag — classic 2001 3D slab rendered via
+    // raymarched box. Same physics as a normal star.
+    isMonolith: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     const variant = pickVariant(starIdx);
@@ -369,17 +372,21 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     } else if (variant === "bhBinary") {
       s.isBlackHole = true;
       assignBinary(s);
+    } else if (variant === "monolith") {
+      s.isMonolith = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
-    // only. Ramps up with star index.
-    if (!s.isBinary) {
+    // only. Ramps up with star index. Skipped on monoliths.
+    if (!s.isBinary && !s.isMonolith) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
       }
     }
-    // Comet: orthogonal roll, applied to any variant.
-    if (starIdx >= COMET_MIN_STAR && Math.random() < COMET_PROB) {
+    // Comet: orthogonal roll, applied to any variant except
+    // monoliths (keeps them alien/alone).
+    if (!s.isMonolith && starIdx >= COMET_MIN_STAR
+        && Math.random() < COMET_PROB) {
       assignComets(s, starIdx);
     }
   }
@@ -892,6 +899,7 @@ function captureStar(idx) {
     stars[leavingIdx].comets = null;
     stars[leavingIdx].binary = null;
     stars[leavingIdx].isBinary = false;
+    stars[leavingIdx].isMonolith = false;
   }
 
   s.caught = true;
@@ -1732,6 +1740,7 @@ function draw() {
         hasRays: s.hasRays, nGran: s.nGran,
         isCurrent, isNext, isPast,
         isBlackHole: s.isBlackHole,
+        isMonolith: s.isMonolith,
       });
     }
   }

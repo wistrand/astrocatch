@@ -540,6 +540,7 @@ void main() {
   bool isNext    = (flags & 2) != 0;
   bool isPast    = (flags & 4) != 0;
   bool isBlackHole = (flags & 8) != 0;
+  bool isMonolith = (flags & 16) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -548,6 +549,64 @@ void main() {
     float ember = (1.0 - smoothstep(0.0, 2.5, d)) * 0.45;
     float a = clamp(aura + ember, 0.0, 1.0);
     outColor = vec4(vec3(a), a);
+    return;
+  }
+
+  // Monolith — raymarched 3D slab in the classic 2001 1:4:9
+  // proportion, tumbling around a per-monolith random axis.
+  // Solid near-black body with a subtle rim light at the
+  // silhouette. Doesn't wobble.
+  if (isMonolith) {
+    vec3 b = vec3(v_baseR * 0.189, v_baseR * 0.747, v_baseR * 1.692);
+    // Per-monolith rotation axis derived from seed.
+    vec3 axis = normalize(vec3(
+      sin(v_seed * 1.3),
+      cos(v_seed * 1.7 + 0.5) + 0.15, // bias slightly up
+      sin(v_seed * 2.1 + 1.0)
+    ));
+    float ang = u_time * 0.25 + v_seed;
+    float cA = cos(ang), sA = sin(ang), ic = 1.0 - cA;
+    // Rodrigues rotation matrix (box-local → world).
+    mat3 R = mat3(
+      cA + axis.x*axis.x*ic,
+        axis.y*axis.x*ic + axis.z*sA,
+        axis.z*axis.x*ic - axis.y*sA,
+      axis.x*axis.y*ic - axis.z*sA,
+        cA + axis.y*axis.y*ic,
+        axis.z*axis.y*ic + axis.x*sA,
+      axis.x*axis.z*ic + axis.y*sA,
+        axis.y*axis.z*ic - axis.x*sA,
+        cA + axis.z*axis.z*ic
+    );
+    mat3 Rinv = transpose(R);
+    // Orthographic ray in world: origin (v_local, +big), dir
+    // (0,0,-1). Transform into box-local frame.
+    vec3 ro = Rinv * vec3(v_local, 1000.0);
+    vec3 rd = Rinv * vec3(0.0, 0.0, -1.0);
+    // Slab intersection.
+    vec3 m = 1.0 / rd;
+    vec3 n = m * ro;
+    vec3 k = abs(m) * b;
+    vec3 t1 = -n - k;
+    vec3 t2 = -n + k;
+    float tN = max(max(t1.x, t1.y), t1.z);
+    float tF = min(min(t2.x, t2.y), t2.z);
+    if (tN > tF || tF < 0.0) {
+      outColor = vec4(0.0);
+      return;
+    }
+    // Face normal in box-local, rotated back to world for shading.
+    vec3 normalLocal = -sign(rd) * step(vec3(tN - 1e-3), t1);
+    vec3 normal = R * normalLocal;
+    float NdotL = max(dot(normal, normalize(vec3(-0.3, 0.6, 0.8))), 0.0);
+    float body = 0.03 + 0.08 * NdotL;
+    // Fresnel rim — view dir is (0,0,-1) world; silhouette
+    // edges have |normal.z| near 0.
+    float fresnel = pow(1.0 - abs(normal.z), 4.0);
+    vec3 rim = vec3(0.45, 0.6, 0.9) * fresnel * 0.55;
+    float edgeAW = fwidth(tN);
+    float aa = 1.0 - smoothstep(tF - edgeAW, tF, tN);
+    outColor = vec4(vec3(body) + rim, aa);
     return;
   }
 
@@ -1336,6 +1395,7 @@ export function createRenderer(canvas) {
       if (s.isNext)     flags |= 2;
       if (s.isPast)     flags |= 4;
       if (s.isBlackHole) flags |= 8;
+      if (s.isMonolith) flags |= 16;
       starScratch[base + 0] = s.x;
       starScratch[base + 1] = s.y;
       starScratch[base + 2] = c1[0];
