@@ -219,6 +219,13 @@ const REPLAY_SPEED = 1.75;
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
+// Number of gameplays started. Used to auto-show the launch
+// window hint during the first few runs as a tutorial.
+const GAMEPLAYS_KEY = "astrocatch_gameplays";
+const TUTORIAL_GAMES = 3;
+const TUTORIAL_STARS = 15;
+let gameplayCount = +(localStorage.getItem(GAMEPLAYS_KEY) || 0);
+let isTutorialRun = false;
 // Tracked ball speed, normalized to [0, 1] against MAX_SPEED,
 // fed to audio.setIntensity() each render frame so the music's
 // chord progression escalates as the player boosts faster.
@@ -282,7 +289,7 @@ const SPAWN_TABLE_GAME = [
   { at: 80,   plain:  70, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
 ];
 
-const SPAWN_TABLE = SPAWN_TABLE_DEBUG;
+const SPAWN_TABLE = SPAWN_TABLE_GAME;
 
 // Planets and comets are orthogonal to the variant roll.
 // Planets ramp in over the first PLANET_RAMP_STARS stars and only
@@ -741,6 +748,12 @@ function initMenuStars() {
 
 function init() {
   paused = false;
+  // Tutorial: auto-show the launch window hint on the first
+  // few gameplays. Player can still toggle it off mid-run.
+  isTutorialRun = gameplayCount < TUTORIAL_GAMES;
+  if (isTutorialRun) showLaunchWindow = true;
+  gameplayCount++;
+  localStorage.setItem(GAMEPLAYS_KEY, "" + gameplayCount);
   stars = [];
   trail = [];
   particles = [];
@@ -1657,7 +1670,12 @@ function draw() {
   // Launch-window indicator — short tangent ticks on the orbit
   // where a tap would land a clean capture. Player watches the
   // bright zone approach as they orbit.
-  if (showLaunchWindow && ball && ball.launchWindow
+  // During a tutorial run, auto-hide the hint past
+  // TUTORIAL_STARS even if the player hasn't manually toggled
+  // it off — the assist fades away once they've got the basics.
+  const tutorialEnded = isTutorialRun && starsVisited >= TUTORIAL_STARS;
+  if (showLaunchWindow && !tutorialEnded
+      && ball && ball.launchWindow
       && ball.pendingCapture < 0
       && ball.launchWindowStarIdx === ball.currentStar) {
     const cs = stars[ball.currentStar];

@@ -4,7 +4,7 @@
 
 <img src="docs/image.png" width="250" alt="ASTROCATCH gameplay screenshot — the ball tracing a magenta trail from a pink star toward a green star with a dashed capture ring">
 
-A one-tap browser game where you slingshot between stars. Tap
+A one-tap browser game where you move between stars. Tap
 when your orbit aims at the next one. The game picks a boost,
 gravity bends the path, and you get re-captured on the other
 side.
