@@ -52,12 +52,12 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   → [Details](agent_docs/physics.md)
 
 - **Rendering** (`renderer.js`): WebGL2, 5 shader programs
-  (fullscreen / lensing / circle / star / polyline). Stars and
-  black holes rendered procedurally per pixel. Black holes use a
-  conditional full-screen FBO + lensing composite pass with
-  procedural grid for visible distortion. Star shader supports
-  crash wobble (elliptical deformation) and tidal locking for
-  binaries. Background includes procedural spiral galaxies.
+  (fullscreen / lensing / circle / star / polyline). Stars, black
+  holes, and raymarched 3D monolith slabs rendered procedurally
+  per pixel. Black holes use a conditional full-screen FBO +
+  lensing composite pass with procedural grid for visible
+  distortion. Star shader supports crash wobble and tidal locking
+  for binaries. Background includes procedural spiral galaxies.
   No Canvas2D, no libraries.
   → [Details](agent_docs/rendering.md)
 
@@ -71,9 +71,10 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
   (quick-launch bonus + streak multiplier + comet bonus).
   `SPAWN_TABLE` of interpolated variant weights (plain/binary/
-  bh/bhBinary) by star index; planets and comets are orthogonal
-  rolls on top. Binary stars (two sub-stars orbiting COM,
-  tidally locked). BH binaries get physics-driven ejecta from
+  bh/bhBinary/monolith) by star index; planets and comets are
+  orthogonal rolls on top. Binary stars (two sub-stars orbiting
+  COM, tidally locked). Monoliths play as normal stars but
+  render as rotating 3D slabs. BH binaries get physics-driven ejecta from
   donor to accretor. Crash wobble. Pause, arrow-key velocity
   nudge, launch-window indicator. Help overlay. Replay with
   dynamic follow-cam. Focus-click suppression.

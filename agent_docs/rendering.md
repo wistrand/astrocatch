@@ -48,7 +48,7 @@ No libraries. Shaders live as template strings inside `renderer.js`.
 `vec2 center, vec4 c1(rgb+baseR), vec4 c2(rgb+seed), vec4 params(hasRays, nGran, pulse, flags), vec2 wobble(amount, angle)`.
 
 Flags: bit 0 = isCurrent, bit 1 = isNext, bit 2 = isPast,
-bit 3 = isBlackHole.
+bit 3 = isBlackHole, bit 4 = isMonolith.
 
 ## Black holes
 
@@ -70,6 +70,22 @@ Black holes are stars with `isBlackHole: true` (flag bit 3 in
 - **`BH_VISUAL_SCALE`** in gameplay.js decouples visual size from
   physics — the event horizon appears smaller than the gravity
   well.
+
+## Monoliths
+
+Separate branch in the star fragment shader — runs before the
+wobble transform so monoliths stay rigid. Raymarches an
+orthographic ray against an axis-aligned slab in box-local
+coordinates; the box is oriented via a Rodrigues rotation
+matrix built from a per-monolith random axis (derived from
+`v_seed`) and a time-driven angle. Hit normal is transformed
+back to world space for directional-diffuse lighting plus a
+`pow(1 - |normal.z|, 4)` fresnel rim. Edge AA via `fwidth(tN)`
+on the hit depth.
+
+Half-extents: `(0.189, 0.747, 1.692) * v_baseR` — classic
+1:4:9 proportion, scaled to keep corners clear of the capture
+orbit.
 
 ## Crash wobble
 

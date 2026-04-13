@@ -45,10 +45,10 @@ points, sparkle burst, twinkly sound, comet removed.
 ## Spawn table
 
 `SPAWN_TABLE` is a list of rows at star-index control points.
-Each row lists weights for each variant (`plain`, `binary`, `bh`,
-`bhBinary`). Weights interpolate linearly between rows and
-plateau past the last row. Normalized at sample time, so values
-don't need to sum to 100.
+Each row lists weights for each variant (`plain`, `binary`,
+`bh`, `bhBinary`, `monolith`). Weights interpolate linearly
+between rows and plateau past the last row. Normalized at
+sample time, so values don't need to sum to 100.
 
 Planets and comets are **orthogonal** rolls applied on top:
 
@@ -107,12 +107,26 @@ that arc from its surface and spiral into the BH under inflated
 gravity + distance-dependent drag. Particles use the donor's
 color.
 
+## Monoliths
+
+Flagged `isMonolith: true`. Physics identical to normal stars
+(gravity, collision, capture). Rendered as a raymarched 3D slab
+in 1:4:9 proportion (classic 2001), tumbling around a random
+per-monolith axis derived from the star's seed. Near-black body
+with a cyan-blue fresnel rim at silhouette edges.
+
+Monoliths don't wobble on crash, don't get planets or comets,
+and can't be binary components (the raymarched occlusion against
+moving sub-stars doesn't work cleanly in 2D). Hint ring and
+launch window behave normally.
+
 ## Crash wobble
 
 When the ship crashes, the star gets a decaying elliptical
 deformation (`s.wobble`, `s.wobbleAngle`) — squeezed flat on
 the impact side, relaxing over ~1.5 s. Driven through the star
-shader via per-instance wobble attributes.
+shader via per-instance wobble attributes. Monoliths are
+excluded (rigid 3D body).
 
 ## Launch-window hint
 

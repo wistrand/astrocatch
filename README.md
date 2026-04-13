@@ -34,7 +34,8 @@ pulls you in and you orbit that one too.
   Occasionally a star is replaced by a black hole — same
   mechanics, but with gravitational lensing that warps the
   background around it. A black hole paired with a companion
-  star pulls glowing ejecta from the donor.
+  star pulls glowing ejecta from the donor. Rarely, a
+  tumbling 3D monolith appears instead of a star.
 - **Nudge your orbit** with the left/right arrow keys to
   fine-tune your trajectory before launching.
 - **Help & shortcuts** — click the **?** button or press **H**

@@ -68,6 +68,13 @@ the physics radius. Black holes can be the accretor in a binary
 pair — same physics, with ejecta particles (visual only, no
 ship interaction) handled in `gameplay.js`.
 
+## Monoliths
+
+Stars with `isMonolith: true`. Physics identical to normal
+stars (gravity, collision, capture). Only the visual rendering
+differs — a raymarched 3D slab in `renderer.js`. Not supported
+as binary components.
+
 ## Key invariants
 
 - `SAFE_SEP` guarantees minimum star separation.
