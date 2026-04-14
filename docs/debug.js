@@ -141,6 +141,7 @@ stars = [
     addComet(s);
   }),
   cell(0, 3, "ringworld", (s) => { s.isRingworld = true; }),
+  cell(1, 3, "ship orbit", (s) => { s.hasShip = true; }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -271,9 +272,15 @@ window.addEventListener("keydown", (e) => {
 });
 
 // ─── Render loop ───────────────────────────────────────────
+// Wrap the shader clock at a multiple of 2π so sin(u_time * k)
+// stays bit-identical across the wrap boundary for every k used
+// (all k are ≤ 2-decimal rationals). Matches gameplay.js's
+// TIME_WRAP so the debug inspector doesn't develop precision
+// rings after being open for an hour.
+const TIME_WRAP = Math.PI * 2 * 10000;
 let frame = 0;
 function loop(t) {
-  const tSec = t / 1000;
+  const tSec = (t / 1000) % TIME_WRAP;
   frame++;
 
   // Detect any visible BH for the conditional FBO.
@@ -305,7 +312,7 @@ function loop(t) {
       const orbAngle = frame * b.omega + b.phase;
       for (let j = 0; j < 2; j++) {
         const subBH = j === 1 && b.accretorIsBH;
-        const tidalSeed = orbAngle + j * Math.PI - tSec;
+        const tidalSeed = (orbAngle + j * Math.PI - tSec) % TIME_WRAP;
         starBatch.push({
           x: subs[j].x, y: subs[j].y,
           r: subBH ? subs[j].r * 0.5 : subs[j].r,
@@ -333,6 +340,47 @@ function loop(t) {
     }
   }
   renderer.drawStarBatch(starBatch, cam);
+
+  // ─ Ship on any star with hasShip — same glow+core as gameplay ─
+  const shipBatch = [];
+  const shipTrailSegments = [];
+  for (const s of stars) {
+    if (!s.hasShip) continue;
+    const orbitR = s.r * 2.8;
+    const omega = Math.sqrt(s.gm / (orbitR * orbitR * orbitR));
+    const a = frame * omega;
+    const sx = s.x + Math.cos(a) * orbitR;
+    const sy = s.y + Math.sin(a) * orbitR;
+    const bc = c1Of(s.colorIdx);
+    shipBatch.push({
+      x: sx, y: sy,
+      outerR: 22, innerR: 0,
+      r: bc[0], g: bc[1], b: bc[2], a: 0.53,
+      kind: 2,
+    });
+    shipBatch.push({
+      x: sx, y: sy,
+      outerR: 7, innerR: 0,
+      r: 1, g: 1, b: 1, a: 1,
+      kind: 0,
+    });
+    // Short fading trail — 20 samples back along the orbit.
+    const pts = [];
+    for (let k = 20; k >= 0; k--) {
+      const ak = (frame - k * 2) * omega;
+      pts.push({
+        x: s.x + Math.cos(ak) * orbitR,
+        y: s.y + Math.sin(ak) * orbitR,
+      });
+    }
+    shipTrailSegments.push({ pts, color: bc });
+  }
+  for (const seg of shipTrailSegments) {
+    const tail = [0, 0, 0, 0];
+    const head = [seg.color[0], seg.color[1], seg.color[2], 0.6];
+    renderer.drawPolyline(seg.pts, cam, 1.2, tail, head);
+  }
+  if (shipBatch.length) renderer.drawCircleBatch(shipBatch, cam);
 
   // ─ Planet circles ───────────────────────────────────────
   const planetBatch = [];

@@ -40,6 +40,19 @@ via `/docs` folder. All non-browser tooling lives under `scripts/`.
   (invisible hint, unchanged state, culled region), and guard
   the biggest loops with tighter iteration bounds (e.g. start
   at `currentStarIdx` when past stars can't affect the result).
+- **Shader-clock precision.** Any `u_time`-style uniform that
+  grows with wall-clock time is uploaded as a 32-bit float. After
+  hours of play the argument of `sin(u_time * k)` loses enough
+  mantissa to produce visible banding ("precision rings") on
+  stars. Both `gameplay.js` and `debug.js` wrap their clock at
+  `TIME_WRAP = Math.PI * 2 * 10000` (~62832 s ≈ 17.4 h). The
+  value is lossless **only while every shader `k` multiplier is
+  a rational with ≤ 2 fractional decimals** — so `W * k` is an
+  integer multiple of `2π` and `sin` is bit-identical across the
+  wrap. Same rule applies to any derived seed fed into the
+  shader (e.g. binary `tidalSeed`). When adding a new `u_time`-
+  based animation, keep `k` to 2 decimals (0.25, 0.12, 2.5…) or
+  bump `TIME_WRAP` accordingly.
 
 ## Run locally
 
