@@ -677,6 +677,11 @@ void main() {
     vec3 oPerp = o - dot(o, axis) * axis;
     vec3 dPerp = d - dot(d, axis) * axis;
     float A = dot(dPerp, dPerp);
+    // Guard: when the ring is tumbled so its axis aligns with
+    // the view direction, dPerp → 0 and A → 0, blowing up t1/t2
+    // to ±∞/NaN. Skip the ring/plate intersection entirely in
+    // that edge-on window and fall through to the sun branch.
+    bool ringSkip = A < 1e-6;
     float B = 2.0 * dot(oPerp, dPerp);
     float C = dot(oPerp, oPerp) - R * R;
     float disc = B * B - 4.0 * A * C;
@@ -688,7 +693,7 @@ void main() {
     bool ringHit = false;
     bool isInside = false;
     vec3 hit; float axPos;
-    if (disc >= 0.0) {
+    if (!ringSkip && disc >= 0.0) {
       float sqDisc = sqrt(disc);
       float t1 = (-B - sqDisc) / (2.0 * A);
       float t2 = (-B + sqDisc) / (2.0 * A);
@@ -700,6 +705,63 @@ void main() {
       bool v2 = abs(ax2) <= H * 0.5;
       if (v1) { hit = h1; axPos = ax1; isInside = false; ringHit = true; }
       else if (v2) { hit = h2; axPos = ax2; isInside = true; ringHit = true; }
+    }
+    // ── Shadow plates ──────────────────────────────────────
+    // A smaller inner cylinder of N orbiting plates sits between
+    // the outside ring wall and the sun. They render as their
+    // own geometry (dark structural panels, near-face shaded,
+    // far-face sun-lit with a tight specular), and also cast
+    // sun-shadow onto the inside ring surface.
+    //
+    // Camera visibility: plates are ALWAYS behind the ring's
+    // outside face, so when the outside face is the selected
+    // ring hit, plates are occluded. In every other case (inside
+    // face visible, OR ray misses ring entirely but still passes
+    // through plate radius), plates may be drawn.
+    int plateCount = (int(v_flags) >> 8) & 7;
+    float Rp = R * 0.55;
+    float Hp = H * 0.70;
+    float plateSpin = u_time * 0.04;
+    float plateSpacing = (plateCount > 0) ? TAU / float(plateCount) : TAU;
+    float plateHalfW = plateSpacing * 0.22;
+    bool outsideVisible = ringHit && !isInside;
+    if (plateCount > 0 && !outsideVisible && !ringSkip) {
+      float Cp = dot(oPerp, oPerp) - Rp * Rp;
+      float discp = B * B - 4.0 * A * Cp;
+      if (discp >= 0.0) {
+        float sqp = sqrt(discp);
+        for (int k = 0; k < 2; k++) {
+          float tp = (k == 0) ? (-B - sqp) / (2.0 * A)
+                              : (-B + sqp) / (2.0 * A);
+          vec3 hp = o + tp * d;
+          float axp = dot(hp, axis);
+          if (abs(axp) > Hp * 0.5) continue;
+          vec2 rp = vec2(dot(hp, basU), dot(hp, basV));
+          float thetaP = atan(rp.y, rp.x);
+          float tw = mod(thetaP + plateSpin, plateSpacing);
+          if (abs(tw - plateSpacing * 0.5) < plateHalfW) {
+            vec3 pnrm = (hp - dot(hp, axis) * axis) / Rp;
+            bool sunFace = (k == 1);
+            // Sun-facing visible normal is the cylinder's INWARD
+            // direction (pointing from the plate toward the
+            // central sun); non-sun face keeps the outward.
+            if (sunFace) pnrm = -pnrm;
+            float pndv = max(pnrm.z, 0.0);
+            float pWidthT = axp / Hp + 0.5;
+            vec3 pCol = vec3(0.10, 0.11, 0.15)
+                       * (0.45 + 1.2 * pndv);
+            if (sunFace) {
+              // Tight highlight where the inward face angle
+              // faces the camera. Plates look metallic/pale.
+              float ps = pow(pndv, 24.0);
+              pCol += vec3(1.0, 0.95, 0.82) * ps * 0.55;
+            }
+            pCol *= mix(1.10, 0.80, pWidthT);
+            outColor = vec4(pCol, 1.0);
+            return;
+          }
+        }
+      }
     }
     if (!ringHit) {
       if (centerD < sunR) {
@@ -772,6 +834,36 @@ void main() {
       float specIn = pow(max(-outward.z, 0.0), 32.0);
       col += vec3(1.0, 0.95, 0.80) * specIn * 0.85 * (1.0 - landT);
       col *= vertShade;
+      // Sun-shadow + city lights — skipped entirely when the
+      // ringworld has no plates (plateCount == 0), so a plate-
+      // free ring spends no shader cycles on either.
+      if (plateCount > 0) {
+        float thetaWrap = mod(theta + plateSpin, plateSpacing);
+        float angDist = abs(thetaWrap - plateSpacing * 0.5);
+        float angIn = 1.0 - smoothstep(
+          plateHalfW * 0.7, plateHalfW * 0.95, angDist
+        );
+        float axAtPlate = abs(axPos) * Rp / R;
+        float axIn = 1.0 - smoothstep(
+          Hp * 0.45, Hp * 0.55, axAtPlate
+        );
+        float shadow = angIn * axIn;
+        col *= 1.0 - shadow * 0.75;
+        // City lights — warm dots on land in deep-night zones.
+        // Domain-warped sum-of-sins so clumps don't grid-align.
+        // u multipliers kept integer for seam continuity.
+        float cwu = u + 0.35 * sin(widthT * 13.0 + u * 5.0);
+        float cww = widthT + 0.28 * sin(u * 7.0 - widthT * 17.0);
+        float cityN = sin(cwu * 61.0 + cww * 29.0 + 0.3)
+                    + 0.75 * sin(cwu * 113.0 - cww * 47.0 + 1.7)
+                    + 0.50 * sin(cwu * 181.0 + cww * 83.0 - 0.7);
+        float cities = smoothstep(1.90, 2.20, cityN);
+        vec3 cityCol = vec3(1.0, 0.78, 0.42);
+        // pow(shadow, 3) concentrates lights toward the deep
+        // night center, so twilight contributes negligibly.
+        float cityShadow = pow(shadow, 3.0);
+        col += cityCol * cities * cityShadow * landT * 1.20;
+      }
       outColor = vec4(col, 1.0);
       return;
     } else {
@@ -1598,6 +1690,13 @@ export function createRenderer(canvas) {
       if (s.isBlackHole) flags |= 8;
       if (s.isMonolith) flags |= 16;
       if (s.isRingworld) flags |= 64;
+      // Ring plate count packed in flag bits 8-10 (0-7). 0 means
+      // the ringworld has no shadow plates — shader skips all
+      // plate/shadow/city-light work in that case.
+      if (s.isRingworld) {
+        const pc = Math.max(0, Math.min(7, s.ringPlateCount | 0));
+        flags |= pc << 8;
+      }
       starScratch[base + 0] = s.x;
       starScratch[base + 1] = s.y;
       starScratch[base + 2] = c1[0];

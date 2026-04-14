@@ -143,8 +143,15 @@ stars = [
     s.isBlackHole = true;
     addComet(s);
   }),
-  cell(0, 3, "ringworld", (s) => { s.isRingworld = true; }),
+  cell(0, 3, "ringworld (5 plates)", (s) => {
+    s.isRingworld = true;
+    s.ringPlateCount = 5;
+  }),
   cell(1, 3, "ship orbit", (s) => { s.hasShip = true; }),
+  cell(2, 3, "ringworld (no plates)", (s) => {
+    s.isRingworld = true;
+    s.ringPlateCount = 0;
+  }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -339,6 +346,7 @@ function loop(t) {
         isBlackHole: s.isBlackHole,
         isMonolith: s.isMonolith,
         isRingworld: s.isRingworld,
+        ringPlateCount: s.ringPlateCount | 0,
       });
     }
   }

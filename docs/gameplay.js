@@ -336,6 +336,7 @@ function serializeStar(s, full) {
   stub.isBinary = !!s.isBinary;
   stub.isMonolith = !!s.isMonolith;
   stub.isRingworld = !!s.isRingworld;
+  if (s.isRingworld) stub.ringPlateCount = s.ringPlateCount | 0;
   if (s.planets) stub.planets = s.planets;
   if (s.comets) stub.comets = s.comets;
   if (s.binary) {
@@ -541,6 +542,10 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     isMonolith: false,
     // Ringworld flag — sun with a tumbling earth-textured band.
     isRingworld: false,
+    // Number of shadow-plate/night sectors (0-7). 0 = no plates,
+    // no shadows, no night-side city lights. Only meaningful
+    // when isRingworld is true.
+    ringPlateCount: 0,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     const variant = pickVariant(starIdx);
@@ -555,6 +560,9 @@ function makeStar(x, y, r, colorIdx, starIdx) {
       s.isMonolith = true;
     } else if (variant === "ringworld") {
       s.isRingworld = true;
+      // Random 0-7 plates. 0 means no night/day sectors —
+      // roughly 1 in 8 ringworlds is plate-free for variety.
+      s.ringPlateCount = Math.floor(Math.random() * 8);
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
     // only. Ramps up with star index. Skipped on monoliths.
@@ -1013,6 +1021,7 @@ function resumeFromSave(data) {
     binary: raw.binary || null,
     isMonolith: !!raw.isMonolith,
     isRingworld: !!raw.isRingworld,
+    ringPlateCount: raw.ringPlateCount | 0,
   }));
   // Re-orbit the ball around the saved anchor star with a fresh
   // circular orbit — same math as continueRun. The saved x/y/vx/
@@ -1190,6 +1199,7 @@ function captureStar(idx) {
     stars[leavingIdx].isBinary = false;
     stars[leavingIdx].isMonolith = false;
     stars[leavingIdx].isRingworld = false;
+    stars[leavingIdx].ringPlateCount = 0;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -2090,6 +2100,7 @@ function draw() {
         isBlackHole: s.isBlackHole,
         isMonolith: s.isMonolith,
         isRingworld: s.isRingworld,
+        ringPlateCount: s.ringPlateCount,
       });
     }
   }
