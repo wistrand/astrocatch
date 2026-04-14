@@ -124,6 +124,27 @@
   #help-btn { left: 64px; }
   #help-btn svg { width: 26px; height: 26px; margin: 7px auto; }
 
+  /* Paused indicator — same color as HUD buttons, centered on
+     the bottom row. Click to unpause. */
+  #paused-indicator {
+    position: absolute;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 20px);
+    left: 50%;
+    transform: translateX(-50%);
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 14px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    cursor: pointer;
+    pointer-events: auto;
+    z-index: 20;
+    user-select: none;
+    display: none;
+    transition: color 0.2s;
+  }
+  #paused-indicator:hover { color: rgba(255, 255, 255, 0.95); }
+  #paused-indicator.on { display: block; }
+
   /* Help overlay — concise text + shortcut list. Uses .overlay
      for positioning/backdrop, adds its own layout on top. */
   #help .help-body {
@@ -394,6 +415,7 @@
   </button>
   <div id="score-display" style="display:none"><div id="score">0</div><div id="sub">best 0 · 0 stars</div></div>
   <div id="hint">tap to boost</div>
+  <div id="paused-indicator">paused</div>
 
   <div id="start" class="overlay">
     <h1>ASTROCATCH</h1>

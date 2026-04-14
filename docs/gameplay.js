@@ -26,6 +26,17 @@ function resize() {
 window.addEventListener("resize", () => {
   resize();
   if (state === STATE.MENU) initMenuStars();
+  // Re-center the camera on the current star so a window
+  // resize (or device orientation flip) doesn't leave the
+  // ship off-screen or in a weird spot. Snap both live camY
+  // and the target camY. Also recompute the launch window
+  // since its cached positions use world coords unaffected
+  // by viewport, but the hint may look stale otherwise.
+  if (ball && stars[ball.currentStar]) {
+    const cy = -(stars[ball.currentStar].y - H * CAM_FOCUS_Y);
+    camY = cy;
+    camTargetY = cy;
+  }
 });
 resize();
 renderer = createRenderer(canvas);
@@ -118,6 +129,7 @@ function setHelpOpen(open) {
   if (state === STATE.PLAY || state === STATE.DYING) {
     if (open && !wasOpen) { pausedBeforeHelp = paused; paused = true; }
     else if (!open && wasOpen) { paused = pausedBeforeHelp; }
+    syncPausedIndicator();
   }
 }
 if (helpBtn) {
@@ -763,6 +775,7 @@ function initMenuStars() {
 
 function init() {
   paused = false;
+  syncPausedIndicator();
   // Tutorial: auto-show the launch window hint on the first
   // few gameplays. Player can still toggle it off mid-run.
   isTutorialRun = gameplayCount < TUTORIAL_GAMES;
@@ -1274,6 +1287,7 @@ function boost() {
 function die(crash) {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
+  syncPausedIndicator();
   ball.pendingCapture = -1; // cancel any in-flight transfer
   if (crash) audio.deathCrash(); else audio.death();
   // Music keeps playing through DYING → DEAD → next PLAY.
@@ -2299,6 +2313,23 @@ let physicsAccumulator = 0;
 // a bogus elapsed from module-load time to first vsync.
 let lastFrameTime = -1;
 let paused = false;
+// Paused indicator in the HUD. Call syncPausedIndicator() after
+// any mutation of `paused` to keep the text in/out of the DOM.
+const pausedEl = document.getElementById("paused-indicator");
+function syncPausedIndicator() {
+  if (!pausedEl) return;
+  const show = paused && state === STATE.PLAY;
+  if (show) pausedEl.classList.add("on");
+  else pausedEl.classList.remove("on");
+}
+if (pausedEl) {
+  pausedEl.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    paused = false;
+    syncPausedIndicator();
+  });
+}
 // Interpolated render position for the ball. Equal to ball.x/y
 // only at alpha = 1 (end of a physics tick); otherwise lerped
 // between the state before the most recent tick and the current
@@ -2408,6 +2439,33 @@ document.addEventListener("pointerdown", (e) => {
   }
   if (state !== STATE.PLAY) return;
   if (performance.now() - lastWindowFocusTime < 150) return;
+  // Click on the current star toggles pause. Works in both
+  // directions (including unpausing). Screen → world via the
+  // inverse of cameraMat:
+  //   world.x = (sx - W/2)/ZOOM + W/2
+  //   world.y = (sy - H*fy)/ZOOM + H*fy - camY
+  if (ball) {
+    const rect = canvas.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    const fy = CAM_FOCUS_Y;
+    const wx = (sx - W / 2) / ZOOM + W / 2;
+    const wy = (sy - H * fy) / ZOOM + H * fy - camY;
+    const cs = stars[ball.currentStar];
+    if (cs) {
+      const dx = wx - cs.x, dy = wy - cs.y;
+      const hitR = cs.r * 2.0; // generous tap target
+      if (dx * dx + dy * dy < hitR * hitR) {
+        e.preventDefault();
+        paused = !paused;
+        syncPausedIndicator();
+        return;
+      }
+    }
+  }
+  // Clicks outside the star: suppressed while paused so a
+  // stray tap can't boost. Star-click still unpauses above.
+  if (paused) { e.preventDefault(); return; }
   e.preventDefault();
   handleTap();
 });
@@ -2453,6 +2511,7 @@ document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     if (state !== STATE.PLAY && state !== STATE.DYING) return;
     paused = !paused;
+    syncPausedIndicator();
     return;
   }
   // Arrow keys nudge orbital velocity while in orbit.
@@ -2504,7 +2563,7 @@ document.addEventListener("keydown", (e) => {
     document.getElementById("start-btn").click();
   } else if (state === STATE.DEAD) {
     document.getElementById("retry-btn").click();
-  } else {
+  } else if (!paused) {
     handleTap();
   }
 });
