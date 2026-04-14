@@ -2490,32 +2490,8 @@ document.addEventListener("pointerdown", (e) => {
   }
   if (state !== STATE.PLAY) return;
   if (performance.now() - lastWindowFocusTime < 150) return;
-  // Click on the current star toggles pause. Works in both
-  // directions (including unpausing). Screen → world via the
-  // inverse of cameraMat:
-  //   world.x = (sx - W/2)/ZOOM + W/2
-  //   world.y = (sy - H*fy)/ZOOM + H*fy - camY
-  if (ball) {
-    const rect = canvas.getBoundingClientRect();
-    const sx = e.clientX - rect.left;
-    const sy = e.clientY - rect.top;
-    const fy = CAM_FOCUS_Y;
-    const wx = (sx - W / 2) / ZOOM + W / 2;
-    const wy = (sy - H * fy) / ZOOM + H * fy - camY;
-    const cs = stars[ball.currentStar];
-    if (cs) {
-      const dx = wx - cs.x, dy = wy - cs.y;
-      const hitR = cs.r * 2.0; // generous tap target
-      if (dx * dx + dy * dy < hitR * hitR) {
-        e.preventDefault();
-        paused = !paused;
-        syncPausedIndicator();
-        return;
-      }
-    }
-  }
-  // Clicks outside the star: suppressed while paused so a
-  // stray tap can't boost. Star-click still unpauses above.
+  // Suppressed while paused so a stray tap can't boost.
+  // Unpause via P, the paused indicator, or the help overlay.
   if (paused) { e.preventDefault(); return; }
   e.preventDefault();
   handleTap();

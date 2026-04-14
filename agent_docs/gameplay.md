@@ -10,7 +10,7 @@
 
 - **Click / Space** — boost (left-click / touch; right-click and
   middle-click ignored).
-- **Click on current star** or **P** — pause / resume.
+- **P** — pause / resume.
 - **Arrow keys** — nudge orbital velocity ±2% while in orbit
   (unclamped — extreme nudging can crash or escape). Emits an
   exhaust puff as visual feedback.
@@ -25,9 +25,8 @@
 
 ## Pause
 
-Game is paused by pressing **P**, clicking the current star,
-tapping the **paused** indicator that appears in the HUD, or
-opening the help overlay. All of these go through
+Game is paused by pressing **P**, tapping the **paused**
+indicator that appears in the HUD, or opening the help overlay. All of these go through
 `syncPausedIndicator()` which also calls
 `audio.setMusicPaused(paused)` to halt the music scheduler —
 timeline stays aligned across long pauses. The **paused**
