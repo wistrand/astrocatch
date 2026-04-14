@@ -1655,9 +1655,18 @@ function drawReplayGhost() {
 // state (particle positions, shockwave radii, star pulse decay)
 // while building the instance batches the renderer consumes.
 // ─────────────────────────────────────────────────────────────
+// Wrap period for the shader/CPU animation clock. Kept at a
+// multiple of 2π so sin(nowSec * k + seed) is bit-identical
+// across the wrap boundary for every k used in the code
+// (all k are decimals with up to 2 fractional digits, so
+// W * k is an integer multiple of 2π whenever N ≥ 100). At
+// N = 10000, W ≈ 17.4 hours — long enough that we essentially
+// never hit it during a session, but small enough that float32
+// precision on `u_time` never degrades.
+const TIME_WRAP = Math.PI * 2 * 10000;
 function draw() {
   if (!renderer) return;
-  const nowSec = performance.now() / 1000;
+  const nowSec = (performance.now() / 1000) % TIME_WRAP;
 
   // Quick pre-scan: any active black hole near the screen?
   // If so, route all draws through the scene FBO so the
