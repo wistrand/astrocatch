@@ -32,6 +32,14 @@ via `/docs` folder. All non-browser tooling lives under `scripts/`.
 - **2-space indentation** in `.js`, `.html`, `<style>`.
 - **No AI-isms in user-facing text.** Keep prose direct and
   concrete.
+- **Mind GC pressure and wasted work on hot paths.** `renderTick`,
+  `physicsTick`, `draw`, `computeLaunchWindow`, and the music
+  scheduler all run at high rates — prefer pooled scratch objects
+  over per-call allocations, pass out-parameters instead of
+  returning fresh objects, skip work when there's nothing to do
+  (invisible hint, unchanged state, culled region), and guard
+  the biggest loops with tighter iteration bounds (e.g. start
+  at `currentStarIdx` when past stars can't affect the result).
 
 ## Run locally
 

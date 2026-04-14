@@ -80,6 +80,25 @@ all-linear with `g.gain.value = 0` at creation. Music plays
 from first START through DEAD; never autostarts on the welcome
 screen.
 
+### Pause
+
+`setMusicPaused(true)` halts the scheduler without clearing
+the "music intended" intent. `setMusicPaused(false)` restarts
+it only if the tab is visible and music was intended. The
+gameplay pause (P / star-click / help overlay) calls this, so
+the music timeline stays aligned across long pauses.
+`visibilitychange → hidden` also halts the scheduler and
+resumes when the tab returns.
+
+### BT-latency compensation
+
+`getOutputLatency()` returns `ctx.outputLatency` in seconds (0
+when unsupported). The game uses it to pre-schedule the capture
+chime `outputLatency` ahead of the visual event so the sound
+arrives at the user's ears on time despite Bluetooth transport
+delay. `capture(bonus, streak, delaySeconds)` takes an optional
+positive delay for this.
+
 ### Node cleanup
 
 Every music oscillator gets an `onended` handler that

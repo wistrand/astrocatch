@@ -22,7 +22,10 @@ Five programs cover the entire render surface:
   visible black hole. Grid fades based on distance, sampled at
   distorted UV so lines warp visibly. Only runs on frames where
   `beginFrame` was called with `useFbo = true`.
-- **`circle`** — instanced quad. `kind` attribute picks solid disc,
+- **`circle`** — instanced quad. Parallax bgStars use a session-
+  seeded mulberry32 PRNG over a fixed 2400×1600 canonical space
+  so positions are stable across window resizes. `kind` picks
+  solid disc,
   ring, glow, or dashed ring. Covers ball, particles, shockwaves,
   hint ring, parallax bgStars, planets, comet elements, ejecta
   particles, and orbiting accretion clumps around black holes.

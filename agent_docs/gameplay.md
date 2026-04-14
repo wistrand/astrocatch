@@ -10,9 +10,10 @@
 
 - **Click / Space** — boost (left-click / touch; right-click and
   middle-click ignored).
-- **P** — pause / resume.
+- **Click on current star** or **P** — pause / resume.
 - **Arrow keys** — nudge orbital velocity ±2% while in orbit
-  (unclamped — extreme nudging can crash or escape).
+  (unclamped — extreme nudging can crash or escape). Emits an
+  exhaust puff as visual feedback.
 - **M** — toggle mute.
 - **W** or tap the score display — toggle the launch-window hint.
 - **H** or click the **?** button — toggle the help overlay
@@ -21,6 +22,22 @@
 - **Focus-click suppression**: clicks within 150 ms of a
   `window.focus` event are ignored, so bringing the window
   forward from behind doesn't fire a boost.
+
+## Pause
+
+Game is paused by pressing **P**, clicking the current star,
+tapping the **paused** indicator that appears in the HUD, or
+opening the help overlay. All of these go through
+`syncPausedIndicator()` which also calls
+`audio.setMusicPaused(paused)` to halt the music scheduler —
+timeline stays aligned across long pauses. The **paused**
+text is only visible during `STATE.PLAY`; dying or dead runs
+clear it automatically.
+
+Paused state is cleared on `init()` (new game) and stored
+high score is persisted via `saveBest()` on `pagehide`,
+`beforeunload`, and `visibilitychange → hidden` so a high
+score from an interrupted run isn't lost.
 
 ## Scoring
 
@@ -131,17 +148,31 @@ excluded (rigid 3D body).
 ## Launch-window hint
 
 Toggled by `W` or clicking the score display. When on, short
-tangent ticks appear around the current orbit at angles from
-which a tap would produce a clean capture. Computed once per
-capture (`computeLaunchWindow`) by sampling 36 angles × ~6
-boost factors with early-exit; cached and rotated with the
-orbit.
+white tangent ticks appear on a 10 %-inset ring of the ship's
+actual orbit at angles from which a tap would produce a clean
+capture. Sampled at fixed star-frame angles (0°, 10°, … 350°)
+via a forward-simulation of the ship's current trajectory, so
+ticks stay anchored in space as the ship orbits through them.
+
+Recomputed on capture, on arrow-key nudge (orbit reshape), and
+every `LAUNCH_WINDOW_RECOMPUTE_FRAMES` (12 physics frames ≈
+0.1 s) while the current star has planets or is a binary — so
+slow perturbations keep the hint in sync without burning CPU.
+Static orbits don't trigger re-recompute.
+
+All per-recompute state is pooled: sample + result arrays are
+module-level scratch objects, and `predictCapture` takes an
+optional `outResult` buffer so its success return doesn't
+allocate. `predictCapture`'s crash-check loop starts at
+`currentStarIdx` (skips past stars), cutting late-game cost
+roughly in half.
 
 **Tutorial default**: the hint is auto-enabled at the start of
-the first `TUTORIAL_GAMES` (3) gameplays, and auto-hides after
-`TUTORIAL_STARS` (15) captures in those runs. The player can
-still toggle it off manually at any time. Gameplay count is
-persisted in `localStorage` (`astrocatch_gameplays`).
+the first `TUTORIAL_GAMES` (3) gameplays, and auto-hides once
+the player captures `TUTORIAL_STARS` (15) stars in those runs.
+The player can still toggle it off manually at any time.
+Gameplay count is persisted in `localStorage`
+(`astrocatch_gameplays`).
 
 ## Death sounds
 
@@ -154,6 +185,40 @@ Records `{x, y, currentStar}` per render frame (max `REPLAY_MAX`
 FIFO). Dynamic follow-camera with simplex zoom on the DEAD
 screen. Trailing window caps the polyline. Music keeps playing
 across runs.
+
+## Window resize
+
+`resize()` re-centers the camera on the current star (`camY`
+and `camTargetY` both snapped) so a window resize or mobile
+orientation flip doesn't leave the ship off-screen. The
+seeded PRNG that places background stars sees the same
+sequence per session, so they stay anchored across resizes.
+
+## Perf notes
+
+Several late-game hot paths have been specifically tuned:
+
+- `predictCapture` crash loop starts at `currentStarIdx`
+  instead of 0 — past stars can't collide with a forward-going
+  trajectory.
+- Star batch skips past stars older than
+  `ball.currentStar - PAST_STAR_KEEP` (6): scrolled-off embers
+  carry no gameplay info and their quad fragments aren't free.
+- Launch-window recompute uses pooled sample + result objects
+  and a reused `predictCapture` out-parameter.
+- Music voices call `osc.onended = () => disconnect()` so
+  stopped audio nodes are GC-eligible immediately (otherwise
+  mobile accumulates zombie graph nodes under high note rate).
+
+## Bluetooth audio compensation
+
+`audio.getOutputLatency()` reads `ctx.outputLatency`. When it
+exceeds 60 ms (indicative of BT headphones), the capture SFX
+is pre-scheduled `outputLatency` seconds ahead of the actual
+capture event so the chime arrives at the user's ears at the
+visual moment. Reactive SFX (boost on tap) can't be compensated;
+the boost exhaust burst is beefier than strictly necessary to
+make the tap land visually.
 
 ## Start screen
 

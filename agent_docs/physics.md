@@ -18,6 +18,13 @@ and clamps `|v|` into `[v_circ, v_max]`. Direction preserved.
 `predictCapture` forward-simulates with the same integrator so
 prediction matches live physics bit-for-bit.
 
+`predictCapture` accepts an optional `outResult` scratch object
+so high-frequency callers (launch-window hint) can reuse a
+single allocation. Its crash-check loop starts at
+`currentStarIdx` — past stars can't collide with a forward-going
+trajectory, and skipping them roughly halves crash-check cost at
+late-game star counts.
+
 ## Planets
 
 Orthogonal to the variant roll. Probability ramps from 0% to

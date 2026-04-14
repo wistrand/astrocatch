@@ -797,8 +797,10 @@ function init() {
   camTargetY = 0;
   hasBoosted = false;
 
-  // First star, centered-ish, low on screen
-  stars.push(makeStar(W / 2, H * 0.7, 44, 0, 0));
+  // First star: intentionally larger than later stars so the
+  // player's starting orbit has a longer period (period scales
+  // with orbitR) — gentler pace for the first tap.
+  stars.push(makeStar(W / 2, H * 0.7, 58, 0, 0));
   for (let i = 0; i < 6; i++) addNextStar();
 
   // Place ball in a circular orbit around star 0, above the star
