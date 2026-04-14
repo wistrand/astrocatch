@@ -304,6 +304,77 @@ window.addEventListener("beforeunload", saveBest);
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") saveBest();
 });
+// ── Save game (resume-after-reload) ──────────────────────────
+// Persisted on death. Stores enough state to rebuild the same
+// star field + ship orbit as the live continueRun() path, so
+// reloading and clicking RESUME behaves identically to hitting
+// CONTINUE on the death overlay. Past stars are stripped to
+// stubs (x, y, r, colorIdx, caught=true) to keep stars.length
+// correct for addNextStar's difficulty ramp while staying tiny.
+// Schema version bump invalidates older saves on load.
+const SAVE_KEY = "astrocatch_savegame_v1";
+function serializeStar(s, full) {
+  const stub = {
+    x: s.x, y: s.y, r: s.r, colorIdx: s.colorIdx,
+    caught: !!s.caught,
+  };
+  if (!full) return stub;
+  stub.gm = s.gm;
+  stub.hasRays = !!s.hasRays;
+  stub.nGran = s.nGran;
+  stub.isBlackHole = !!s.isBlackHole;
+  stub.isBinary = !!s.isBinary;
+  stub.isMonolith = !!s.isMonolith;
+  stub.isRingworld = !!s.isRingworld;
+  if (s.planets) stub.planets = s.planets;
+  if (s.comets) stub.comets = s.comets;
+  if (s.binary) {
+    // Drop ejecta — transient particles, respawn naturally.
+    const { ejecta, ...rest } = s.binary;
+    stub.binary = rest;
+  }
+  return stub;
+}
+function saveGame() {
+  if (!ball || !stars || stars.length === 0) return;
+  const cur = ball.currentStar;
+  const starsOut = new Array(stars.length);
+  for (let i = 0; i < stars.length; i++) {
+    // Current + all future stars get full data; past stars are
+    // rendered as dim embers and have no live interaction, so a
+    // {x,y,r,colorIdx,caught} stub is enough.
+    const full = i >= cur;
+    starsOut[i] = serializeStar(stars[i], full);
+  }
+  const data = {
+    v: 1,
+    stars: starsOut,
+    ball: {
+      x: ball.x, y: ball.y, vx: ball.vx, vy: ball.vy,
+      currentStar: ball.currentStar,
+      frame: ball.frame || 0,
+    },
+    score, starsVisited, fastStreak, trackedSpeed, hasBoosted,
+    camY, camTargetY,
+  };
+  try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); }
+  catch (_) { /* quota / private mode — ignore */ }
+}
+function loadGame() {
+  try {
+    const raw = localStorage.getItem(SAVE_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (!data || data.v !== 1) return null;
+    if (!Array.isArray(data.stars) || !data.ball) return null;
+    return data;
+  } catch (_) { return null; }
+}
+function clearSave() {
+  try { localStorage.removeItem(SAVE_KEY); }
+  catch (_) { /* ignore */ }
+}
+
 // Number of gameplays started. Used to auto-show the launch
 // window hint during the first few runs as a tutorial.
 const GAMEPLAYS_KEY = "astrocatch_gameplays";
@@ -909,6 +980,102 @@ function continueRun() {
   audio.startMusic();
 }
 
+// Rebuild live state from a saved game and then hand off to the
+// same re-orbit path continueRun uses.
+function resumeFromSave(data) {
+  paused = false;
+  syncPausedIndicator();
+  // Rehydrate stars. Past stars are {x,y,r,colorIdx,caught}
+  // stubs; fill in sensible defaults so draw() doesn't choke on
+  // missing fields.
+  stars = data.stars.map((raw) => ({
+    x: raw.x, y: raw.y, r: raw.r,
+    gm: raw.gm != null ? raw.gm : AC.starGM(raw.r),
+    colorIdx: raw.colorIdx,
+    caught: !!raw.caught,
+    pulse: 0,
+    hasRays: raw.hasRays != null ? !!raw.hasRays : true,
+    nGran: raw.nGran || 6,
+    planets: raw.planets || null,
+    comets: raw.comets || null,
+    isBlackHole: !!raw.isBlackHole,
+    isBinary: !!raw.isBinary,
+    binary: raw.binary || null,
+    isMonolith: !!raw.isMonolith,
+    isRingworld: !!raw.isRingworld,
+  }));
+  // Re-orbit the ball around the saved anchor star with a fresh
+  // circular orbit — same math as continueRun. The saved x/y/vx/
+  // vy were the crash-moment values; reusing them would respawn
+  // the ship inside the crash site.
+  const bd = data.ball;
+  // Defensive clamp — a corrupted or schema-skewed save could
+  // have currentStar out of range. Without this, stars[bd.cs]
+  // would be undefined and the next flag read crashes.
+  const anchorIdx = Math.max(
+    0, Math.min(bd.currentStar | 0, stars.length - 1)
+  );
+  const anchor = stars[anchorIdx];
+  let orbitMult = 2.5;
+  if (anchor.isBinary) orbitMult = 3.0;
+  if (anchor.isRingworld) orbitMult = 3.2;
+  const r0 = anchor.r * orbitMult;
+  const v = AC.circularV(anchor.gm, r0);
+  ball = {
+    x: anchor.x,
+    y: anchor.y - r0,
+    vx: v,
+    vy: 0,
+    currentStar: anchorIdx,
+    alive: true,
+    pendingCapture: -1,
+    transferFrames: 0,
+    captureMinD: undefined,
+    captureMinX: 0,
+    captureMinY: 0,
+    captureMinVx: 0,
+    captureMinVy: 0,
+    framesInOrbit: 0,
+    pendingBonus: 1,
+    frame: bd.frame || 0,
+  };
+  // The anchor star is now the ship's orbit target again, so
+  // unmark it as caught (it might have been the last captured
+  // star and therefore flagged as caught=true for the past-
+  // ember render path).
+  anchor.caught = false;
+  score = data.score || 0;
+  starsVisited = data.starsVisited || 0;
+  fastStreak = data.fastStreak || 0;
+  trackedSpeed = data.trackedSpeed || 0;
+  hasBoosted = !!data.hasBoosted;
+  // Snap camera to the anchor, not the saved camY (which was
+  // captured at death and may be scrolled to a bad spot).
+  camY = -(anchor.y - H * CAM_FOCUS_Y);
+  camTargetY = camY;
+  audio.setStreak(fastStreak);
+  // Clear all transient buffers (trail/particles/shockwaves/
+  // replay) that we don't save.
+  trail = [];
+  particles = [];
+  shockwaves = [];
+  replay = [];
+  replayBounds = null;
+  replayIdx = 0;
+  // Zoom responds to the anchor variant just like continueRun.
+  zoomMultTarget = anchor.isRingworld ? 1.5 : 1.0;
+  zoomMult = zoomMultTarget;
+  computeLaunchWindow();
+  document.getElementById("score").textContent = "" + score;
+  updateSub();
+  document.getElementById("score-display").style.display = "block";
+  document.getElementById("hint").classList.add("on");
+  audio.startMusic();
+  // One-shot: consume the save so a later death-during-resume
+  // writes a fresh snapshot rather than stacking atop the old one.
+  clearSave();
+}
+
 function updateSub() {
   let text = "best " + best + " · " + starsVisited + " stars";
   if (fastStreak >= 2) {
@@ -1384,6 +1551,7 @@ function die(crash) {
     });
   }
   saveBest();
+  saveGame();
   setTimeout(() => {
     ball.alive = false;
     state = STATE.DEAD;
@@ -2505,17 +2673,44 @@ document.getElementById("start-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("start").classList.add("hidden");
   state = STATE.PLAY;
+  // Starting a fresh run invalidates any saved run.
+  clearSave();
   init();
 });
 document.getElementById("retry-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
   state = STATE.PLAY;
+  clearSave();
   init();
 });
 document.getElementById("continue-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
   state = STATE.PLAY;
+  // Continuing replaces the death snapshot — any future reload
+  // will offer RESUME only if the player dies again (at which
+  // point a fresh snapshot is written). Without this clear, a
+  // reload after a successful continue would send the player
+  // back to the original death point, losing intervening progress.
+  clearSave();
   continueRun();
 });
+document.getElementById("resume-btn").addEventListener("click", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const data = loadGame();
+  if (!data) return;
+  document.getElementById("start").classList.add("hidden");
+  state = STATE.PLAY;
+  resumeFromSave(data);
+});
+
+// Expose the RESUME button on the menu if a saved run exists.
+// Runs once at module load — subsequent save state changes happen
+// after the menu is already dismissed, so no re-check needed.
+(function initResumeButton() {
+  if (loadGame()) {
+    const btn = document.getElementById("resume-btn");
+    if (btn) btn.style.display = "";
+  }
+})();
