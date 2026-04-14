@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<title>ASTROCATCH — variant inspector</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    background: #060611;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    color: #cfd2dc;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  canvas { display: block; touch-action: none; }
+  #labels {
+    position: absolute; top: 0; left: 0;
+    width: 100%; height: 100%;
+    pointer-events: none;
+    z-index: 5;
+  }
+  .label {
+    position: absolute;
+    transform: translate(-50%, 0);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.6;
+    text-align: center;
+    white-space: nowrap;
+  }
+  #help-bar {
+    position: absolute;
+    top: 8px; left: 8px;
+    z-index: 10;
+    background: rgba(10, 10, 18, 0.6);
+    padding: 6px 10px;
+    border-radius: 4px;
+    font-size: 11px;
+    letter-spacing: 1px;
+    line-height: 1.6;
+    opacity: 0.7;
+    pointer-events: none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="labels"></div>
+<div id="help-bar">
+  drag to pan · scroll / pinch to zoom · 0 to reset
+</div>
+<script type="module" src="debug.js"></script>
+</body>
+</html>

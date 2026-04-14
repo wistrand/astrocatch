@@ -6,6 +6,18 @@
 import * as AC from "./physics.js";
 import { createRenderer, c1Of, c2Of } from "./renderer.js";
 import { createAudio, simplex2 } from "./audio.js";
+import {
+  PALETTE_LEN,
+  binaryPositions,
+  assignBinary,
+  updateEjecta,
+  EJECTA_MAX,
+  EJECTA_SPAWN_PER_FRAME,
+  EJECTA_GM_MULT,
+  solveKepler,
+  cometPosition,
+  appendCometBatch,
+} from "./star-rendering.js";
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -229,9 +241,9 @@ const MISS_LOOKAHEAD = 1500;
 
 // ─────────────────────────────────────────────────────────────
 // Palette — the full RGB data lives in renderer.js as c1Of/c2Of.
-// Gameplay only needs the count so it can pick a random colorIdx.
+// Gameplay needs the count for random colorIdx; it's imported
+// from star-rendering.js so debug.js sees the same value.
 // ─────────────────────────────────────────────────────────────
-const PALETTE_LEN = 7;
 
 // ─────────────────────────────────────────────────────────────
 // World state
@@ -537,39 +549,8 @@ function assignPlanets(s) {
 // guard breaks early if |ΔE| < 1e-8 so low-e orbits don't
 // waste cycles. Called once per visible comet per render frame
 // — negligible cost.
-function solveKepler(M, e) {
-  let E = M;
-  for (let i = 0; i < 8; i++) {
-    const dE = (M - E + e * Math.sin(E)) / (1 - e * Math.cos(E));
-    E += dE;
-    if (Math.abs(dE) < 1e-8) break;
-  }
-  return E;
-}
-
-// Compute a comet's world position from its orbital elements
-// and the current physics frame. Pure function — no stored
-// state, same answer at the same frame.
-function cometPosition(star, comet, frame) {
-  const M = (frame * comet.meanMotion + comet.phase) % (Math.PI * 2);
-  const E = solveKepler(M, comet.e);
-  const cosE = Math.cos(E);
-  const r = comet.a * (1 - comet.e * cosE);
-  const sqrtFac = Math.sqrt((1 + comet.e) / (1 - comet.e));
-  const theta = 2 * Math.atan2(
-    sqrtFac * Math.sin(E / 2),
-    Math.cos(E / 2)
-  );
-  const xOrb = r * Math.cos(theta);
-  const yOrb = r * Math.sin(theta);
-  const cw = Math.cos(comet.omega);
-  const sw = Math.sin(comet.omega);
-  return {
-    x: star.x + xOrb * cw - yOrb * sw,
-    y: star.y + xOrb * sw + yOrb * cw,
-    r, // orbital radius — used for coma activity calculation
-  };
-}
+// solveKepler + cometPosition + appendCometBatch live in
+// star-rendering.js so debug.js shares the same code.
 
 const COMET_SCORE_RADIUS = 22; // px — close-pass threshold
 const COMET_BONUS = 2;
@@ -664,59 +645,8 @@ function separationOk(x, y, r) {
   return true;
 }
 
-// ─── Binary stars ───────────────────────────────────────
-// ~12% of stars from index 8+ become binaries. A binary is
-// two sub-stars orbiting their common center of mass. The
-// "star" entry in stars[] sits at the COM with combined GM;
-// physics sees a single point mass. Sub-stars carry their
-// own visual radius and color for rendering, plus crash
-// zones that move with the orbit. No planets on binaries.
-function assignBinary(s) {
-  // Mass ratio q = m1/m2 in [0.2, 0.65] — never too extreme.
-  const q = 0.2 + Math.random() * 0.45;
-  const totalGM = s.gm;
-  const gm1 = totalGM * q / (1 + q);
-  const gm2 = totalGM / (1 + q);
-  // Visual radii proportional to cube root of mass (like real
-  // stars). The pair's combined visual area roughly matches the
-  // original single star.
-  let r1 = s.r * Math.cbrt(q / (1 + q)) * 0.72;
-  let r2 = s.r * Math.cbrt(1 / (1 + q)) * 0.72;
-  // Separation: must keep both sub-stars well inside the
-  // ship's orbital radius (INITIAL_ORBIT_MULT * s.r = 2R),
-  // and far enough apart that they never visually overlap.
-  const minSep = (r1 + r2) * 2.2;
-  const sep = Math.max(minSep, s.r * (0.8 + Math.random() * 0.4));
-  // Orbital radii from COM (inversely proportional to mass).
-  const d1 = sep / (1 + q);   // heavier star closer to COM
-  const d2 = sep * q / (1 + q);
-  const periodFrames = 400 + Math.random() * 400;
-  const spin = Math.random() < 0.5 ? 1 : -1;
-  s.isBinary = true;
-  s.planets = null; // no planets on binaries
-  s.binary = {
-    q, sep, r1, r2, gm1, gm2, d1, d2,
-    omega: spin * (Math.PI * 2) / periodFrames,
-    phase: Math.random() * Math.PI * 2,
-    colorIdx1: s.colorIdx,
-    colorIdx2: Math.floor(Math.random() * PALETTE_LEN),
-    accretorIsBH: s.isBlackHole,
-    stream: null,
-  };
-  computeStream(s.binary);
-}
-
-// Pure function of (star, frame) — same pattern as planets.
-function binaryPositions(star, frame) {
-  const b = star.binary;
-  if (!b) return null;
-  const angle = frame * b.omega + b.phase;
-  const ca = Math.cos(angle), sa = Math.sin(angle);
-  return [
-    { x: star.x + ca * b.d1, y: star.y + sa * b.d1, r: b.r1 },
-    { x: star.x - ca * b.d2, y: star.y - sa * b.d2, r: b.r2 },
-  ];
-}
+// Binary star helpers (assignBinary, binaryPositions) live in
+// star-rendering.js so debug.js shares the same code.
 
 function addNextStar() {
   const prev = stars[stars.length - 1];
@@ -1481,82 +1411,11 @@ function physicsTick() {
 // with an inflated GM (visual-only, not the game's physics GM)
 // so they arc naturally and spiral inward. Runs every frame in
 // renderTick; purely visual, no gameplay effect.
-const EJECTA_MAX = 160;
-const EJECTA_SPAWN_PER_FRAME = 2;
-// Accretor pull multiplier — higher = particles reach and
-// spiral more convincingly. Only affects ejecta, not ship.
-const EJECTA_GM_MULT = .2;
-
-function computeStream() {} // no-op, kept for the init call
-
-function updateEjecta() {
-  for (let i = 0; i < stars.length; i++) {
-    const s = stars[i];
-    if (!s.isBinary || !s.binary || !s.binary.accretorIsBH) continue;
-    const b = s.binary;
-    if (!b.ejecta) b.ejecta = [];
-    const frame = ball ? ball.frame || 0 : 0;
-    const subs = binaryPositions(s, frame);
-    const donor = subs[0], accr = subs[1];
-    // Spawn particles on donor surface facing accretor.
-    for (let j = 0; j < EJECTA_SPAWN_PER_FRAME; j++) {
-      if (b.ejecta.length >= EJECTA_MAX) break;
-      // ±30° spread from the point facing the accretor.
-      const toAcc = Math.atan2(accr.y - donor.y, accr.x - donor.x);
-      const a = toAcc + (Math.random() - 0.5) * Math.PI * 0.33;
-      const spd = 0.3 + Math.random() * 0.3;
-      b.ejecta.push({
-        x: donor.x + Math.cos(a) * donor.r * 1.05,
-        y: donor.y + Math.sin(a) * donor.r * 1.05,
-        vx: Math.cos(a) * spd,
-        vy: Math.sin(a) * spd,
-        life: 1,
-      });
-    }
-    // Step particles — pulled by accretor (inflated GM),
-    // weakly repelled by donor so they don't fall back.
-    const accrGM = b.gm2 * EJECTA_GM_MULT;
-    const donorGM = b.gm1 * 0.3;
-    const soft = 8;
-    for (let j = b.ejecta.length - 1; j >= 0; j--) {
-      const p = b.ejecta[j];
-      p.life -= 0.006;
-      if (p.life <= 0) { b.ejecta.splice(j, 1); continue; }
-      // Gravity toward accretor.
-      let dx = accr.x - p.x, dy = accr.y - p.y;
-      let d2 = dx * dx + dy * dy + soft;
-      let d = Math.sqrt(d2);
-      let a = accrGM / d2;
-      p.vx += dx / d * a * 0.12;
-      p.vy += dy / d * a * 0.12;
-      // Weak push away from donor (prevents fall-back).
-      dx = p.x - donor.x; dy = p.y - donor.y;
-      d2 = dx * dx + dy * dy + soft;
-      d = Math.sqrt(d2);
-      a = donorGM / d2;
-      p.vx += dx / d * a * 0.05;
-      p.vy += dy / d * a * 0.05;
-      // Distance-dependent drag — stronger near accretor so
-      // particles always spiral in rather than fly past.
-      const dAccr = Math.hypot(p.x - accr.x, p.y - accr.y);
-      const dragT = Math.min(1, accr.r * 3 / Math.max(dAccr, 1));
-      const drag = 0.998 - dragT * 0.03; // 0.998 far, 0.968 close
-      p.vx *= drag;
-      p.vy *= drag;
-      p.x += p.vx;
-      p.y += p.vy;
-      // Remove if inside accretor.
-      dx = p.x - accr.x; dy = p.y - accr.y;
-      if (dx * dx + dy * dy < accr.r * accr.r * 0.5) {
-        b.ejecta.splice(j, 1);
-      }
-    }
-  }
-}
+// updateEjecta + EJECTA_* constants live in star-rendering.js.
 
 function renderTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
-  updateEjecta();
+  updateEjecta(stars, ball ? ball.frame || 0 : 0);
 
   // Throttled launch-window recompute when under planet
   // perturbation. Only runs if the hint is currently visible
@@ -2024,93 +1883,15 @@ function draw() {
     const sc = c1Of(s.colorIdx);
     for (let j = 0; j < s.comets.length; j++) {
       const comet = s.comets[j];
-      const pos = cometPosition(s, comet, frame);
       const cometBatch = [];
-
-      // Coma activity — 0 at apoapsis (inactive), 1 at
-      // periapsis (maximum outgassing). Drives the glow size
-      // and the particle spawn rate below.
+      const pos = appendCometBatch(s, comet, frame, cometBatch);
+      // Coma activity drives the outgassing-particle wake too —
+      // recompute it here for the gameplay-only spawn logic.
       const periDist = comet.a * (1 - comet.e);
       const apoDist = comet.a * (1 + comet.e);
-      const activity = Math.max(0, 1 - (pos.r - periDist) / (apoDist - periDist));
-
-      // Multi-syndyne dust tail — three layers at different
-      // radiation-pressure strengths (β values), creating a
-      // fan-shaped tail. Real dust tails are a continuous fan
-      // of syndynes (one per particle size); three discrete
-      // layers approximate the visual width:
-      //   narrow (low β, large dust)  → close to orbital path
-      //   medium (mid β)              → the main visible tail
-      //   wide   (high β, fine dust)  → faint outer fan
-      // Past orbital positions are computed once and reused
-      // across all three layers.
-      const TRAIL_N = 20;
-      const TRAIL_STEP = 6;
-      const BASE_WIND = 3.0;
-      const ALL_SYNDYNES = [
-        { wm: 0.4, al: 0.3 },   // narrow — large particles
-        { wm: 1.0, al: 0.5 },   // middle — main tail
-        { wm: 1.8, al: 0.22 },  // wide — fine dust
-      ];
-      // Each comet has 1–3 syndynes (set at creation). 1 = thin
-      // streak, 2 = main + one wing, 3 = full fan.
-      const nSyn = Math.min(comet.numSyndynes || 1, ALL_SYNDYNES.length);
-      const SYNDYNES = nSyn === 1
-        ? [ALL_SYNDYNES[1]]                           // just the main
-        : nSyn === 2
-          ? [ALL_SYNDYNES[0], ALL_SYNDYNES[1]]        // narrow + main
-          : ALL_SYNDYNES;                              // full fan
-      const pastPos = [];
-      for (let t = TRAIL_N - 1; t >= 1; t--) {
-        const pp = cometPosition(s, comet, frame - t * TRAIL_STEP);
-        const wdx = pp.x - s.x;
-        const wdy = pp.y - s.y;
-        const wd = Math.hypot(wdx, wdy) || 1;
-        pastPos.push({ t, px: pp.x, py: pp.y, nx: wdx / wd, ny: wdy / wd });
-      }
-      for (let syn = 0; syn < SYNDYNES.length; syn++) {
-        const wind = BASE_WIND * SYNDYNES[syn].wm;
-        const synAlpha = SYNDYNES[syn].al;
-        for (let k = 0; k < pastPos.length; k++) {
-          const { t, px, py, nx, ny } = pastPos[k];
-          const fade = 1 - t / TRAIL_N;
-          const pr = comet.radius * (0.4 + 0.6 * fade);
-          cometBatch.push({
-            x: px + nx * t * wind,
-            y: py + ny * t * wind,
-            outerR: pr * 2.8, innerR: 0,
-            r: sc[0] * fade, g: sc[1] * fade, b: sc[2] * fade,
-            a: fade * synAlpha,
-            kind: 2,
-          });
-        }
-      }
-
-      // Coma glow — grows near periapsis as the comet
-      // outgasses, absent at apoapsis. Modulates the
-      // existing core glow's radius and alpha.
-      const comaR = comet.radius * (3 + activity * 8);
-      const comaA = 0.2 + activity * 0.5;
-      cometBatch.push({
-        x: pos.x, y: pos.y,
-        outerR: comaR, innerR: 0,
-        r: sc[0], g: sc[1], b: sc[2], a: comaA, kind: 2,
-      });
-      // Bright white core.
-      cometBatch.push({
-        x: pos.x, y: pos.y,
-        outerR: comet.radius, innerR: 0,
-        r: 1, g: 1, b: 1, a: 1, kind: 0,
-      });
-
-      // Sparse outgassing particles near periapsis — spawned
-      // in world space so they linger where the comet WAS,
-      // creating a natural gas wake behind the fast-moving
-      // nucleus. Each particle gets a radial-outward velocity
-      // push (solar wind / radiation pressure) plus small
-      // random scatter, so the wake drifts anti-sunward over
-      // its lifetime — matching how real outgassed material
-      // behaves. Uses the existing particles array + render.
+      const activity = Math.max(
+        0, 1 - (pos.r - periDist) / (apoDist - periDist)
+      );
       if (activity > 0.4 && state === STATE.PLAY) {
         const spawnChance = activity * 1.5;
         if (Math.random() < spawnChance) {
@@ -2366,12 +2147,14 @@ let paused = false;
 const pausedEl = document.getElementById("paused-indicator");
 function syncPausedIndicator() {
   if (!pausedEl) return;
-  const show = paused && state === STATE.PLAY;
-  if (show) pausedEl.classList.add("on");
+  // Indicator visibility is gated on PLAY (no "paused" text on
+  // the menu / death screen), but music pause must follow the
+  // raw `paused` flag — otherwise a state transition (e.g.
+  // dying while paused) would silently un-pause the music.
+  const showIndicator = paused && state === STATE.PLAY;
+  if (showIndicator) pausedEl.classList.add("on");
   else pausedEl.classList.remove("on");
-  // Pause the music scheduler alongside the game. Keeps the
-  // timeline from drifting silently during long pauses.
-  if (audio && audio.setMusicPaused) audio.setMusicPaused(show);
+  if (audio && audio.setMusicPaused) audio.setMusicPaused(paused);
 }
 if (pausedEl) {
   pausedEl.addEventListener("pointerdown", (e) => {
