@@ -299,10 +299,20 @@ function saveBest() {
     catch (_) { /* quota / private mode — nothing to do */ }
   }
 }
-window.addEventListener("pagehide", saveBest);
-window.addEventListener("beforeunload", saveBest);
+// On any exit path — tab close, refresh, navigation, or
+// backgrounding — persist both the high score and a resume
+// snapshot. The three events fire inconsistently across
+// browsers (beforeunload ignored on mobile; pagehide and
+// visibilitychange sometimes substitute), so all three are
+// wired. Writes are idempotent, so dedup isn't a concern.
+function saveSnapshotOnExit() {
+  saveBest();
+  if (state === STATE.PLAY && ball && ball.alive) saveGame();
+}
+window.addEventListener("pagehide", saveSnapshotOnExit);
+window.addEventListener("beforeunload", saveSnapshotOnExit);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "hidden") saveBest();
+  if (document.visibilityState === "hidden") saveSnapshotOnExit();
 });
 // ── Save game (resume-after-reload) ──────────────────────────
 // Persisted on death. Stores enough state to rebuild the same
