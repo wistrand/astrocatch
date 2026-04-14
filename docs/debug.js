@@ -25,6 +25,9 @@ const labelDoms = [];
 let stars = null;
 // Wake particles (outgassing trail) for active comets.
 const particles = [];
+// Zoom limits — referenced by fitView(), which runs at load
+// time before the input handlers are wired up.
+const ZMIN = 0.1, ZMAX = 12.0;
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
@@ -133,6 +136,10 @@ stars = [
     assignBinary(s);
     addComet(s);
   }),
+  cell(2, 2, "bh + comet", (s) => {
+    s.isBlackHole = true;
+    addComet(s);
+  }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -176,7 +183,7 @@ function fitView() {
   // Pick the larger zoom-out factor so both axes fit, with a
   // small breathing-room reduction.
   zoom = 0.92 * Math.min(W / wWorld, H / hWorld);
-  zoom = Math.max(0.05, Math.min(3.0, zoom));
+  zoom = Math.max(ZMIN, Math.min(ZMAX, zoom));
 }
 fitView();
 // Also re-fit on resize.
@@ -186,7 +193,6 @@ window.addEventListener("resize", () => { fitView(); });
 //   1 touch (or mouse drag): pan
 //   2 touches: pinch to zoom toward the midpoint
 // Wheel: zoom toward the cursor.
-const ZMIN = 0.1, ZMAX = 3.0;
 const activePointers = new Map();
 let lastPinchDist = 0;
 let lastPinchMid = null;
@@ -219,16 +225,24 @@ canvas.addEventListener("pointermove", (e) => {
     camX += dx / zoom;
     camY += dy / zoom;
   } else if (activePointers.size === 2) {
-    // Two-pointer pinch.
+    // Two-pointer pinch + pan. Anchor the world point that was
+    // under the previous midpoint so it follows the current
+    // midpoint exactly — gives the natural "the world stays
+    // glued to your fingers" feel. Single derivation, no
+    // double-correction.
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     const midX = (pts[0].x + pts[1].x) * 0.5;
     const midY = (pts[0].y + pts[1].y) * 0.5;
-    if (lastPinchDist > 0) {
-      zoomToward(midX, midY, zoom * (dist / lastPinchDist));
-      // Pan with the midpoint drift too (two-finger panning).
-      camX += (midX - lastPinchMid.x) / zoom;
-      camY += (midY - lastPinchMid.y) / zoom;
+    if (lastPinchDist > 0 && lastPinchMid) {
+      // World point under the previous midpoint, before zoom.
+      const wx = (lastPinchMid.x - W / 2) / zoom - camX;
+      const wy = (lastPinchMid.y - H / 2) / zoom - camY;
+      // Apply the zoom change.
+      zoom = Math.max(ZMIN, Math.min(ZMAX, zoom * (dist / lastPinchDist)));
+      // Position camera so (wx, wy) lands under the new midpoint.
+      camX = (midX - W / 2) / zoom - wx;
+      camY = (midY - H / 2) / zoom - wy;
     }
     lastPinchDist = dist;
     lastPinchMid = { x: midX, y: midY };

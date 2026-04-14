@@ -284,10 +284,14 @@ void main() {
     float eh = 1.0 - smoothstep(R * 0.75, R * 1.05, d);
     mask *= (1.0 - eh);
 
-    // Lensing distortion
+    // Lensing distortion. Strength falls off as 1/d² (Newtonian
+    // light-bending approximation), with a smoothstep fade in
+    // the outer 40 % of the lens range so the distortion
+    // doesn't produce a hard ring at lensR.
     if (d > R * 0.9 && d < lensR) {
       float t = R / d;
       float strength = t * t * R * 8.0;
+      strength *= 1.0 - smoothstep(lensR * 0.6, lensR, d);
       distUV -= dir * strength / u_resolution;
     }
   }
