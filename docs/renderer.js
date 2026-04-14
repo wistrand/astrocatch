@@ -1117,15 +1117,30 @@ export function createRenderer(canvas) {
     const tintWhite = [1, 1, 1];
     const tintBlue  = [0.74, 0.83, 1.0];
     const tintWarm  = [1.0, 0.9, 0.76];
+    // Seeded PRNG (mulberry32). Produces the same sequence per
+    // session so bg stars stay in the same spots across resizes.
+    // Different sessions get different layouts via sessionSeed.
+    let rngState = (sessionSeed * 1e6 + 1) >>> 0;
+    function rand() {
+      rngState = (rngState + 0x6D2B79F5) >>> 0;
+      let t = rngState;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    }
+    // Distribute positions in a canonical fixed space so they
+    // stay anchored across resizes. 2400×1600 is larger than any
+    // common viewport; out-of-frame stars are just off-screen.
+    const CW = 2400, CH = 1600;
     for (let i = 0; i < n; i++) {
       const base = i * CIRCLE_FLOATS_PER_INSTANCE;
-      const x = Math.random() * W;
-      const y = Math.random() * H;
-      const depth = 0.05 + Math.random() * 0.35;
-      const size = 0.8 + Math.random() * 1.8;
-      const brightness = 0.4 + Math.random() * 0.4;
+      const x = rand() * CW;
+      const y = rand() * CH;
+      const depth = 0.05 + rand() * 0.35;
+      const size = 0.8 + rand() * 1.8;
+      const brightness = 0.4 + rand() * 0.4;
       let tint = tintWhite;
-      const r = Math.random();
+      const r = rand();
       if (r > 0.88) tint = tintBlue;
       else if (r > 0.75) tint = tintWarm;
       // Premultiplied rgba
@@ -1139,8 +1154,8 @@ export function createRenderer(canvas) {
       circleScratch[base + 6] = tint[2] * a;
       circleScratch[base + 7] = a;
       circleScratch[base + 8] = depth;
-      circleScratch[base + 9] = 1.4 + Math.random() * 2.5;   // twinkle speed
-      circleScratch[base + 10] = Math.random() * Math.PI * 2; // twinkle phase
+      circleScratch[base + 9] = 1.4 + rand() * 2.5;   // twinkle speed
+      circleScratch[base + 10] = rand() * Math.PI * 2; // twinkle phase
       circleScratch[base + 11] = 0;         // kind = solid
     }
     // Snapshot to a dedicated buffer so the scratch can be reused.

@@ -945,6 +945,11 @@ function captureStar(idx) {
     stars[leavingIdx].binary = null;
     stars[leavingIdx].isBinary = false;
     stars[leavingIdx].isMonolith = false;
+    // Mark the leaving star as caught so it renders as a dim
+    // past ember. Normally already true (captureStar set it
+    // when we arrived), but not for star 0, which was never
+    // captured — just the initial spawn.
+    stars[leavingIdx].caught = true;
   }
 
   s.caught = true;
@@ -2321,6 +2326,9 @@ function syncPausedIndicator() {
   const show = paused && state === STATE.PLAY;
   if (show) pausedEl.classList.add("on");
   else pausedEl.classList.remove("on");
+  // Pause the music scheduler alongside the game. Keeps the
+  // timeline from drifting silently during long pauses.
+  if (audio && audio.setMusicPaused) audio.setMusicPaused(show);
 }
 if (pausedEl) {
   pausedEl.addEventListener("pointerdown", (e) => {

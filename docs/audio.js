@@ -1125,10 +1125,23 @@ export function createAudio() {
     document.addEventListener("visibilitychange", () => {
       if (document.hidden) {
         actualStopMusic();
-      } else if (musicIntended) {
+      } else if (musicIntended && !musicExtPaused) {
         actualStartMusic();
       }
     }, false);
+  }
+
+  // External pause flag (distinct from the musicIntended intent)
+  // so the game's pause menu can halt music without clearing
+  // the "we want music playing" state.
+  let musicExtPaused = false;
+  function setMusicPaused(p) {
+    const was = musicExtPaused;
+    musicExtPaused = !!p;
+    if (musicExtPaused && !was) actualStopMusic();
+    else if (!musicExtPaused && was && musicIntended && !document.hidden) {
+      actualStartMusic();
+    }
   }
 
   function getOutputLatency() {
@@ -1142,7 +1155,8 @@ export function createAudio() {
 
   return {
     boost, capture, death, deathCrash, comet,
-    startMusic, stopMusic, setIntensity, setStreak,
+    startMusic, stopMusic, setMusicPaused,
+    setIntensity, setStreak,
     setMuted, isMuted, getOutputLatency,
   };
 }
