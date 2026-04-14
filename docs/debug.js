@@ -140,6 +140,7 @@ stars = [
     s.isBlackHole = true;
     addComet(s);
   }),
+  cell(0, 3, "ringworld", (s) => { s.isRingworld = true; }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -327,6 +328,7 @@ function loop(t) {
         isCurrent: false, isNext: false, isPast: false,
         isBlackHole: s.isBlackHole,
         isMonolith: s.isMonolith,
+        isRingworld: s.isRingworld,
       });
     }
   }

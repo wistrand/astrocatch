@@ -82,6 +82,15 @@ stars (gravity, collision, capture). Only the visual rendering
 differs — a raymarched 3D slab in `renderer.js`. Not supported
 as binary components.
 
+## Ringworlds
+
+Stars with `isRingworld: true`. Physics identical to normal
+stars — the band is purely visual and doesn't interact with
+the ship. The collision/capture radius is still `s.r`; the
+ring hoop renders at `2.6 * s.r` but has no gameplay effect.
+Not supported as binary components; not attached to planets
+or comets.
+
 ## Key invariants
 
 - `SAFE_SEP` guarantees minimum star separation.

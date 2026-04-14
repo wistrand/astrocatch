@@ -38,6 +38,11 @@ const IS_TOUCH = typeof window !== "undefined"
 //   Desktop         : 0.52 — wider view than mobile portrait
 //                            since the mouse is more precise.
 let ZOOM = 0.58;
+// Extra zoom applied on top of ZOOM. Smoothly lerps toward
+// zoomMultTarget — bumped to 1.5 while the ship orbits a
+// ringworld, back to 1.0 otherwise.
+let zoomMult = 1.0;
+let zoomMultTarget = 1.0;
 function computeZoom() {
   const is_wide = W > H * 1.5;
   if (IS_TOUCH) {
@@ -65,7 +70,7 @@ window.addEventListener("resize", () => {
   // is fixed by world cs.x and cameraMat, so we have to shift
   // world coords to keep the same screen fraction.
   let preXFrac = 0.5;
-  const preW = W, preZoom = ZOOM;
+  const preW = W, preZoom = ZOOM * zoomMult;
   if (ball && stars[ball.currentStar] && preW > 0) {
     const cs = stars[ball.currentStar];
     const screenX = preW / 2 + preZoom * (cs.x - preW / 2);
@@ -83,7 +88,7 @@ window.addEventListener("resize", () => {
     // preXFrac of the new W when run through cameraMat:
     //   sx = W/2 + ZOOM*(cs.x - W/2)
     //   sx = preXFrac*W → cs.x_new = W*(0.5 + (preXFrac-0.5)/ZOOM)
-    const newCsX = W * (0.5 + (preXFrac - 0.5) / ZOOM);
+    const newCsX = W * (0.5 + (preXFrac - 0.5) / (ZOOM * zoomMult));
     const dx = newCsX - cs.x;
     if (dx !== 0) {
       for (let i = 0; i < stars.length; i++) stars[i].x += dx;
@@ -355,18 +360,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0 },
-  { at: 1,   plain:  4, binary: 10, bh:  8, bhBinary: 4, monolith: 4 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 2 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0 },
-  { at: 10,   plain:  85, binary:  3, bh:  2, bhBinary: 1, monolith: 1 },
-  { at: 20,   plain:  74, binary:  8, bh:  5, bhBinary: 3, monolith: 2 },
-  { at: 50,   plain:  60, binary: 10, bh:  8, bhBinary: 4, monolith: 4 },
-  { at: 80,   plain:  50, binary: 10, bh: 10, bhBinary: 5, monolith: 5 },
+  //          plain  binary   bh  bhBinary  monolith  ringworld
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0 },
+  { at: 10,   plain:  84, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0 },
+  { at: 20,   plain:  72, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0 },
+  { at: 50,   plain:  58, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2 },
+  { at: 80,   plain:  48, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -453,6 +458,8 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // Monolith flag — classic 2001 3D slab rendered via
     // raymarched box. Same physics as a normal star.
     isMonolith: false,
+    // Ringworld flag — sun with a tumbling earth-textured band.
+    isRingworld: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     const variant = pickVariant(starIdx);
@@ -465,10 +472,12 @@ function makeStar(x, y, r, colorIdx, starIdx) {
       assignBinary(s);
     } else if (variant === "monolith") {
       s.isMonolith = true;
+    } else if (variant === "ringworld") {
+      s.isRingworld = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
     // only. Ramps up with star index. Skipped on monoliths.
-    if (!s.isBinary && !s.isMonolith) {
+    if (!s.isBinary && !s.isMonolith && !s.isRingworld) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
@@ -918,6 +927,7 @@ function captureStar(idx) {
     stars[leavingIdx].binary = null;
     stars[leavingIdx].isBinary = false;
     stars[leavingIdx].isMonolith = false;
+    stars[leavingIdx].isRingworld = false;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -1454,6 +1464,11 @@ function renderTick() {
   if (desired > camTargetY) camTargetY = desired;
   camY += (camTargetY - camY) * 0.08;
 
+  // Ringworld zoom-in: target 1.5x while orbiting a ringworld,
+  // back to 1.0 otherwise. Same easing rate as camY.
+  zoomMultTarget = stars[ball.currentStar].isRingworld ? 1.5 : 1.0;
+  zoomMult += (zoomMultTarget - zoomMult) * 0.05;
+
   // Off-screen death check — only while still PLAYing.
   if (state === STATE.PLAY) {
     const sy = ball.y + camY;
@@ -1685,7 +1700,7 @@ function draw() {
   }
 
   // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
-  const cam = renderer.cameraMat(camY, ZOOM, CAM_FOCUS_Y);
+  const cam = renderer.cameraMat(camY, ZOOM * zoomMult, CAM_FOCUS_Y);
 
   // Trail — single stroked polyline. Half-width 1.2 world units;
   // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.
@@ -1797,6 +1812,7 @@ function draw() {
         isCurrent, isNext, isPast,
         isBlackHole: s.isBlackHole,
         isMonolith: s.isMonolith,
+        isRingworld: s.isRingworld,
       });
     }
   }

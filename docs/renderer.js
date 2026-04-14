@@ -545,6 +545,7 @@ void main() {
   bool isPast    = (flags & 4) != 0;
   bool isBlackHole = (flags & 8) != 0;
   bool isMonolith = (flags & 16) != 0;
+  bool isRingworld = (flags & 64) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -635,6 +636,151 @@ void main() {
     vec3 rim = vec3(0.45, 0.6, 0.9) * fresnel * 0.55;
     outColor = vec4(vec3(body) + rim, aa);
     return;
+  }
+
+  // Ringworld — a Halo-style band wrapping a central sun. The
+  // ring is a cylindrical strip of radius R, height H, tumbling
+  // slowly in 3D. Ray-cylinder intersection picks between the
+  // near hit (viewer sees the OUTSIDE, dark back of the habitat)
+  // and the far hit (viewer sees the INSIDE, lit earth-like
+  // surface facing the sun). Showing both as we sweep the ring
+  // gives the classic ringworld S-curve.
+  if (isRingworld) {
+    float R = v_baseR * 3.6;           // ring radius
+    float H = v_baseR * 1.0;           // band height (along axis)
+    // Per-ring rotation axis derived from seed — monolith-style
+    // single-axis tumble (steady, no wobble).
+    vec3 rotAxis = normalize(vec3(
+      sin(v_seed * 1.3),
+      cos(v_seed * 1.7 + 0.5) + 0.15,
+      sin(v_seed * 2.1 + 1.0)
+    ));
+    float ang = u_time * 0.25 + v_seed;
+    float cA = cos(ang), sA = sin(ang), ic = 1.0 - cA;
+    mat3 Rrot = mat3(
+      cA + rotAxis.x*rotAxis.x*ic,
+        rotAxis.y*rotAxis.x*ic + rotAxis.z*sA,
+        rotAxis.z*rotAxis.x*ic - rotAxis.y*sA,
+      rotAxis.x*rotAxis.y*ic - rotAxis.z*sA,
+        cA + rotAxis.y*rotAxis.y*ic,
+        rotAxis.z*rotAxis.y*ic + rotAxis.x*sA,
+      rotAxis.x*rotAxis.z*ic + rotAxis.y*sA,
+        rotAxis.y*rotAxis.z*ic - rotAxis.x*sA,
+        cA + rotAxis.z*rotAxis.z*ic
+    );
+    vec3 axis = Rrot * vec3(0.0, 1.0, 0.0);
+    vec3 basU = Rrot * vec3(1.0, 0.0, 0.0);
+    vec3 basV = Rrot * vec3(0.0, 0.0, 1.0);
+    // Orthographic ray: origin far in +z, direction -z.
+    vec3 o = vec3(v_local.x, v_local.y, 1000.0);
+    vec3 d = vec3(0.0, 0.0, -1.0);
+    vec3 oPerp = o - dot(o, axis) * axis;
+    vec3 dPerp = d - dot(d, axis) * axis;
+    float A = dot(dPerp, dPerp);
+    float B = 2.0 * dot(oPerp, dPerp);
+    float C = dot(oPerp, oPerp) - R * R;
+    float disc = B * B - 4.0 * A * C;
+    float centerD = length(v_local);
+    float sunR = v_baseR * 0.55;
+    // Sun shows when the ray doesn't land on any band segment.
+    // Inlined — called twice below so just compute once and use
+    // a flag.
+    bool ringHit = false;
+    bool isInside = false;
+    vec3 hit; float axPos;
+    if (disc >= 0.0) {
+      float sqDisc = sqrt(disc);
+      float t1 = (-B - sqDisc) / (2.0 * A);
+      float t2 = (-B + sqDisc) / (2.0 * A);
+      vec3 h1 = o + t1 * d;
+      vec3 h2 = o + t2 * d;
+      float ax1 = dot(h1, axis);
+      float ax2 = dot(h2, axis);
+      bool v1 = abs(ax1) <= H * 0.5;
+      bool v2 = abs(ax2) <= H * 0.5;
+      if (v1) { hit = h1; axPos = ax1; isInside = false; ringHit = true; }
+      else if (v2) { hit = h2; axPos = ax2; isInside = true; ringHit = true; }
+    }
+    if (!ringHit) {
+      if (centerD < sunR) {
+        float glowT = 1.0 - smoothstep(0.0, sunR, centerD);
+        float coreT = 1.0 - smoothstep(0.0, v_baseR * 0.25, centerD);
+        vec3 sunCol = vec3(1.0, 0.92, 0.65);
+        float a = glowT * 0.45 + coreT * 0.55;
+        outColor = vec4(sunCol * a, a);
+        return;
+      }
+      outColor = vec4(0.0);
+      return;
+    }
+    float widthT = axPos / H + 0.5;   // 0 bottom → 1 top
+    vec2 ringPt = vec2(dot(hit, basU), dot(hit, basV));
+    float theta = atan(ringPt.y, ringPt.x);
+    float spin = u_time * 0.12;
+    float u = theta + spin;
+    // Camera-direction light source for 3D shading. Outward
+    // normal is radial from the axis; the visible face's normal
+    // flips sign depending on inside vs outside.
+    vec3 outward = (hit - dot(hit, axis) * axis) / R;
+    float ndl = isInside ? -outward.z : outward.z;
+    ndl = max(ndl, 0.0);
+    float lit = 0.20 + 2.70 * ndl;
+    float litInside = 0.01 + 1.7 * ndl;
+    if (isInside) {
+      // INSIDE surface — faces the sun, fully lit.
+      // Every multiplier of u must be an integer so the texture
+      // seams up at theta wrap (u is theta + spin).
+      float n = 0.50 * sin(u * 9.0)  * cos(widthT * 5.95)
+              + 0.30 * sin(u * 23.0 + 1.3) * cos(widthT * 10.85 + 0.7)
+              + 0.18 * sin(u * 47.0 + 2.2) * cos(widthT * 20.65 + 1.1);
+      vec3 ocean = vec3(0.10, 0.32, 0.62);
+      vec3 coast = vec3(0.32, 0.54, 0.25);
+      vec3 land  = vec3(0.46, 0.40, 0.22);
+      float landT = smoothstep(-0.05, 0.22, n);
+      float mountainT = smoothstep(0.32, 0.55, n);
+      vec3 col = mix(ocean, coast, landT);
+      col = mix(col, land, mountainT);
+      float edgeT = smoothstep(0.82, 1.0, abs(widthT - 0.5) * 2.0);
+      col = mix(col, vec3(0.02, 0.02, 0.04), edgeT * 0.75);
+      // Cloud clumps — multi-octave, domain-warped so we get
+      // irregular patches instead of parallel stripes. u terms
+      // stay integer; widthT terms are free.
+      float wu = u + 0.35 * sin(widthT * 3.1 + u_time * 0.08);
+      float ww = widthT + 0.25 * sin(u * 3.0 + u_time * 0.05);
+      float c1 = sin(wu * 11.0 + u_time * 0.10)
+               * cos(ww * 4.2 - u_time * 0.07);
+      float c2 = sin(wu * 21.0 - u_time * 0.13)
+               * cos(ww * 7.9 + u_time * 0.09);
+      float cloud = 0.55 * c1 + 0.35 * c2;
+      cloud = smoothstep(0.05, 0.45, cloud);
+      col = mix(col, vec3(0.95), cloud * 0.40);
+      col *= litInside;
+      // Atmospheric limb glow — warm fresnel at the silhouette
+      // only on the inside face. Identifies "far arc" at a glance.
+      float fres = pow(1.0 - abs(outward.z), 4.0);
+      col += vec3(1.0, 0.78, 0.55) * fres * 0.45;
+      // Specular hotspot on the inside — normal flips sign since
+      // the visible face is the far wall. Masked to water only
+      // (landT=0) so oceans glint but continents stay matte.
+      float specIn = pow(max(-outward.z, 0.0), 32.0);
+      col += vec3(1.0, 0.95, 0.80) * specIn * 0.85 * (1.0 - landT);
+      outColor = vec4(col, 1.0);
+      return;
+    } else {
+      // OUTSIDE surface — dark back of the habitat.
+      float n = 0.5 + 0.3 * sin(u * 5.0) * cos(widthT * 3.0);
+      vec3 col = vec3(0.05, 0.06, 0.09) * (0.8 + 0.4 * n);
+      float edgeT = smoothstep(0.82, 1.0, abs(widthT - 0.5) * 2.0);
+      col = mix(col, vec3(0.16, 0.18, 0.22), edgeT);
+      col *= lit;
+      // Specular hotspot on the near-facing outside — a tight
+      // highlight where the structural panels face the camera
+      // directly. Reads as "near arc."
+      float spec = pow(max(outward.z, 0.0), 32.0);
+      col += vec3(0.95, 0.92, 0.85) * spec * 0.55;
+      outColor = vec4(col, 1.0);
+      return;
+    }
   }
 
   // Black hole — Interstellar-style rendering. Two visual layers
@@ -1442,6 +1588,7 @@ export function createRenderer(canvas) {
       if (s.isPast)     flags |= 4;
       if (s.isBlackHole) flags |= 8;
       if (s.isMonolith) flags |= 16;
+      if (s.isRingworld) flags |= 64;
       starScratch[base + 0] = s.x;
       starScratch[base + 1] = s.y;
       starScratch[base + 2] = c1[0];

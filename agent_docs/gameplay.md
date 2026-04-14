@@ -62,7 +62,7 @@ points, sparkle burst, twinkly sound, comet removed.
 
 `SPAWN_TABLE` is a list of rows at star-index control points.
 Each row lists weights for each variant (`plain`, `binary`,
-`bh`, `bhBinary`, `monolith`). Weights interpolate linearly
+`bh`, `bhBinary`, `monolith`, `ringworld`). Weights interpolate linearly
 between rows and plateau past the last row. Normalized at
 sample time, so values don't need to sum to 100.
 
@@ -70,8 +70,8 @@ Planets and comets are **orthogonal** rolls applied on top:
 
 - **Planets**: ramp from 0 to `PLANET_PROB_MAX` over
   `PLANET_RAMP_STARS` captures. Allowed on `plain` and `bh`
-  variants; binaries skip (the sub-stars already occupy the
-  orbit volume).
+  variants; binaries, monoliths, and ringworlds skip (their
+  visuals already occupy the orbit volume).
 - **Comets**: flat `COMET_PROB` chance from `COMET_MIN_STAR`+.
   Allowed on any variant.
 
@@ -135,6 +135,23 @@ Monoliths don't wobble on crash, don't get planets or comets,
 and can't be binary components (the raymarched occlusion against
 moving sub-stars doesn't work cleanly in 2D). Hint ring and
 launch window behave normally.
+
+## Ringworlds
+
+Flagged `isRingworld: true`. Physics identical to normal stars
+— the band is purely visual. Rendered as a ray-cylinder-
+intersected habitat of radius `2.6 * s.r` and height `1.0 *
+s.r` wrapping a small central sun, tumbling around a per-star
+axis (monolith-style Rodrigues rotation). Inside face is
+earth-textured with clouds; outside face is dark structural.
+Camera-direction lighting + specular hotspots + warm fresnel
+rim glow on the inside sell 3D curvature.
+
+Ringworlds skip planets and comets and can't be binary
+components. While the ship's `currentStar.isRingworld` is true,
+the gameplay camera smoothly eases to a 1.5× zoom (`zoomMult`
+lerped at 0.05/frame) so the tumbling band stays legible; it
+eases back to 1.0× on the next capture.
 
 ## Crash wobble
 
