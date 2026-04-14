@@ -1024,6 +1024,26 @@ const LAUNCH_WINDOW_SAMPLES = 36;
 // perturbation. Updated inside computeLaunchWindow().
 const LAUNCH_WINDOW_RECOMPUTE_FRAMES = 12; // ~0.1 s at 120 Hz
 let lastLaunchWindowFrame = -1;
+// Pre-allocated scratch for sample states + result entries.
+// Reused across recomputes to avoid GC churn on long sessions.
+// The `used` flag replaces the null-slot pattern.
+const _lwSamples = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwWindow = new Array(LAUNCH_WINDOW_SAMPLES);
+for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
+  _lwSamples[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwWindow[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+}
+const _LW_STEP = (Math.PI * 2) / LAUNCH_WINDOW_SAMPLES;
+// Scratch object reused across all predictCapture calls from
+// the launch-window hotpath. Avoids ~100 small allocations per
+// recompute.
+const _lwPredictOut = { periFrame: 0, periDist: 0, vMagAtPeri: 0 };
+function slotForTheta(theta) {
+  let t = theta;
+  if (t < 0) t += Math.PI * 2;
+  if (t >= Math.PI * 2) t -= Math.PI * 2;
+  return Math.floor(t / _LW_STEP);
+}
 
 function computeLaunchWindow() {
   if (!ball) return;
@@ -1046,28 +1066,18 @@ function computeLaunchWindow() {
 
   // Sample at FIXED angular positions in the star's frame
   // (0°, Δθ, 2Δθ, …) so the dots stay anchored in space as
-  // the ball orbits through them — otherwise each recompute
-  // shifts the sample set by how far the ball has moved,
-  // causing visible flicker.
+  // the ball orbits through them.
   let x = ball.x, y = ball.y, vx = ball.vx, vy = ball.vy;
-  const dirSign = Math.sign(rx0 * vy - ry0 * vx) || 1;
-  const targetStep = 2 * Math.PI / LAUNCH_WINDOW_SAMPLES;
-  // Pre-allocate samples by angular slot. Each slot is filled
-  // when the sim's theta sweeps across it.
-  const samples = new Array(LAUNCH_WINDOW_SAMPLES).fill(null);
+  // Reset pooled sample slots — no allocation per recompute.
+  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) _lwSamples[i].used = false;
   let filled = 0;
-  let prevTheta = Math.atan2(ry0, rx0);
-  // Map theta into [0, 2π) for slot indexing.
-  function slot(theta) {
-    let t = theta;
-    if (t < 0) t += 2 * Math.PI;
-    if (t >= 2 * Math.PI) t -= 2 * Math.PI;
-    return Math.floor(t / targetStep);
-  }
-  // Record initial slot.
+  // Record initial slot. slotForTheta is a module-level helper
+  // to avoid creating a closure per recompute.
   {
-    const idx = slot(prevTheta);
-    if (!samples[idx]) { samples[idx] = { x, y, vx, vy }; filled++; }
+    const idx = slotForTheta(Math.atan2(ry0, rx0));
+    const s = _lwSamples[idx];
+    s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
+    filled++;
   }
   const dt = 1;
   const maxSteps = 2000;
@@ -1088,39 +1098,37 @@ function computeLaunchWindow() {
     vx += 0.5 * (ax + ax2) * dt;
     vy += 0.5 * (ay + ay2) * dt;
     x = nx; y = ny;
-    const theta = Math.atan2(y - cs.y, x - cs.x);
-    const curSlot = slot(theta);
-    if (!samples[curSlot]) {
-      samples[curSlot] = { x, y, vx, vy };
+    const curSlot = slotForTheta(Math.atan2(y - cs.y, x - cs.x));
+    const s = _lwSamples[curSlot];
+    if (!s.used) {
+      s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
       filled++;
       if (filled >= LAUNCH_WINDOW_SAMPLES) break;
     }
-    prevTheta = theta;
   }
   if (filled < 4) return;
 
   // Test each sample with predictCapture at a few boost factors.
   const factors = [0.30, 0.55, 0.85, 1.30, 2.00, 2.80];
   const startFrame = ball.frame || 0;
-  const window = new Array(samples.length);
-  for (let i = 0; i < samples.length; i++) {
-    const s = samples[i];
-    if (!s) { window[i] = null; continue; }
+  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
+    const s = _lwSamples[i];
+    const w = _lwWindow[i];
+    if (!s.used) { w.used = false; continue; }
     let success = false;
     for (let k = 0; k < factors.length; k++) {
       const f = factors[k];
       const pred = AC.predictCapture(stars, ball.currentStar,
-        s.x, s.y, s.vx * (1 + f), s.vy * (1 + f), startFrame);
+        s.x, s.y, s.vx * (1 + f), s.vy * (1 + f),
+        startFrame, _lwPredictOut);
       if (pred) { success = true; break; }
     }
     const sp = Math.hypot(s.vx, s.vy) || 1;
-    window[i] = {
-      x: s.x, y: s.y,
-      tx: s.vx / sp, ty: s.vy / sp,
-      ok: success,
-    };
+    w.x = s.x; w.y = s.y;
+    w.tx = s.vx / sp; w.ty = s.vy / sp;
+    w.ok = success; w.used = true;
   }
-  ball.launchWindow = window;
+  ball.launchWindow = _lwWindow;
   ball.launchWindowStarIdx = ball.currentStar;
   lastLaunchWindowFrame = ball.frame || 0;
 }
@@ -1783,7 +1791,7 @@ function draw() {
       // ring, a touch brighter so the ticks read clearly inside
       // the orbit.
       const pulse = 0.85 + 0.30 * Math.sin(nowSec * 2.4);
-      const a = 0.32 * pulse;
+      const a = 0.5 * pulse;
       const headCol = [a, a, a, a];
       const tickLen = 5;
       // Draw the ticks 10% inboard of the ship's orbit so they
@@ -1791,7 +1799,7 @@ function draw() {
       const inset = 0.9;
       for (let i = 0; i < lw.length; i++) {
         const s = lw[i];
-        if (!s || !s.ok) continue;
+        if (!s.used || !s.ok) continue;
         const cx = cs.x + (s.x - cs.x) * inset;
         const cy = cs.y + (s.y - cs.y) * inset;
         renderer.drawPolyline([
@@ -1804,8 +1812,14 @@ function draw() {
 
   // Active stars — frustum-cull against the camera vertical band,
   // decay catch pulses, tag role flags, build the instance batch.
+  // Drop past stars more than PAST_STAR_KEEP captures behind
+  // the current one — they've been off-camera for a while and
+  // carry no gameplay information. Saves JS push + star-shader
+  // fragment cost at late-game star counts.
+  const PAST_STAR_KEEP = 6;
+  const minDrawIdx = ball ? Math.max(0, ball.currentStar - PAST_STAR_KEEP) : 0;
   const starBatch = [];
-  for (let i = 0; i < stars.length; i++) {
+  for (let i = minDrawIdx; i < stars.length; i++) {
     const s = stars[i];
     const sY = s.y + camY;
     if (sY < -240 || sY > H + 240) continue;

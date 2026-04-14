@@ -216,8 +216,11 @@ function burnStep(stars, ball) {
     const vMag = Math.hypot(ball.vx, ball.vy);
 
     // Find target's nearest neighbor → max safe apoapsis.
+    // Past stars are behind us and don't affect the forward
+    // Voronoi geometry, so skip them.
     let nearestNeighbor = Infinity;
-    for (let i = 0; i < stars.length; i++) {
+    const fromIdx = ball.currentStar;
+    for (let i = fromIdx; i < stars.length; i++) {
       if (i === ball.pendingCapture) continue;
       const ddx = stars[i].x - target.x;
       const ddy = stars[i].y - target.y;
@@ -253,7 +256,11 @@ function burnStep(stars, ball) {
 // advances it by 1 and passes the sum to computePlanetPositions
 // so the simulated planet positions exactly match whatever the
 // live physicsStep would see at the same simulated moment.
-function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
+// Optional `outResult` is a scratch object {periFrame, periDist,
+// vMagAtPeri} the caller can reuse across many calls to avoid
+// allocating per invocation. When not provided, returns a fresh
+// object on success (back-compatible).
+function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame, outResult) {
   if (startFrame === undefined) startFrame = 0;
   const nextIdx = currentStarIdx + 1;
   if (nextIdx >= stars.length) return null;
@@ -292,8 +299,11 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
       }
     }
 
-    // Crash into any star → abandon prediction.
-    for (let i = 0; i < stars.length; i++) {
+    // Crash into any star → abandon prediction. Past stars
+    // (index < currentStarIdx) are behind the ship's forward-
+    // going trajectory, so skip them — cuts crash-check cost
+    // by half at late-game star counts.
+    for (let i = currentStarIdx; i < stars.length; i++) {
       const s = stars[i];
       if (s.isBinary && s.binary) {
         const b = s.binary;
@@ -335,7 +345,7 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
       // to its nearest other star. Otherwise the "circular" orbit
       // gets stolen by a neighbor and decays into chaos.
       let nearestNeighbor = Infinity;
-      for (let i = 0; i < stars.length; i++) {
+      for (let i = currentStarIdx; i < stars.length; i++) {
         if (i === nextIdx) continue;
         const ddx = stars[i].x - next.x;
         const ddy = stars[i].y - next.y;
@@ -343,6 +353,12 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame) {
         if (dd < nearestNeighbor) nearestNeighbor = dd;
       }
       if (minD > nearestNeighbor * PERI_VORONOI_FRAC) return null;
+      if (outResult) {
+        outResult.periFrame = minDFrame;
+        outResult.periDist = minD;
+        outResult.vMagAtPeri = vMagAtPeri;
+        return outResult;
+      }
       return { periFrame: minDFrame, periDist: minD, vMagAtPeri };
     }
     prevD = d;
@@ -362,6 +378,10 @@ const BOOST_SEARCH_MAX = 2.80;   // largest Δv tried
 const BOOST_SEARCH_STEPS = 48;
 const BOOST_DEFAULT = 0.85;      // fallback Δv when search finds nothing
 
+// Reused scratch for predictCapture's return value so the 48
+// probes a boost search does don't allocate. Only the final
+// return (when capture succeeds) builds a new object.
+const _boostPredictOut = { periFrame: 0, periDist: 0, vMagAtPeri: 0 };
 function applyBoostAndArm(stars, ball) {
   const sp = Math.hypot(ball.vx, ball.vy);
   if (sp < 0.001) return null;
@@ -374,7 +394,7 @@ function applyBoostAndArm(stars, ball) {
     const factor = BOOST_SEARCH_MIN + (BOOST_SEARCH_MAX - BOOST_SEARCH_MIN) * t;
     const trialVx = ball.vx * (1 + factor);
     const trialVy = ball.vy * (1 + factor);
-    const pred = predictCapture(stars, ball.currentStar, ball.x, ball.y, trialVx, trialVy, startFrame);
+    const pred = predictCapture(stars, ball.currentStar, ball.x, ball.y, trialVx, trialVy, startFrame, _boostPredictOut);
     if (pred) { bestFactor = factor; bestPred = pred; break; }
   }
   if (bestPred) {
