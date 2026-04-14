@@ -863,13 +863,18 @@ function continueRun() {
   // 6, replicate that buffer past the anchor if trimmed.
   while (stars.length - anchorIdx - 1 < 6) addNextStar();
   // Re-orbit the ball around the anchor star. Pick a radius
-  // that clears the variant's visible structure and satisfies
-  // the physics peri floor:
-  //   - Binaries (including BH binaries) require peri ≥ 2.2 × r
-  //     so the circular orbit clears the sub-star reach.
+  // that clears the variant's visible structure with comfortable
+  // margin against crash:
+  //   - Binaries (including BH binaries): worst-case sub-star
+  //     reach is ~2.4 × r (low q, small sep), so 3.0 × r gives
+  //     roughly one sub-star-radius of clearance on a circular
+  //     orbit. The physics peri floor of 2.2 × r is for eccentric
+  //     capture orbits, not circular respawn orbits — don't
+  //     conflate the two.
   //   - Ringworlds render a band at 2.6 × r; sit outside it.
   //   - Plain / BH / monolith: 2.5 × r is a comfortable default.
   let orbitMult = 2.5;
+  if (s.isBinary) orbitMult = 3.0;
   if (s.isRingworld) orbitMult = 3.2;
   const r0 = s.r * orbitMult;
   const v = AC.circularV(s.gm, r0);
