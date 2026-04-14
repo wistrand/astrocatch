@@ -257,11 +257,17 @@
   }
 
   /* The game-over overlay is much more transparent so the looping
-    replay animation behind it stays visible while the AGAIN button
+    replay animation behind it stays visible while the RESTART button
     sits in the foreground. */
   #gameover {
     background: rgba(10, 10, 18, 0.4);
     backdrop-filter: blur(4px);
+  }
+
+  /* Keyboard hint is desktop-only. Coarse-pointer devices
+    (touchscreens) can't press keys, so we hide the hint. */
+  @media (pointer: coarse) {
+    #gameover-keys { display: none; }
   }
 
   /* Start screen is also see-through so the ambient stars drawn
@@ -430,7 +436,9 @@
     <div class="label">game over</div>
     <div id="final">0</div>
     <div class="label"><span id="stars">0</span> stars · best <span id="best">0</span></div>
-    <button id="retry-btn">AGAIN</button>
+    <button id="retry-btn">RESTART</button>
+    <button id="continue-btn">CONTINUE</button>
+    <div id="gameover-keys" class="tag" style="margin-top:12px">[space] restart · [enter] continue</div>
   </div>
 
   <div id="unsupported" class="overlay hidden">

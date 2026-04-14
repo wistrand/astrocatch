@@ -271,7 +271,7 @@ let menuStars = []; // 1–3 decorative animated stars on the welcome screen
 
 // Replay: a samples-per-render-frame log of ball positions during
 // the live run, replayed faded behind the game-over overlay so the
-// player can watch their last attempt while the AGAIN button sits
+// player can watch their last attempt while the RESTART button sits
 // in front of it.
 const REPLAY_MAX = 6000;
 let replay = [];          // [{x, y, currentStar}, ...]
@@ -821,6 +821,86 @@ function init() {
   // Fire up the generative music layer. Scheduler runs until
   // die() turns it back off. Idempotent — calling startMusic
   // again mid-run is a no-op.
+  audio.startMusic();
+}
+
+// Resume after death from the last captured star. Preserves
+// the star field and the ship's position; resets score, streak,
+// and all transient visual buffers so the run feels like a
+// fresh attempt against the same terrain.
+function continueRun() {
+  paused = false;
+  syncPausedIndicator();
+  // Anchor on the star the ball was orbiting at death. If the
+  // index points off the end (shouldn't happen), fall back to
+  // the last star.
+  let anchorIdx = ball ? ball.currentStar : 0;
+  if (anchorIdx < 0 || anchorIdx >= stars.length) {
+    anchorIdx = stars.length - 1;
+  }
+  // Preserve the physics frame counter — comets, binary sub-
+  // stars, and planets all advance via `frame * omega + phase`,
+  // so resetting it would snap every orbital body back to its
+  // phase-zero position, which looks like a jump.
+  const priorFrame = ball ? ball.frame : 0;
+  const s = stars[anchorIdx];
+  // Clear the caught flag so the anchor star renders/plays as
+  // the active one again, and revive any stripped systems are
+  // left as-is (caught past stars stay dim — that's fine).
+  s.caught = false;
+  trail = [];
+  particles = [];
+  shockwaves = [];
+  replay = [];
+  replayBounds = null;
+  replayIdx = 0;
+  score = 0;
+  fastStreak = 0;
+  trackedSpeed = 0;
+  audio.setStreak(0);
+  hasBoosted = false;
+  // Make sure there's enough runway of stars ahead; init() seeds
+  // 6, replicate that buffer past the anchor if trimmed.
+  while (stars.length - anchorIdx - 1 < 6) addNextStar();
+  // Re-orbit the ball around the anchor star. Pick a radius
+  // that clears the variant's visible structure and satisfies
+  // the physics peri floor:
+  //   - Binaries (including BH binaries) require peri ≥ 2.2 × r
+  //     so the circular orbit clears the sub-star reach.
+  //   - Ringworlds render a band at 2.6 × r; sit outside it.
+  //   - Plain / BH / monolith: 2.5 × r is a comfortable default.
+  let orbitMult = 2.5;
+  if (s.isRingworld) orbitMult = 3.2;
+  const r0 = s.r * orbitMult;
+  const v = AC.circularV(s.gm, r0);
+  ball = {
+    x: s.x,
+    y: s.y - r0,
+    vx: v,
+    vy: 0,
+    currentStar: anchorIdx,
+    alive: true,
+    pendingCapture: -1,
+    transferFrames: 0,
+    captureMinD: undefined,
+    captureMinX: 0,
+    captureMinY: 0,
+    captureMinVx: 0,
+    captureMinVy: 0,
+    framesInOrbit: 0,
+    pendingBonus: 1,
+    frame: priorFrame,
+  };
+  // Snap camera to the anchor star.
+  camY = -(s.y - H * CAM_FOCUS_Y);
+  camTargetY = camY;
+  zoomMultTarget = s.isRingworld ? 1.5 : 1.0;
+  zoomMult = zoomMultTarget;
+  computeLaunchWindow();
+  document.getElementById("score").textContent = "0";
+  updateSub();
+  document.getElementById("score-display").style.display = "block";
+  document.getElementById("hint").classList.add("on");
   audio.startMusic();
 }
 
@@ -1798,7 +1878,12 @@ function draw() {
         const subBH = j === 1 && b.accretorIsBH;
         // Each sub-star faces the other: offset by π for the
         // second so its "front" points at the first.
-        const tidalSeed = orbAngle + j * Math.PI - nowSec;
+        // Wrap at TIME_WRAP (same multiple-of-2π period used for
+        // nowSec) so the seed uniform doesn't drift out of
+        // float32 precision over long sessions or many
+        // continues. Lossless because every shader k is a clean
+        // decimal — W·k is always an integer multiple of 2π.
+        const tidalSeed = (orbAngle + j * Math.PI - nowSec) % TIME_WRAP;
         starBatch.push({
           x: subs[j].x, y: subs[j].y,
           r: subBH ? subs[j].r * BH_VISUAL_SCALE : subs[j].r,
@@ -2386,6 +2471,14 @@ document.addEventListener("keydown", (e) => {
     }
     return;
   }
+  // Enter on the game-over overlay: continue (desktop shortcut,
+  // complements Space = restart).
+  if ((e.code === "Enter" || e.key === "Enter") && state === STATE.DEAD) {
+    if (e.repeat) return;
+    e.preventDefault();
+    document.getElementById("continue-btn").click();
+    return;
+  }
   if (e.code !== "Space" && e.key !== " ") return;
   if (e.repeat) return;
   e.preventDefault();
@@ -2414,4 +2507,10 @@ document.getElementById("retry-btn").addEventListener("click", (e) => {
   document.getElementById("gameover").classList.add("hidden");
   state = STATE.PLAY;
   init();
+});
+document.getElementById("continue-btn").addEventListener("click", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  document.getElementById("gameover").classList.add("hidden");
+  state = STATE.PLAY;
+  continueRun();
 });
