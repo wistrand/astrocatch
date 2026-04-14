@@ -96,8 +96,11 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   orthogonal rolls on top. Binary stars (two sub-stars orbiting
   COM, tidally locked). Monoliths play as normal stars but
   render as rotating 3D slabs. Ringworlds are normal-physics
-  stars with a tumbling earth-textured band; camera auto-zooms
-  1.5× while the ship is captured. BH binaries get physics-driven ejecta from
+  stars with a tumbling earth-textured band; each carries a
+  `ringPlateCount` (0–7) that adds rotating shadow plates, sun
+  shadows, and warm city lights on the night sides. Camera
+  auto-zooms 1.5× while the ship is captured. Save/resume
+  roundtrips preserve `ringPlateCount`. BH binaries get physics-driven ejecta from
   donor to accretor. Crash wobble. Pause, arrow-key velocity
   nudge, launch-window indicator. Help overlay. Replay with
   dynamic follow-cam. Focus-click suppression.

@@ -153,6 +153,18 @@ the gameplay camera smoothly eases to a 1.5× zoom (`zoomMult`
 lerped at 0.05/frame) so the tumbling band stays legible; it
 eases back to 1.0× on the next capture.
 
+Each ringworld also carries a random `ringPlateCount` in
+`[0, 7]`, set at spawn (`Math.floor(Math.random() * 8)`). This
+value is packed into the star instance's flag bits and drives
+the shader's shadow-plates / day-night / city-lights path:
+- `0`: no plates, no shadows, no city lights (~1 in 8 rings).
+- `1–7`: N orbiting shadow plates projecting rotating dark
+  sectors onto the inside face; warm city lights appear on
+  land in the deep-night zones.
+
+The ringworld resume/continue orbit radius is `3.2 × r` so the
+ship clears the band (at `2.6 × r`).
+
 ## Crash wobble
 
 When the ship crashes, the star gets a decaying elliptical

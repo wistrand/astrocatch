@@ -72,7 +72,9 @@ No libraries. Shaders live as template strings inside `renderer.js`.
 `vec2 center, vec4 c1(rgb+baseR), vec4 c2(rgb+seed), vec4 params(hasRays, nGran, pulse, flags), vec2 wobble(amount, angle)`.
 
 Flags: bit 0 = isCurrent, bit 1 = isNext, bit 2 = isPast,
-bit 3 = isBlackHole, bit 4 = isMonolith, bit 6 = isRingworld.
+bit 3 = isBlackHole, bit 4 = isMonolith, bit 6 = isRingworld,
+bits 8–10 = `ringPlateCount` (0–7, only meaningful when
+isRingworld is set).
 
 ## Black holes
 
@@ -145,28 +147,72 @@ Surface features:
   All `u = theta + spin` multipliers are integers so the
   texture seams across the band wrap.
 - **Outside**: dark-grey structural panels with a low-frequency
-  sinusoidal pattern and a lighter band-edge rim.
-- **Camera-direction light**: `lit = 0.20 + 1.70 * NdotV` on
-  outside, `litInside = 0.05 + 1.50 * NdotV` on inside (N flips
+  sinusoidal pattern.
+- **Camera-direction light**: `lit = 0.20 + 2.70 * NdotV` on
+  outside, `litInside = 0.01 + 1.70 * NdotV` on inside (N flips
   sign between faces). Darkens silhouette edges, reads as 3D.
 - **Specular** hotspot on both faces via `pow(NdotV, 32)` —
   stronger on outside (near arc), softer on inside (far arc).
+  Inside specular masked to water only (`1 − landT`), so oceans
+  glint but continents stay matte.
 - **Rim glow** on the inside: warm fresnel `pow(1 - |N.z|, 4)`
   along the inside silhouette, reads as atmospheric limb.
 - **Axial spin** `u_time * 0.12` offsets the theta coordinate
   so surface features rotate around the central sun.
+- **Axial vertical gradient**: mild darkening at widthT = 1
+  (top rim of band), brightening at widthT = 0 (bottom rim).
 
-The ship orbits the ringworld as a normal star; gameplay
-triggers a smooth 1.5× camera zoom-in while the ship's
-`currentStar.isRingworld` is true.
+### Shadow plates (optional day/night sectors)
 
-*Cost:* moderate-high, ~2× a monolith. Per fragment: Rodrigues
-build, ray-cylinder quadratic (~25 muls + sqrt), two terrain
-octaves + two domain-warped cloud octaves (~14 trig total),
-per-face specular and rim-glow fresnel. Quad ~3× `baseR` so
-pixel count per instance is ~9× a plain star — the quad area
-dominates the per-fragment ALU cost. Still negligible next to
-a visible black hole.
+Per-ringworld integer `ringPlateCount` in `[0, 7]`, packed into
+flag bits 8–10. Zero = no plates (plate render, sun shadow, and
+city-lights blocks all short-circuited).
+
+When `plateCount > 0`:
+- **Geometry**: a second concentric cylinder at `Rp = 0.55 R`,
+  axial extent `Hp = 0.70 H`. N angular arcs of width
+  `plateSpacing * 0.22 ≈ 16°` each, rotating at `u_time * 0.04`.
+  The plate cylinder is ray-intersected alongside the ring. A
+  plate hit short-circuits to render a dark structural panel
+  with camera-direction lighting; the sun-facing inner face (far
+  plate wall) also gets a tight `pow(NdotV, 24)` specular
+  highlight, so plates catch the sun visibly.
+- **Occlusion**: plates sit between outside ring wall and sun.
+  When outside is the selected ring hit, plates are occluded
+  and skipped. Otherwise plates are rendered even against a
+  ring-miss background.
+- **Sun-shadow on inside face**: inside pixels whose theta
+  falls within a plate arc are darkened (multiplied by
+  `1 − shadow * 0.75`). The axial check `abs(axPos) * Rp/R`
+  against `Hp/2` is currently always satisfied with these
+  constants, so the shadow is effectively angular-only.
+- **City lights**: in deep-night regions (`shadow³`), a
+  domain-warped 3-octave fBm thresholded at `1.90` paints warm
+  amber dots on land (`landT`). Makes night sides look
+  populated.
+
+### Camera zoom
+
+Gameplay triggers a smooth 1.5× camera zoom-in while the ship's
+`currentStar.isRingworld` is true (eased at 0.05/frame), eased
+back to 1.0× on the next capture.
+
+### Edge-case guard
+
+When the ring tumbles through an orientation where its axis
+aligns with the view direction, `A = dot(dPerp, dPerp) → 0`
+and the ray-cylinder quadratic's `1/(2A)` denominator blows up.
+The shader sets `ringSkip = A < 1e-6` and skips both the ring
+and plate intersections in that window, falling through to the
+sun/empty branch. Prevents NaN flashes.
+
+*Cost:* moderate-high. Plate-free ringworld is ~2× a monolith.
+With plates enabled, per fragment adds: plate-cylinder quadratic
++ 2-iteration intersection loop with two `atan` calls (~80 ALU +
+2 atan), plus on inside-face pixels an angular shadow
+smoothstep + 5-sin domain-warped city fBm + `pow` (~70 ALU + 5
+sins + 1 pow). Weighted aggregate: ~70% more fragment work than
+plate-free. Still well under a visible black hole.
 
 ## Crash wobble
 
