@@ -94,12 +94,15 @@ function addPlanets(s) {
 function addComet(s) {
   // Field names match the gameplay's comet schema so
   // appendCometBatch / cometPosition work unchanged.
+  // Randomize orbit orientation + starting phase so each cell
+  // shows a visually distinct comet rather than three identical
+  // copies.
   s.comets = [{
     a: s.r * 4,
-    e: 0.85,
-    omega: Math.PI * 0.3,
-    meanMotion: 2 * Math.PI / 1200,
-    phase: 0,
+    e: 0.75 + Math.random() * 0.18,
+    omega: Math.random() * Math.PI * 2,
+    meanMotion: 2 * Math.PI / (900 + Math.random() * 600),
+    phase: Math.random() * Math.PI * 2,
     radius: 4,
     numSyndynes: 3,
   }];
