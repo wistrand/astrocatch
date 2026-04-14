@@ -726,6 +726,13 @@ void main() {
     ndl = max(ndl, 0.0);
     float lit = 0.20 + 2.70 * ndl;
     float litInside = 0.01 + 1.7 * ndl;
+    // Axial gradient along the ring's own axis — "top" is the
+    // positive axis end (widthT → 1), "bottom" is the negative
+    // axis end (widthT → 0). Darker at top, brighter at bottom.
+    float vertShade = mix(1.10, 0.80, widthT);
+    // Band-edge rims: darken the top rim, brighten the bottom rim.
+    float topEdge = smoothstep(0.82, 1.0, (widthT - 0.5) * 2.0);
+    float botEdge = smoothstep(0.82, 1.0, (0.5 - widthT) * 2.0);
     if (isInside) {
       // INSIDE surface — faces the sun, fully lit.
       // Every multiplier of u must be an integer so the texture
@@ -740,8 +747,8 @@ void main() {
       float mountainT = smoothstep(0.32, 0.55, n);
       vec3 col = mix(ocean, coast, landT);
       col = mix(col, land, mountainT);
-      float edgeT = smoothstep(0.82, 1.0, abs(widthT - 0.5) * 2.0);
-      col = mix(col, vec3(0.02, 0.02, 0.04), edgeT * 0.75);
+      col = mix(col, vec3(0.02, 0.02, 0.04), topEdge * 0.45);
+      col = mix(col, vec3(0.95, 0.92, 0.85), botEdge * 0.12);
       // Cloud clumps — multi-octave, domain-warped so we get
       // irregular patches instead of parallel stripes. u terms
       // stay integer; widthT terms are free.
@@ -764,20 +771,22 @@ void main() {
       // (landT=0) so oceans glint but continents stay matte.
       float specIn = pow(max(-outward.z, 0.0), 32.0);
       col += vec3(1.0, 0.95, 0.80) * specIn * 0.85 * (1.0 - landT);
+      col *= vertShade;
       outColor = vec4(col, 1.0);
       return;
     } else {
       // OUTSIDE surface — dark back of the habitat.
       float n = 0.5 + 0.3 * sin(u * 5.0) * cos(widthT * 3.0);
       vec3 col = vec3(0.05, 0.06, 0.09) * (0.8 + 0.4 * n);
-      float edgeT = smoothstep(0.82, 1.0, abs(widthT - 0.5) * 2.0);
-      col = mix(col, vec3(0.16, 0.18, 0.22), edgeT);
+      col = mix(col, vec3(0.0), topEdge * 0.45);
+      col = mix(col, vec3(0.55, 0.58, 0.65), botEdge * 0.18);
       col *= lit;
       // Specular hotspot on the near-facing outside — a tight
       // highlight where the structural panels face the camera
       // directly. Reads as "near arc."
       float spec = pow(max(outward.z, 0.0), 32.0);
       col += vec3(0.95, 0.92, 0.85) * spec * 0.55;
+      col *= vertShade;
       outColor = vec4(col, 1.0);
       return;
     }
