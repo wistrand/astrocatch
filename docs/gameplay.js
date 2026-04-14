@@ -13,6 +13,28 @@ import { createAudio, simplex2 } from "./audio.js";
 const canvas = document.getElementById("c");
 let renderer = null;
 let W = 0, H = 0, DPR = 1;
+// Touch/coarse-pointer detection — used by resize() to pick a
+// mobile-specific zoom, so it must be declared before resize().
+const IS_TOUCH = typeof window !== "undefined"
+  && window.matchMedia
+  && window.matchMedia("(pointer: coarse)").matches;
+// Zoom is dynamic: on any wide screen (landscape aspect) we
+// Zoom is dynamic by viewport.
+//   Mobile portrait : 0.58 — original mobile value.
+//   Mobile landscape: 0.48 — pulled back so short vertical
+//                            space doesn't feel cramped.
+//   Desktop         : 0.52 — wider view than mobile portrait
+//                            since the mouse is more precise.
+let ZOOM = 0.58;
+function computeZoom() {
+  const is_wide = W > H * 1.5;
+  if (IS_TOUCH) {
+      return is_wide ? 0.45 : 0.58;
+  } else {
+      return is_wide ? 0.45 : 0.52;
+  }
+
+}
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
   W = window.innerWidth;
@@ -21,22 +43,48 @@ function resize() {
   canvas.height = Math.round(H * DPR);
   canvas.style.width = W + "px";
   canvas.style.height = H + "px";
+  ZOOM = computeZoom();
   if (renderer) renderer.setViewport(W, H, DPR);
 }
 window.addEventListener("resize", () => {
+  // Capture the current star's screen position BEFORE resize
+  // so we can preserve its on-screen fraction across the new
+  // viewport. Y always sits at H*CAM_FOCUS_Y by camY math; X
+  // is fixed by world cs.x and cameraMat, so we have to shift
+  // world coords to keep the same screen fraction.
+  let preXFrac = 0.5;
+  const preW = W, preZoom = ZOOM;
+  if (ball && stars[ball.currentStar] && preW > 0) {
+    const cs = stars[ball.currentStar];
+    const screenX = preW / 2 + preZoom * (cs.x - preW / 2);
+    preXFrac = screenX / preW;
+  }
   resize();
   if (state === STATE.MENU) initMenuStars();
-  // Re-center the camera on the current star so a window
-  // resize (or device orientation flip) doesn't leave the
-  // ship off-screen or in a weird spot. Snap both live camY
-  // and the target camY. Also recompute the launch window
-  // since its cached positions use world coords unaffected
-  // by viewport, but the hint may look stale otherwise.
   if (ball && stars[ball.currentStar]) {
-    const cy = -(stars[ball.currentStar].y - H * CAM_FOCUS_Y);
+    const cs = stars[ball.currentStar];
+    // Y: snap camY so the star sits at H * CAM_FOCUS_Y.
+    const cy = -(cs.y - H * CAM_FOCUS_Y);
     camY = cy;
     camTargetY = cy;
+    // X: solve for the world cs.x that places the star at
+    // preXFrac of the new W when run through cameraMat:
+    //   sx = W/2 + ZOOM*(cs.x - W/2)
+    //   sx = preXFrac*W → cs.x_new = W*(0.5 + (preXFrac-0.5)/ZOOM)
+    const newCsX = W * (0.5 + (preXFrac - 0.5) / ZOOM);
+    const dx = newCsX - cs.x;
+    if (dx !== 0) {
+      for (let i = 0; i < stars.length; i++) stars[i].x += dx;
+      ball.x += dx;
+      // Trail and replay positions are in world coords too.
+      for (let i = 0; i < trail.length; i++) trail[i].x += dx;
+      for (let i = 0; i < replay.length; i++) replay[i].x += dx;
+    }
   }
+  // While paused, loop() returns early and never calls draw(),
+  // so a resize would leave the canvas showing the old viewport.
+  // Force one draw so the new layout is visible immediately.
+  if (paused && typeof draw === "function") draw();
 });
 resize();
 renderer = createRenderer(canvas);
@@ -153,15 +201,8 @@ const CRASH_MULT = AC.CRASH_MULT;
 const INITIAL_ORBIT_MULT = AC.INITIAL_ORBIT_MULT;
 const SAFE_SEP = AC.SAFE_SEP;
 
-// View / pacing tunables.
-// < 1 means zoom out (more stars visible). Touch devices get a
-// slightly wider view so the smaller physical screen doesn't
-// feel cramped — matchMedia("(pointer: coarse)") is the correct
-// check for "finger, not mouse", not the user-agent string.
-const IS_TOUCH = typeof window !== "undefined"
-  && window.matchMedia
-  && window.matchMedia("(pointer: coarse)").matches;
-const ZOOM = IS_TOUCH ? 0.58 : 0.65;
+// View / pacing tunables. IS_TOUCH and ZOOM live near the top
+// of the file because resize() reads them on first module load.
 // Vertical focus point — fraction of screen height where the
 // current star sits. On portrait (mobile) the star is pushed
 // lower so the player sees more upcoming stars above.

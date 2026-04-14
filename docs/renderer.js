@@ -1112,7 +1112,11 @@ export function createRenderer(canvas) {
   // via per-instance speed/phase + u_time.
   let bgStars = null;
   function initBgStars(W, H) {
-    const n = 220;
+    // Populated across a fixed 2400×1600 canonical space, so the
+    // count is tuned for that area density (~2× a typical laptop
+    // viewport). Dropping to 220 here would halve the apparent
+    // density vs the pre-normalization code.
+    const n = 420;
     ensureCircleScratch(n);
     const tintWhite = [1, 1, 1];
     const tintBlue  = [0.74, 0.83, 1.0];
