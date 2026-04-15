@@ -43,6 +43,20 @@ let ZOOM = 0.58;
 // ringworld, back to 1.0 otherwise.
 let zoomMult = 1.0;
 let zoomMultTarget = 1.0;
+// Target zoom multiplier for the star currently being orbited.
+// Ringworld visuals are pulled in closer so the band stays
+// legible; everything else sticks at the default viewport zoom.
+// Touch viewports use a slightly lower ring zoom to leave room
+// around the silhouette on the smaller screen.
+function zoomTargetFor(star) {
+  if (!star || !star.isRingworld) return 1.0;
+  return IS_TOUCH ? 1.5 : 1.7;
+}
+// World-space horizontal camera pan. Normally 0; nudged when
+// the current star's visible extent would otherwise clip the
+// viewport (e.g. a ringworld at 1.7× zoom near a screen edge).
+let camX = 0;
+let camXTarget = 0;
 function computeZoom() {
   const is_wide = W > H * 1.5;
   if (IS_TOUCH) {
@@ -443,7 +457,7 @@ let hasBoosted = false; // for the hint
 
 const SPAWN_TABLE_DEBUG = [
   { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0 },
-  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 2 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10 },
 ];
 
 const SPAWN_TABLE_GAME = [
@@ -988,7 +1002,9 @@ function continueRun() {
   // Snap camera to the anchor star.
   camY = -(s.y - H * CAM_FOCUS_Y);
   camTargetY = camY;
-  zoomMultTarget = s.isRingworld ? 1.5 : 1.0;
+  camX = 0;
+  camXTarget = 0;
+  zoomMultTarget = zoomTargetFor(s);
   zoomMult = zoomMultTarget;
   computeLaunchWindow();
   document.getElementById("score").textContent = "0";
@@ -1082,8 +1098,10 @@ function resumeFromSave(data) {
   replayBounds = null;
   replayIdx = 0;
   // Zoom responds to the anchor variant just like continueRun.
-  zoomMultTarget = anchor.isRingworld ? 1.5 : 1.0;
+  zoomMultTarget = zoomTargetFor(anchor);
   zoomMult = zoomMultTarget;
+  camX = 0;
+  camXTarget = 0;
   computeLaunchWindow();
   document.getElementById("score").textContent = "" + score;
   updateSub();
@@ -1737,10 +1755,46 @@ function renderTick() {
   if (desired > camTargetY) camTargetY = desired;
   camY += (camTargetY - camY) * 0.08;
 
-  // Ringworld zoom-in: target 1.5x while orbiting a ringworld,
+  // Ringworld zoom-in: target 1.7x while orbiting a ringworld,
   // back to 1.0 otherwise. Same easing rate as camY.
-  zoomMultTarget = stars[ball.currentStar].isRingworld ? 1.5 : 1.0;
+  const cs0 = stars[ball.currentStar];
+  zoomMultTarget = zoomTargetFor(cs0);
   zoomMult += (zoomMultTarget - zoomMult) * 0.05;
+
+  // Horizontal camera nudge — keep the current star's visible
+  // extent inside the viewport. Only matters at elevated zooms,
+  // typically on ringworlds where ring radius = 3.6 · s.r
+  // pushes the silhouette past the screen edge near a wall.
+  const effZoom = ZOOM * zoomMult;
+  const visualR = (cs0.isRingworld ? cs0.r * 3.6 : cs0.r * 2.5);
+  const screenXNoPan = W / 2 + (cs0.x - W / 2) * effZoom;
+  const visualRpx = visualR * effZoom;
+  const margin = 8;
+  // Required camX (world units) so that screenX ± visualRpx
+  // falls inside [margin, W - margin]. If the star is bigger
+  // than the viewport, center it.
+  if (visualRpx * 2 > W - 2 * margin) {
+    camXTarget = (W / 2 - screenXNoPan) / effZoom;
+  } else {
+    let leftOverflow  = margin - (screenXNoPan - visualRpx);
+    let rightOverflow = (screenXNoPan + visualRpx) - (W - margin);
+    let shiftPx = 0;
+    if (leftOverflow > 0)  shiftPx =  leftOverflow;
+    else if (rightOverflow > 0) shiftPx = -rightOverflow;
+    camXTarget = shiftPx / effZoom;
+  }
+  camX += (camXTarget - camX) * 0.08;
+  // Safety clamp — if the eased camX is still leaving the
+  // star partially clipped (e.g. the current star changed
+  // abruptly and easing hasn't caught up), snap hard enough
+  // to keep the silhouette fully on screen this frame. Keeps
+  // the soft easing for the common case where camXTarget
+  // barely changes, and only locks when clipping would
+  // otherwise be visible.
+  const livePanScreenX = screenXNoPan + camX * effZoom;
+  const clipLeft  = margin - (livePanScreenX - visualRpx);
+  const clipRight = (livePanScreenX + visualRpx) - (W - margin);
+  if (clipLeft > 0 || clipRight > 0) camX = camXTarget;
 
   // Off-screen death check — only while still PLAYing.
   if (state === STATE.PLAY) {
@@ -1982,7 +2036,7 @@ function draw() {
   }
 
   // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
-  const cam = renderer.cameraMat(camY, ZOOM * zoomMult, CAM_FOCUS_Y);
+  const cam = renderer.cameraMat(camY, ZOOM * zoomMult, CAM_FOCUS_Y, camX);
 
   // Trail — single stroked polyline. Half-width 1.2 world units;
   // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.

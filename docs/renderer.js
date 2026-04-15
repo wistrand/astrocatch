@@ -725,54 +725,90 @@ void main() {
     float plateSpacing = (plateCount > 0) ? TAU / float(plateCount) : TAU;
     float plateHalfW = plateSpacing * 0.22;
     bool outsideVisible = ringHit && !isInside;
-    if (plateCount > 0 && !outsideVisible && !ringSkip) {
-      float Cp = dot(oPerp, oPerp) - Rp * Rp;
-      float discp = B * B - 4.0 * A * Cp;
-      if (discp >= 0.0) {
-        float sqp = sqrt(discp);
-        for (int k = 0; k < 2; k++) {
-          float tp = (k == 0) ? (-B - sqp) / (2.0 * A)
-                              : (-B + sqp) / (2.0 * A);
-          vec3 hp = o + tp * d;
-          float axp = dot(hp, axis);
-          if (abs(axp) > Hp * 0.5) continue;
-          vec2 rp = vec2(dot(hp, basU), dot(hp, basV));
-          float thetaP = atan(rp.y, rp.x);
-          float tw = mod(thetaP + plateSpin, plateSpacing);
-          if (abs(tw - plateSpacing * 0.5) < plateHalfW) {
-            vec3 pnrm = (hp - dot(hp, axis) * axis) / Rp;
-            bool sunFace = (k == 1);
-            // Sun-facing visible normal is the cylinder's INWARD
-            // direction (pointing from the plate toward the
-            // central sun); non-sun face keeps the outward.
-            if (sunFace) pnrm = -pnrm;
-            float pndv = max(pnrm.z, 0.0);
-            float pWidthT = axp / Hp + 0.5;
-            vec3 pCol = vec3(0.10, 0.11, 0.15)
-                       * (0.45 + 1.2 * pndv);
-            if (sunFace) {
-              // Tight highlight where the inward face angle
-              // faces the camera. Plates look metallic/pale.
-              float ps = pow(pndv, 24.0);
-              pCol += vec3(1.0, 0.95, 0.82) * ps * 0.55;
-            }
-            pCol *= mix(1.10, 0.80, pWidthT);
-            outColor = vec4(pCol, 1.0);
-            return;
-          }
+    // Render priority from camera forward:
+    //   1. outside ring wall  (handled after this block)
+    //   2. plate near wall (k=0)  ← this block, first pass
+    //   3. SUN at axis  ← sun-priority check below
+    //   4. plate far wall (k=1)  ← this block, second pass
+    //   5. inside ring wall  (handled after this block)
+    // Running both plate walls in one pass caused the far wall
+    // (k=1) to render on top of the sun even when the sun was
+    // geometrically in front of it. The fix is to split the
+    // plate test in two and do the sun priority check in between.
+    float Cp = dot(oPerp, oPerp) - Rp * Rp;
+    float discp = B * B - 4.0 * A * Cp;
+    float sqp = (discp >= 0.0) ? sqrt(discp) : 0.0;
+    bool platesOk = plateCount > 0 && !outsideVisible && !ringSkip
+                 && discp >= 0.0;
+
+    // ── Plate NEAR wall (k=0) — closest, occludes sun ──
+    if (platesOk) {
+      float tp = (-B - sqp) / (2.0 * A);
+      vec3 hp = o + tp * d;
+      float axp = dot(hp, axis);
+      if (abs(axp) <= Hp * 0.5) {
+        vec2 rp = vec2(dot(hp, basU), dot(hp, basV));
+        float thetaP = atan(rp.y, rp.x);
+        float tw = mod(thetaP + plateSpin, plateSpacing);
+        if (abs(tw - plateSpacing * 0.5) < plateHalfW) {
+          vec3 pnrm = (hp - dot(hp, axis) * axis) / Rp;
+          float pndv = max(pnrm.z, 0.0);
+          float pWidthT = axp / Hp + 0.5;
+          vec3 pCol = vec3(0.10, 0.11, 0.15) * (0.45 + 1.2 * pndv);
+          pCol *= mix(1.10, 0.80, pWidthT);
+          outColor = vec4(pCol, 1.0);
+          return;
         }
       }
     }
-    if (!ringHit) {
-      if (centerD < sunR) {
-        float glowT = 1.0 - smoothstep(0.0, sunR, centerD);
-        float coreT = 1.0 - smoothstep(0.0, v_baseR * 0.25, centerD);
-        vec3 sunCol = vec3(1.0, 0.92, 0.65);
-        float a = glowT * 0.45 + coreT * 0.55;
-        outColor = vec4(sunCol * a, a);
-        return;
+
+    // ── Sun overlay alpha/color ─────────────────────────────
+    // Computed once here, applied as an alpha-blended overlay
+    // wherever the sun should be visible (plate-far, inside, or
+    // pure ring-miss empty). Outside occludes the sun, so the
+    // outside-face render doesn't blend it in. Plate-near
+    // occludes the sun (returned above), so this only runs
+    // past that point.
+    float sunAlpha = 0.0;
+    vec3 sunCol = vec3(1.0, 0.92, 0.65);
+    if (!outsideVisible && centerD < sunR) {
+      float glowT = 1.0 - smoothstep(0.0, sunR, centerD);
+      float coreT = 1.0 - smoothstep(0.0, v_baseR * 0.25, centerD);
+      sunAlpha = clamp(glowT * 0.45 + coreT * 0.55, 0.0, 1.0);
+    }
+
+    // ── Plate FAR wall (k=1) — sun-facing side with specular.
+    if (platesOk) {
+      float tp = (-B + sqp) / (2.0 * A);
+      vec3 hp = o + tp * d;
+      float axp = dot(hp, axis);
+      if (abs(axp) <= Hp * 0.5) {
+        vec2 rp = vec2(dot(hp, basU), dot(hp, basV));
+        float thetaP = atan(rp.y, rp.x);
+        float tw = mod(thetaP + plateSpin, plateSpacing);
+        if (abs(tw - plateSpacing * 0.5) < plateHalfW) {
+          vec3 pnrm = -(hp - dot(hp, axis) * axis) / Rp;
+          float pndv = max(pnrm.z, 0.0);
+          float pWidthT = axp / Hp + 0.5;
+          vec3 pCol = vec3(0.10, 0.11, 0.15) * (0.45 + 1.2 * pndv);
+          float ps = pow(pndv, 24.0);
+          pCol += vec3(1.0, 0.95, 0.82) * ps * 0.55;
+          pCol *= mix(1.10, 0.80, pWidthT);
+          // Sun sits geometrically in front of the far plate —
+          // blend its glow on top so the sun's edge fades into
+          // the plate instead of hitting it with a hard line.
+          pCol = mix(pCol, sunCol, sunAlpha);
+          outColor = vec4(pCol, 1.0);
+          return;
+        }
       }
-      outColor = vec4(0.0);
+    }
+
+    // ── Ring miss → sun-over-empty or pure empty.
+    if (!ringHit) {
+      // Match the game's original premultiplied output so
+      // the sun can blend against the galaxy/bgstars background.
+      outColor = vec4(sunCol * sunAlpha, sunAlpha);
       return;
     }
     float widthT = axPos / H + 0.5;   // 0 bottom → 1 top
@@ -864,12 +900,45 @@ void main() {
         float cityShadow = pow(shadow, 3.0);
         col += cityCol * cities * cityShadow * landT * 1.20;
       }
+      // Sun overlay — for inside-face pixels within the sun's
+      // screen disc, blend the sun glow on top (sun is closer
+      // to camera than the inside far wall).
+      col = mix(col, sunCol, sunAlpha);
       outColor = vec4(col, 1.0);
       return;
     } else {
-      // OUTSIDE surface — dark back of the habitat.
-      float n = 0.5 + 0.3 * sin(u * 5.0) * cos(widthT * 3.0);
-      vec3 col = vec3(0.05, 0.06, 0.09) * (0.8 + 0.4 * n);
+      // OUTSIDE surface — honeycomb with per-hex grayscale.
+      // Pointy-top hexes are 1 unit wide × 2·sqrt(3)/3 ≈ 1.155
+      // units tall in this parameterization, so for roughly
+      // equilateral cells:
+      //   NCOLS ≈ 2π · (R/H) · WSCALE / 1.155 ≈ 19.58 · WSCALE.
+      // With R = 3.6·H and WSCALE = 3, NCOLS ≈ 58.
+      // NCOLS must be even so the hex row parity wraps at the
+      // theta seam.
+      const float NCOLS  = 58.0;
+      const float WSCALE = 3.0;
+      float uNorm = u - TAU * floor(u / TAU);
+      vec2 hexUV = vec2(uNorm * NCOLS / TAU, widthT * WSCALE);
+      vec2 hr = vec2(1.0, 1.73205);
+      vec2 hh_ = hr * 0.5;
+      vec2 hexA = mod(hexUV, hr) - hh_;
+      vec2 hexB = mod(hexUV - hh_, hr) - hh_;
+      vec2 gv  = (dot(hexA, hexA) < dot(hexB, hexB)) ? hexA : hexB;
+      vec2 hexId = hexUV - gv;
+      // Seam wrap: a hex straddling the theta seam reads as
+      // hexId.x = 0 on the positive side and hexId.x = NCOLS on
+      // the wrap side. Without this mod, the hash would pick a
+      // different tone for each side, producing a visible line.
+      hexId.x = mod(hexId.x, NCOLS);
+      float h = fract(
+        sin(dot(hexId, vec2(12.9898, 78.233))) * 43758.5453
+      );
+      float tone;
+      if (h < 0.55)      tone = 0.13;
+      else if (h < 0.80) tone = 0.15;
+      else if (h < 0.93) tone = 0.17;
+      else               tone = 0.19;
+      vec3 col = vec3(tone);
       col = mix(col, vec3(0.0), topEdge * 0.45);
       col = mix(col, vec3(0.55, 0.58, 0.65), botEdge * 0.18);
       col *= lit;
@@ -1488,18 +1557,22 @@ export function createRenderer(canvas) {
     resizeSceneFbo();
   }
 
-  function cameraMat(camY, zoom, focusY) {
+  function cameraMat(camY, zoom, focusY, camX) {
     // Matches Canvas2D's transform chain:
-    //   translate(W/2, H*focusY) * scale(zoom) * translate(-W/2, -H*focusY) * translate(0, camY)
+    //   translate(W/2, H*focusY) * scale(zoom) * translate(-W/2, -H*focusY) * translate(camX, camY)
     // applied to a world point — screen = T4 * S * T3 * T2 * world.
     // `focusY` is the fraction of screen height where the current
     // star sits. 0.55 is the default (slightly below center);
     // portrait/mobile passes a larger value (e.g. 0.62) so the
     // star sits lower, leaving more sky visible above.
+    // `camX` is an optional world-space horizontal pan (defaults
+    // to 0), used to keep oversized stars (ringworlds at 1.7×
+    // zoom) from extending beyond the viewport horizontally.
     // Composed left-associatively into the pooled scratch so the
     // whole chain runs without a single heap allocation.
     if (focusY === undefined) focusY = 0.55;
-    mat3SetTranslate(_camT2, 0, camY);
+    if (camX === undefined) camX = 0;
+    mat3SetTranslate(_camT2, camX, camY);
     mat3SetTranslate(_camT3, -viewW / 2, -viewH * focusY);
     mat3SetScale(_camS, zoom, zoom);
     mat3SetTranslate(_camT4, viewW / 2, viewH * focusY);
