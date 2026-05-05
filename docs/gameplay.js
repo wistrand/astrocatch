@@ -351,6 +351,7 @@ function serializeStar(s, full) {
   stub.isMonolith = !!s.isMonolith;
   stub.isRingworld = !!s.isRingworld;
   if (s.isRingworld) stub.ringPlateCount = s.ringPlateCount | 0;
+  stub.isPulsar = !!s.isPulsar;
   if (s.planets) stub.planets = s.planets;
   if (s.comets) stub.comets = s.comets;
   if (s.binary) {
@@ -456,18 +457,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0 },
-  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10, pulsar: 1 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith  ringworld
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0 },
-  { at: 10,   plain:  84, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0 },
-  { at: 20,   plain:  72, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0 },
-  { at: 50,   plain:  58, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2 },
-  { at: 80,   plain:  48, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4 },
+  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0 },
+  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2 },
+  { at: 20,   plain:  68, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4 },
+  { at: 50,   plain:  54, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6 },
+  { at: 80,   plain:  44, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -560,6 +561,9 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // no shadows, no night-side city lights. Only meaningful
     // when isRingworld is true.
     ringPlateCount: 0,
+    // Pulsar flag — neutron-star body with two opposed lighthouse
+    // beams sweeping a magnetic axis. Same physics as a normal star.
+    isPulsar: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     const variant = pickVariant(starIdx);
@@ -577,17 +581,22 @@ function makeStar(x, y, r, colorIdx, starIdx) {
       // Random 0-7 plates. 0 means no night/day sectors —
       // roughly 1 in 8 ringworlds is plate-free for variety.
       s.ringPlateCount = Math.floor(Math.random() * 8);
+    } else if (variant === "pulsar") {
+      s.isPulsar = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
-    // only. Ramps up with star index. Skipped on monoliths.
-    if (!s.isBinary && !s.isMonolith && !s.isRingworld) {
+    // only. Ramps up with star index. Skipped on variants whose
+    // visual or physical setup already occupies the orbit volume.
+    if (!s.isBinary && !s.isMonolith && !s.isRingworld
+        && !s.isPulsar) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
       }
     }
     // Comet: orthogonal roll, applied to any variant except
-    // monoliths (keeps them alien/alone).
+    // monoliths (keeps them alien/alone). Pulsars are fine — debris
+    // disks around real pulsars are a known phenomenon.
     if (!s.isMonolith && starIdx >= COMET_MIN_STAR
         && Math.random() < COMET_PROB) {
       assignComets(s, starIdx);
@@ -1038,6 +1047,7 @@ function resumeFromSave(data) {
     isMonolith: !!raw.isMonolith,
     isRingworld: !!raw.isRingworld,
     ringPlateCount: raw.ringPlateCount | 0,
+    isPulsar: !!raw.isPulsar,
   }));
   // Re-orbit the ball around the saved anchor star with a fresh
   // circular orbit — same math as continueRun. The saved x/y/vx/
@@ -1218,6 +1228,7 @@ function captureStar(idx) {
     stars[leavingIdx].isMonolith = false;
     stars[leavingIdx].isRingworld = false;
     stars[leavingIdx].ringPlateCount = 0;
+    stars[leavingIdx].isPulsar = false;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -2155,6 +2166,7 @@ function draw() {
         isMonolith: s.isMonolith,
         isRingworld: s.isRingworld,
         ringPlateCount: s.ringPlateCount,
+        isPulsar: s.isPulsar,
       });
     }
   }

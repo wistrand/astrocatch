@@ -65,6 +65,7 @@ function makeBaseStar(x, y, r, colorIdx) {
     isBinary: false,
     binary: null,
     isMonolith: false,
+    isPulsar: false,
   };
 }
 
@@ -151,6 +152,15 @@ stars = [
   cell(2, 3, "ringworld (no plates)", (s) => {
     s.isRingworld = true;
     s.ringPlateCount = 0;
+  }),
+  cell(0, 4, "pulsar", (s) => { s.isPulsar = true; }),
+  cell(1, 4, "pulsar (red)", (s) => {
+    s.isPulsar = true;
+    s.colorIdx = 5; // coral
+  }),
+  cell(2, 4, "pulsar (mint)", (s) => {
+    s.isPulsar = true;
+    s.colorIdx = 3; // mint
   }),
 ];
 
@@ -347,6 +357,7 @@ function loop(t) {
         isMonolith: s.isMonolith,
         isRingworld: s.isRingworld,
         ringPlateCount: s.ringPlateCount | 0,
+        isPulsar: s.isPulsar,
       });
     }
   }

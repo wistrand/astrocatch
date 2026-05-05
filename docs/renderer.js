@@ -477,8 +477,15 @@ void main() {
   float baseR = a_c1.w;
   // Quad extent matches the on-screen footprint of the corona
   // (bodyR * 4.0) plus a small margin for streamers that shoot
-  // a little past it on high-energy blobs.
-  float extent = baseR * 4.3 + 8.0;
+  // a little past it on high-energy blobs. Pulsars need a much
+  // wider quad — the lens-flare halo/streak/spikes extend far
+  // beyond the corona radius, and a tight quad shows a visible
+  // rectangular cutoff against the background during a flash.
+  // 8.0 gives the flare room; the FS does a circular alpha fade
+  // inside this so the rectangle edge never appears.
+  int flagsV = int(a_params.w);
+  float extentMul = ((flagsV & 32) != 0) ? 5.0 : 4.3;
+  float extent = baseR * extentMul + 8.0;
   vec2 local = a_vertex * extent;
   vec2 worldPos = a_center + local;
   vec3 clip = u_view * vec3(worldPos, 1.0);
@@ -545,6 +552,7 @@ void main() {
   bool isPast    = (flags & 4) != 0;
   bool isBlackHole = (flags & 8) != 0;
   bool isMonolith = (flags & 16) != 0;
+  bool isPulsar  = (flags & 32) != 0;
   bool isRingworld = (flags & 64) != 0;
 
   if (isPast) {
@@ -951,6 +959,272 @@ void main() {
       outColor = vec4(col, 1.0);
       return;
     }
+  }
+
+  // Pulsar — rapidly rotating neutron star. A tiny dense core
+  // with two opposed lighthouse beams along a magnetic axis that
+  // is offset from the spin axis (~30°). The magnetic axis sweeps
+  // around the spin axis; when its 3D direction aligns with the
+  // view (camera at +Z), the cone points at us and the pulsar
+  // flashes brilliantly. When edge-on, the beams extend as visible
+  // rays in the screen plane. The whole thing is drawn entirely
+  // analytically — no FBO, no extra geometry.
+  if (isPulsar) {
+    // Spin axis drifts smoothly over the sphere — three independent
+    // 2-decimal rates make each pulsar's axis trace a non-periodic
+    // path across the TIME_WRAP window. When the drift carries the
+    // axis close to +Z (camera direction) the magnetic axis (30°
+    // off spin) sweeps through +Z and the pulsar flashes briefly.
+    // Per-pulsar seed phases keep every pulsar's tumble distinct.
+    // 1e-4 epsilon prevents a degenerate normalize on the rare
+    // frames all three sinusoids cross zero together.
+    vec3 spin = normalize(vec3(
+      sin(u_time * 0.03 + v_seed * 1.7),
+      cos(u_time * 0.02 + v_seed * 2.3),
+      sin(u_time * 0.04 + v_seed * 3.1)
+    ) + vec3(1e-4));
+
+    // Stable perpendicular to spin: cross with the world axis
+    // least aligned with spin. Then rotate that perp around spin
+    // by a per-pulsar seed angle so the magnetic offset doesn't
+    // always point in the same direction relative to the drift.
+    vec3 ref = abs(spin.y) < 0.9 ? vec3(0.0, 1.0, 0.0)
+                                 : vec3(1.0, 0.0, 0.0);
+    vec3 perp = normalize(cross(spin, ref));
+    float seedAng = v_seed * 2.7;
+    float csa = cos(seedAng), ssa = sin(seedAng);
+    // perp ⟂ spin so the dot-product term of Rodrigues vanishes.
+    vec3 perpRot = perp * csa + cross(spin, perp) * ssa;
+    // Magnetic axis at ~30° off spin: cos30 ≈ 0.866, sin30 = 0.5.
+    vec3 mag0 = normalize(spin * 0.866 + perpRot * 0.5);
+
+    // Slower fast-rotation rate (0.60) so each flash is visible
+    // for longer and the cadence reads as cinematic rather than
+    // strobing. 0.60 → 2-decimal, lossless at wrap.
+    float ang = u_time * 0.60 + v_seed;
+    float cA = cos(ang), sA = sin(ang);
+    vec3 mag = mag0 * cA
+             + cross(spin, mag0) * sA
+             + spin * dot(spin, mag0) * (1.0 - cA);
+    mag = normalize(mag);
+
+    vec2 b2D = mag.xy;
+    float b2L = length(b2D);
+    vec2 bDir = (b2L > 1e-3) ? b2D / b2L : vec2(1.0, 0.0);
+    float bZ = abs(mag.z);
+
+    // Tiny dense core — pulsar body is ~0.32× v_baseR, blue-white.
+    float coreR = v_baseR * 0.32;
+    float coreI = 1.0 - smoothstep(coreR * 0.6, coreR * 1.05, d);
+
+    // Face-on flash: bZ^8 ramps sharply only near alignment, so
+    // most of the time the pulsar is dim and the flash is brief.
+    float flash = pow(bZ, 8.0);
+
+    // Side beams: two opposed cones along ±bDir. The 3D magnetic
+    // poles sit at ±mag*coreR on the neutron-star surface; their
+    // 2D projection lies at ±(b2L*coreR)*bDir, so the visible
+    // root of each jet foreshortens correctly with the 3D tilt
+    // of the magnetic axis. Beam length is also scaled by b2L
+    // (zero when face-on, max ~3.5 v_baseR when edge-on).
+    float along  = dot(loc, bDir);
+    float across = dot(loc, vec2(-bDir.y, bDir.x));
+    float beamHalf = v_baseR * (3.5 * b2L);
+    float ax = abs(along);
+    float poleStart = b2L * coreR;
+
+    // Parametric position along the beam: t = 0 at the pole,
+    // t = 1 at the tip. Used by both the width and length envelopes.
+    float beamLen = max(beamHalf - poleStart, 0.001);
+    float t = (ax - poleStart) / beamLen;
+
+    // Cone width tapers from a small finite vertex at the pole
+    // (0.06 v_baseR — represents the hot footpoint on the neutron
+    // star surface) to the tip (0.30 v_baseR). Previous version
+    // started at 0.16 — a flat cylinder cap, which produced the
+    // visible "dark border" stripe at the pole because the cone
+    // never narrowed to a vertex.
+    float tClamped = clamp(t, 0.0, 1.0);
+    float halfW = v_baseR * mix(0.06, 0.30, tClamped);
+    float widthT = (halfW > 0.0) ? clamp(abs(across) / halfW, 0.0, 1.0) : 1.0;
+    float widthFalloff = exp(-widthT * widthT * 6.0);
+
+    // Length envelope: smooth ramp up over the first 8 % of the
+    // beam (so the pole reads as a soft 3D vertex, not a hard
+    // edge), then Hermite taper to the tip. Replaces the previous
+    // strict-inequality cutoff which produced a hard step at the
+    // pole that aliased into a visible thin line.
+    float lengthFalloff = (t > 0.0 && t < 1.0)
+      ? smoothstep(0.0, 0.08, t) * (1.0 - smoothstep(0.0, 1.0, t))
+      : 0.0;
+    // Outflowing plasma — two layers, both keyed to ax and -u_time
+    // so motion is OUTWARD in both ±bDir directions.
+    //
+    // 1. Bulk flow: subtle ripple (±8 %) with a phase that varies
+    //    across the beam, so the bright bands tilt slightly as they
+    //    travel — reads as flow texture, not stripes.
+    //
+    // 2. Helical hot strip: a bright plasma band whose side-of-axis
+    //    position oscillates with ax (rotation around the beam
+    //    axis) AND advances outward with time. At any fixed ax the
+    //    strip drifts side-to-side; in screen projection that gives
+    //    the 3D corkscrew feel of plasma spiraling along a magnetic
+    //    flux tube. knotPulse gates the strip into discrete packets
+    //    so we see hot blobs racing outward, not a continuous line.
+    //
+    // Multipliers on u_time (3.00, 2.50, 4.50) are 2-decimal →
+    // TIME_WRAP-safe.
+    // axN measures distance OUTWARD FROM THE POLE (not from the
+    // body center) so the bulk flow and helical knots originate
+    // at the projected pole position. Without the poleStart shift,
+    // the wave phases were anchored at origin and the outflow
+    // appeared to start inside the body instead of at the pole.
+    float axN = max(0.0, (ax - poleStart) / max(v_baseR, 0.001));
+    float acrossN = (halfW > 0.0) ? across / halfW : 0.0;
+
+    float flowPhase = axN * 4.5 - u_time * 3.00 + acrossN * 1.6 + v_seed;
+    float beamFlow = 0.92 + 0.08 * sin(flowPhase);
+
+    float helixAng  = axN * 2.5 - u_time * 2.50 + v_seed * 1.7;
+    float helixSide = cos(helixAng);
+    float helixDist = acrossN - helixSide * 0.55;
+    float knotEnv = exp(-helixDist * helixDist * 5.0);
+    float knotPulse = pow(max(0.0, sin(
+      axN * 6.0 - u_time * 4.50 + v_seed
+    )), 3.0);
+    float beamKnot = knotEnv * knotPulse;
+
+    float beamBase = widthFalloff * lengthFalloff * b2L;
+    float beamI = beamBase * beamFlow;
+    // Knots get a warmer cast than the cooler bulk flow so hot
+    // plasma packets read as discrete from the cooler stream.
+    float knotI = beamBase * beamKnot * 0.30;
+
+    // Halo glow — small permanent halo, blooms with flash. Halo
+    // radius capped tightly so the bloom doesn't extend over
+    // neighbouring stars during a peak flash.
+    float haloR = v_baseR * (1.0 + 1.2 * flash);
+    float hr = d / max(haloR, 0.001);
+    float haloI = exp(-hr * hr) * (0.18 + 0.85 * flash);
+
+    // ── Lens-flare composite. Each element below is gated by
+    // the flash term, so they erupt only during beam-camera
+    // alignment and stay invisible the rest of the time.
+
+    // 6-pointed diffraction spikes — abs(cos(3·θ))^P gives 6 razor-
+    // thin peaks per revolution; the pattern rotates slowly with
+    // the spin so the spikes don't feel painted onto a flat star.
+    float spikeAng = atan(loc.y, loc.x);
+    float spikeRot = u_time * 0.10 + v_seed;
+    float spikePat = pow(abs(cos(3.0 * (spikeAng - spikeRot))), 80.0);
+    float ld = d / max(v_baseR, 0.001);
+    // Tighter decay (0.95 vs old 0.45) keeps spikes from radiating
+    // out far enough to overlap adjacent stars in the scene.
+    float spikeLen = exp(-ld * 0.95)
+                   * smoothstep(coreR * 0.5, coreR * 1.5, d);
+    float spikeI = spikePat * spikeLen * flash * 1.6;
+
+    // Anamorphic streak — tight Gaussian across, very extended
+    // along, oriented per-pulsar so different pulsars streak in
+    // different directions. The classic cinema-lens artifact.
+    float streakAngP = v_seed * 0.5;
+    vec2 sd = vec2(cos(streakAngP), sin(streakAngP));
+    vec2 sn = vec2(-sd.y, sd.x);
+    float salong = dot(loc, sd);
+    float sacross = dot(loc, sn);
+    float r2 = v_baseR * v_baseR;
+    float streakAcross = exp(-sacross * sacross / max(r2 * 0.015, 1e-4));
+    // Half-length divisor lowered from 18 to 3 so the streak fades
+    // well within the pulsar's quad and doesn't streak across
+    // neighbouring stars during a flash.
+    float streakAlong  = exp(-salong  * salong  / max(r2 *  3.0,  1e-4));
+    float streakI = streakAcross * streakAlong * flash * 0.95;
+
+    // Iris ring — concentric thin ring at moderate radius, fading
+    // with flash. Reads as a lens element catching the bright
+    // source — gives the flare optical depth without filling the
+    // frame with halo bloom.
+    float irisR = v_baseR * 2.4;
+    float irisGap = v_baseR * 0.18;
+    float irisI = (1.0 - smoothstep(0.0, irisGap, abs(d - irisR)))
+                * flash * 0.40;
+
+    // Soft crescent on the iris ring — a slowly drifting circular
+    // occluder grazes the iris radius, fading the ring gently
+    // along an arc instead of completing it. Position rotates
+    // around the source and the occluder geometry oscillates so
+    // the crescent shape changes over time. Soft transition (no
+    // hard edge) and attenuation to 25 % (not zero) so the dim
+    // side stays subtly visible rather than being fully cut out.
+    // Multipliers 0.07 and 0.04 are 2-decimal → TIME_WRAP-safe.
+    float cutAng  = u_time * 0.07 + v_seed * 1.3;
+    float cutSize = u_time * 0.04 + v_seed * 2.7;
+    float cutDist = v_baseR * (2.55 + 0.65 * sin(cutSize));
+    vec2  cutCenter = vec2(cos(cutAng), sin(cutAng)) * cutDist;
+    float cutR    = v_baseR * (2.40 + 0.35 * cos(cutSize));
+    float cutD    = length(loc - cutCenter);
+    float softBand = v_baseR * 0.6;
+    float crescentT = smoothstep(cutR - softBand, cutR + softBand, cutD);
+    irisI *= 0.25 + 0.75 * crescentT;
+
+    // Per-pulsar palette tint. v_c1 is the star's "hot" palette
+    // color and is used directly as the dominant pulsar hue —
+    // mixing toward white was too dilute to read. Beam/halo/streak
+    // become saturated tint colors (these define the pulsar's
+    // identity); core gets a heavy tint with a white-hot center
+    // emerging only at peak flash. Knots and spikes stay near
+    // neutral hot-white so they read as distinct hot plasma /
+    // achromatic diffraction layers regardless of base color.
+    vec3 tint = v_c1;
+    // Core base: strong tint at rest, brightens to near-white at
+    // peak flash so saturated alignment still pops. The flash mix
+    // toward white preserves the chromatic fringe term below.
+    vec3 coreColorBase = mix(tint, vec3(1.00, 1.00, 1.00),
+                             0.25 + 0.55 * flash);
+    vec3 fringe = vec3(0.10, 0.0, -0.08) * flash;
+    vec3 coreColor = coreColorBase + fringe;
+
+    // Beam, streak, iris: pure tint (no white floor). Halo uses
+    // beamColor so it inherits the saturation automatically.
+    vec3 beamColor   = tint;
+    vec3 streakColor = tint;
+    vec3 irisColor   = tint;
+    // Knots and spikes — keep warm hot-white, only a faint tint so
+    // they still read as a distinct optical layer over the colored
+    // beam.
+    vec3 knotColor   = mix(vec3(1.00, 0.92, 0.78), tint, 0.20);
+    vec3 spikeColor  = mix(vec3(1.00, 0.96, 0.86), tint, 0.15);
+
+    // Core boost ramps higher (8× at peak) so the alignment really
+    // pops; previous 6× looked muted next to the new flare layers.
+    // The knot layer overpaints the bulk-flow beam with a warmer
+    // tint where plasma packets crest, giving the outflow a hot/
+    // cool layered look instead of a single uniform color.
+    vec3 col = coreColor * coreI * (1.0 + 8.0 * flash)
+             + beamColor   * beamI
+             + knotColor   * knotI
+             + beamColor   * haloI
+             + spikeColor  * spikeI
+             + streakColor * streakI
+             + irisColor   * irisI;
+    float a = clamp(
+      coreI + beamI + haloI + spikeI + streakI + irisI, 0.0, 1.0
+    );
+
+    // Circular edge fade — keeps the lens flare from showing the
+    // rectangular quad boundary at peak flash. The visible flare
+    // lives inside the disc inscribed in the pulsar quad; anything
+    // beyond fades smoothly to fully transparent. Must mirror the
+    // vertex shader's pulsar extentMul (5.0).
+    float pulsarExtent = v_baseR * 5.0 + 8.0;
+    float edgeFade = 1.0 - smoothstep(
+      pulsarExtent * 0.80, pulsarExtent * 1.00, d
+    );
+    col *= edgeFade;
+    a   *= edgeFade;
+
+    outColor = vec4(col, a);
+    return;
   }
 
   // Black hole — Interstellar-style rendering. Two visual layers
@@ -1762,6 +2036,7 @@ export function createRenderer(canvas) {
       if (s.isPast)     flags |= 4;
       if (s.isBlackHole) flags |= 8;
       if (s.isMonolith) flags |= 16;
+      if (s.isPulsar) flags |= 32;
       if (s.isRingworld) flags |= 64;
       // Ring plate count packed in flag bits 8-10 (0-7). 0 means
       // the ringworld has no shadow plates — shader skips all
