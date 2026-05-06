@@ -66,6 +66,7 @@ function makeBaseStar(x, y, r, colorIdx) {
     binary: null,
     isMonolith: false,
     isPulsar: false,
+    isCrab: false,
   };
 }
 
@@ -161,6 +162,16 @@ stars = [
   cell(2, 4, "pulsar (mint)", (s) => {
     s.isPulsar = true;
     s.colorIdx = 3; // mint
+  }),
+
+  cell(0, 5, "crab nebula", (s) => { s.isCrab = true; }),
+  cell(1, 5, "crab (teal)", (s) => {
+    s.isCrab = true;
+    s.colorIdx = 6; // teal
+  }),
+  cell(2, 5, "crab + comet", (s) => {
+    s.isCrab = true;
+    addComet(s);
   }),
 ];
 
@@ -358,6 +369,7 @@ function loop(t) {
         isRingworld: s.isRingworld,
         ringPlateCount: s.ringPlateCount | 0,
         isPulsar: s.isPulsar,
+        isCrab: s.isCrab,
       });
     }
   }

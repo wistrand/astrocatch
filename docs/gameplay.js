@@ -44,13 +44,15 @@ let ZOOM = 0.58;
 let zoomMult = 1.0;
 let zoomMultTarget = 1.0;
 // Target zoom multiplier for the star currently being orbited.
-// Ringworld visuals are pulled in closer so the band stays
-// legible; everything else sticks at the default viewport zoom.
-// Touch viewports use a slightly lower ring zoom to leave room
-// around the silhouette on the smaller screen.
+// Ringworld and Crab nebula visuals are pulled in closer so the
+// detail stays legible; everything else sticks at the default
+// viewport zoom. Touch viewports use a slightly lower factor to
+// leave breathing room on smaller screens.
 function zoomTargetFor(star) {
-  if (!star || !star.isRingworld) return 1.0;
-  return IS_TOUCH ? 1.5 : 1.7;
+  if (!star) return 1.0;
+  if (star.isRingworld) return IS_TOUCH ? 1.5 : 1.7;
+  if (star.isCrab)      return IS_TOUCH ? 1.4 : 1.6;
+  return 1.0;
 }
 // World-space horizontal camera pan. Normally 0; nudged when
 // the current star's visible extent would otherwise clip the
@@ -352,6 +354,7 @@ function serializeStar(s, full) {
   stub.isRingworld = !!s.isRingworld;
   if (s.isRingworld) stub.ringPlateCount = s.ringPlateCount | 0;
   stub.isPulsar = !!s.isPulsar;
+  stub.isCrab = !!s.isCrab;
   if (s.planets) stub.planets = s.planets;
   if (s.comets) stub.comets = s.comets;
   if (s.binary) {
@@ -457,18 +460,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0 },
-  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10, pulsar: 1 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, crab: 0 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10, pulsar: 1, crab: 20 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0 },
-  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2 },
-  { at: 20,   plain:  68, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4 },
-  { at: 50,   plain:  54, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6 },
-  { at: 80,   plain:  44, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8 },
+  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  crab
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, crab: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, crab: 0 },
+  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2, crab: 0 },
+  { at: 20,   plain:  66, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4, crab: 2 },
+  { at: 50,   plain:  51, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6, crab: 3 },
+  { at: 80,   plain:  40, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8, crab: 4 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -520,7 +523,7 @@ function pickVariant(starIdx) {
   return "plain";
 }
 
-function makeStar(x, y, r, colorIdx, starIdx) {
+function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
   const s = {
     x, y, r,
     gm: AC.starGM(r),
@@ -564,9 +567,18 @@ function makeStar(x, y, r, colorIdx, starIdx) {
     // Pulsar flag — neutron-star body with two opposed lighthouse
     // beams sweeping a magnetic axis. Same physics as a normal star.
     isPulsar: false,
+    // Crab-nebula flag — supernova remnant: bright pulsar core
+    // surrounded by procedural synchrotron filaments. Same physics
+    // as a normal star.
+    isCrab: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
-    const variant = pickVariant(starIdx);
+    // If addNextStar already rolled the variant (so it could
+    // claim a larger r-min for pulsars), reuse that decision
+    // instead of rolling a fresh — and possibly different — one.
+    const variant = presetVariant !== undefined
+      ? presetVariant
+      : pickVariant(starIdx);
     if (variant === "binary") {
       assignBinary(s);
     } else if (variant === "bh") {
@@ -583,20 +595,23 @@ function makeStar(x, y, r, colorIdx, starIdx) {
       s.ringPlateCount = Math.floor(Math.random() * 8);
     } else if (variant === "pulsar") {
       s.isPulsar = true;
+    } else if (variant === "crab") {
+      s.isCrab = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
     // only. Ramps up with star index. Skipped on variants whose
     // visual or physical setup already occupies the orbit volume.
     if (!s.isBinary && !s.isMonolith && !s.isRingworld
-        && !s.isPulsar) {
+        && !s.isPulsar && !s.isCrab) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
       }
     }
     // Comet: orthogonal roll, applied to any variant except
-    // monoliths (keeps them alien/alone). Pulsars are fine — debris
-    // disks around real pulsars are a known phenomenon.
+    // monoliths (keeps them alien/alone). Pulsars and crabs are
+    // fine — comets weaving through filaments / past a pulsar
+    // reads naturally.
     if (!s.isMonolith && starIdx >= COMET_MIN_STAR
         && Math.random() < COMET_PROB) {
       assignComets(s, starIdx);
@@ -775,8 +790,20 @@ function addNextStar() {
   // Difficulty ramps over the first ~60 captures, then plateaus.
   const difficulty = Math.min(n / 60, 1);
 
+  // Pre-roll the variant so pulsars can claim a larger minimum
+  // radius — their visible core is only 0.32× v_baseR, so the
+  // default r-min of 18 produced ~6 px bodies that vanished
+  // against the surrounding lens flare. The decided variant is
+  // passed into makeStar to avoid rolling pickVariant twice.
+  const variant = pickVariant(n);
+  // Pulsars and crabs need a bigger minimum radius — pulsars
+  // because the body is only 0.32× v_baseR, crabs because the
+  // shell network needs room to develop visible structure (the
+  // nebula extends to ~3× v_baseR).
+  const minR = (variant === "pulsar" || variant === "crab") ? 30 : 18;
+
   // Pick candidate radius first so we can compute the hard minimum.
-  const r = Math.max(18, (34 + Math.random() * 24) - difficulty * 14);
+  const r = Math.max(minR, (34 + Math.random() * 24) - difficulty * 14);
 
   // Base distance range. As difficulty grows we push the next star
   // further away (harder to reach) AND widen the angle cone (harder
@@ -808,7 +835,7 @@ function addNextStar() {
     if (ny > prev.y - 120) ny = prev.y - 120 - Math.random() * 60;
     nx = Math.max(80, Math.min(W - 80, nx));
     if (separationOk(nx, ny, r)) {
-      stars.push(makeStar(nx, ny, r, n, n));
+      stars.push(makeStar(nx, ny, r, n, n, variant));
       return;
     }
   }
@@ -816,7 +843,7 @@ function addNextStar() {
   // Fallback: straight up at a safely large distance.
   const fx = Math.max(80, Math.min(W - 80, prev.x));
   const fy = prev.y - hardMin * 1.4;
-  stars.push(makeStar(fx, fy, r, n, n));
+  stars.push(makeStar(fx, fy, r, n, n, variant));
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -1048,6 +1075,7 @@ function resumeFromSave(data) {
     isRingworld: !!raw.isRingworld,
     ringPlateCount: raw.ringPlateCount | 0,
     isPulsar: !!raw.isPulsar,
+    isCrab: !!raw.isCrab,
   }));
   // Re-orbit the ball around the saved anchor star with a fresh
   // circular orbit — same math as continueRun. The saved x/y/vx/
@@ -1229,6 +1257,7 @@ function captureStar(idx) {
     stars[leavingIdx].isRingworld = false;
     stars[leavingIdx].ringPlateCount = 0;
     stars[leavingIdx].isPulsar = false;
+    stars[leavingIdx].isCrab = false;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -1774,10 +1803,12 @@ function renderTick() {
 
   // Horizontal camera nudge — keep the current star's visible
   // extent inside the viewport. Only matters at elevated zooms,
-  // typically on ringworlds where ring radius = 3.6 · s.r
-  // pushes the silhouette past the screen edge near a wall.
+  // where ringworld bands (3.6 · r) or Crab outer shells
+  // (~2.7 · r) can push the silhouette past the screen edge.
   const effZoom = ZOOM * zoomMult;
-  const visualR = (cs0.isRingworld ? cs0.r * 3.6 : cs0.r * 2.5);
+  const visualR = cs0.isRingworld ? cs0.r * 3.6
+                : cs0.isCrab      ? cs0.r * 2.7
+                                  : cs0.r * 2.5;
   const screenXNoPan = W / 2 + (cs0.x - W / 2) * effZoom;
   const visualRpx = visualR * effZoom;
   const margin = 8;
@@ -2167,6 +2198,7 @@ function draw() {
         isRingworld: s.isRingworld,
         ringPlateCount: s.ringPlateCount,
         isPulsar: s.isPulsar,
+        isCrab: s.isCrab,
       });
     }
   }

@@ -27,7 +27,13 @@ via `/docs` folder. All non-browser tooling lives under `scripts/`.
 - **No build step.** No bundlers, transpilers, or runtime deps.
   Browser loads `gameplay.js` via `<script type="module">`.
 - **No shader loader.** All GLSL lives as template strings in
-  `renderer.js`.
+  `renderer.js`. **Never use backticks inside GLSL comments** —
+  the surrounding `const FOO = \`...\`` template literal is
+  delimited by backticks, so any backtick inside (even in a
+  `// comment`) terminates the string and breaks JS parsing.
+  This recurs constantly when writing inline-quoted identifiers
+  in shader comments. Use single-quotes, double-quotes, or no
+  quotes at all (`// the foo variable` rather than `` // the `foo` variable ``).
 - **ES modules only.** `package.json` sets `"type": "module"`.
 - **2-space indentation** in `.js`, `.html`, `<style>`.
 - **No AI-isms in user-facing text.** Keep prose direct and

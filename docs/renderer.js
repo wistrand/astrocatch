@@ -525,6 +525,132 @@ out vec4 outColor;
 const float PI = 3.14159265;
 const float TAU = 6.28318530;
 
+// ── Voronoi (Worley) helpers — used by the Crab nebula branch
+// to draw cell-wall shells. F1 = distance to nearest cell centre,
+// F2 = second-nearest. (F2 - F1) is small near a wall and grows
+// inside the cell, so it doubles as an analytic "shell" SDF.
+vec2 hash22Crab(vec2 p) {
+  p = vec2(dot(p, vec2(127.1, 311.7)),
+           dot(p, vec2(269.5, 183.3)));
+  return fract(sin(p) * 43758.5453);
+}
+vec2 worleyCrab(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  float F1 = 9.0, F2 = 9.0;
+  for (int dy = -1; dy <= 1; dy++) {
+    for (int dx = -1; dx <= 1; dx++) {
+      vec2 g = vec2(float(dx), float(dy));
+      vec2 jit = hash22Crab(i + g);
+      vec2 r = g + jit - f;
+      float dist = dot(r, r);
+      if (dist < F1) { F2 = F1; F1 = dist; }
+      else if (dist < F2) { F2 = dist; }
+    }
+  }
+  return vec2(sqrt(F1), sqrt(F2));
+}
+// Value-noise + ridged multifractal — used to break Voronoi cell
+// walls out of their smooth-contour "jelly" appearance. ridgedFBM
+// produces fibrous line-like ridges at multiple scales; multiplied
+// against the Voronoi wall mask it gives the membranes a textured,
+// fragmented quality consistent with real supernova-remnant
+// filaments.
+float vhashCrab(vec2 p) {
+  // Hoskins "Hash without sine" — eliminates the tiling /
+  // periodic-banding artefacts the classic sin-fract hash
+  // produces at large input values, while preserving the
+  // value-noise character downstream (vnoiseCrab and
+  // ridgedFBMCrab look identical in topology, just without
+  // the visible sin-precision banding).
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoiseCrab(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = vhashCrab(i);
+  float b = vhashCrab(i + vec2(1.0, 0.0));
+  float c = vhashCrab(i + vec2(0.0, 1.0));
+  float d = vhashCrab(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+float ridgedFBMCrab(vec2 p) {
+  float t = 0.0;
+  float amp = 0.55;
+  float freq = 1.0;
+  for (int i = 0; i < 5; i++) {
+    float n = 2.0 * vnoiseCrab(p * freq) - 1.0;
+    t += (1.0 - abs(n)) * amp;
+    amp *= 0.55;
+    freq *= 2.05;
+  }
+  return t;
+}
+// 2D simplex noise (Ashima Arts / Stefan Gustavson) — smoother
+// gradients than value noise and no axis-aligned grid artifacts,
+// which is what we need for the Crab "force field" that deforms
+// the shells. Returns ~[-1, 1].
+vec3 cMod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec2 cMod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+vec3 cPermute(vec3 x) { return cMod289(((x * 34.0) + 1.0) * x); }
+float snoiseCrab(vec2 v) {
+  const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                      -0.577350269189626, 0.024390243902439);
+  vec2 i  = floor(v + dot(v, C.yy));
+  vec2 x0 = v - i + dot(i, C.xx);
+  vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+  vec4 x12 = x0.xyxy + C.xxzz;
+  x12.xy -= i1;
+  i = cMod289(i);
+  vec3 p = cPermute(cPermute(i.y + vec3(0.0, i1.y, 1.0))
+                  + i.x + vec3(0.0, i1.x, 1.0));
+  vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy),
+                          dot(x12.zw,x12.zw)), 0.0);
+  m = m * m;
+  m = m * m;
+  vec3 x = 2.0 * fract(p * C.www) - 1.0;
+  vec3 h = abs(x) - 0.5;
+  vec3 ox = floor(x + 0.5);
+  vec3 a0 = x - ox;
+  m *= 1.79284291400159 - 0.85373472095314 * (a0 * a0 + h * h);
+  vec3 g;
+  g.x  = a0.x  * x0.x  + h.x  * x0.y;
+  g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+  return 130.0 * dot(m, g);
+}
+// 5-octave simplex FBM. Returns ~[-1.05, +1.05]. Frequency ratio
+// 2.07 (slightly off 2.0) avoids any chance of grid resonance
+// across octaves.
+float fbmSimplexCrab(vec2 p) {
+  float t = 0.0;
+  float amp = 0.55;
+  for (int i = 0; i < 5; i++) {
+    t += snoiseCrab(p) * amp;
+    p *= 2.07;
+    amp *= 0.55;
+  }
+  return t;
+}
+// 3-octave simplex FBM — used inside the Crab body where we need
+// many samples and want to keep the per-fragment cost down.
+float fbm3octCrab(vec2 p) {
+  return 0.65 * snoiseCrab(p)
+       + 0.32 * snoiseCrab(p * 2.07)
+       + 0.16 * snoiseCrab(p * 4.28);
+}
+// "Fake 3D" FBM — averages 2D simplex FBM on three orthogonal
+// projections of a 3D point. Cheaper than a true 3D simplex but
+// gives the shell sampler distinct values at different z, which
+// is what lets front-and-back sampling produce visible 3D depth.
+float fbm3DCrab(vec3 p) {
+  return (fbm3octCrab(p.xy)
+       +  fbm3octCrab(p.xz + vec2(11.0,  7.0))
+       +  fbm3octCrab(p.yz + vec2(13.0, 17.0))) * (1.0 / 3.0);
+}
+
 void main() {
   // Wobble deformation — squeeze the star into an ellipse along
   // the impact axis. The component of v_local parallel to the
@@ -554,6 +680,9 @@ void main() {
   bool isMonolith = (flags & 16) != 0;
   bool isPulsar  = (flags & 32) != 0;
   bool isRingworld = (flags & 64) != 0;
+  // Bits 256/512/1024 reserved for ringPlateCount (decoded below
+  // in the ringworld branch). Crab uses bit 2048 to stay clear.
+  bool isCrab = (flags & 2048) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -959,6 +1088,629 @@ void main() {
       outColor = vec4(col, 1.0);
       return;
     }
+  }
+
+  // Crab-style supernova remnant — modelled as level sets of an
+  // r-biased simplex FBM scalar field. Concretely:
+  //
+  //   field(x, y) = r + amp · fbmSimplex(loc / v_baseR)
+  //
+  // Shells are the contours of this field at four fixed values
+  // (0.55, 1.05, 1.55, 2.10). Because the FBM contribution is
+  // strong (0.75 amplitude) relative to the radial r term, the
+  // contours are NOT closed circles — they fold back, fork, and
+  // form disconnected fragments wherever the FBM gradient
+  // reverses sharply. This is what kills the circular topology
+  // the previous "deformed sphere" approaches couldn't escape:
+  // the SAME shell value can be hit by multiple disconnected
+  // 2D regions, producing the actual fragmented-shell look of
+  // a real supernova remnant. Simplex (vs value-noise) gives
+  // smoother gradients with no axis-aligned grid artefacts.
+  if (isCrab) {
+    float r = d / max(v_baseR, 1.0);
+    vec2 puv = loc / max(v_baseR, 1.0);
+    vec2 seedOff = vec2(v_seed * 7.3, v_seed * 11.7);
+    vec3 seedOff3 = vec3(seedOff, v_seed * 5.1);
+
+    // ── Per-nebula categorical sweeps ──────────────────────
+    // Categorical parameters drive class differences between
+    // nebulae — palette (Crab vs Helix vs blue vs dust-reddened),
+    // structural amplitudes, and central-source flavour. These
+    // are all driven by v_seed so the same nebula always picks
+    // the same class but adjacent nebulae vary widely.
+
+    // Palette index ∈ {0, 1, 2, 3}
+    int paletteIdx = int(fract(v_seed * 13.7) * 4.0);
+    // Bipolar strength — fixed at 0.65 originally; now ranges so
+    // some nebulae are nearly spheroidal, others aggressively
+    // cigar-shaped.
+    float bipolarAmp = mix(0.30, 0.95, fract(v_seed * 3.13));
+    // Shell-threshold multiplier — extended range gives compact
+    // dense → sparse diffuse variety (was 0.85-1.20 → 1.4×; now
+    // 0.60-1.60 → 2.7×).
+    float cavitySize = mix(0.60, 1.60, fract(v_seed * 5.71));
+    // Density multiplier — scales per-shell rho weights, so some
+    // nebulae have more "gas budget" than others independent of
+    // their compactness.
+    float densityMult = mix(0.70, 1.40, fract(v_seed * 19.7));
+    // Fibre / shock texture frequency multiplier — varies the
+    // crinkled boundary character.
+    float fibreFreqMult = mix(0.60, 1.50, fract(v_seed * 11.13));
+    // Edge-texture variation: per-nebula pow exponent, bias floor,
+    // and gain on the fibre overlay. Varying these breaks the
+    // shared "fingerprint" crinkle that recurred across nebulae.
+    float fibrePow   = mix(1.00, 2.50, fract(v_seed * 23.7));
+    float fibreFloor = mix(0.20, 0.45, fract(v_seed * 29.3));
+    float fibreGain  = mix(1.00, 1.80, fract(v_seed * 31.1));
+
+    // Per-nebula stratification offset — shifts the radial
+    // crisp-to-soft gradient that's wired into the per-shell
+    // edge masks below. Negative → "young" (all shells biased
+    // crisp); positive → "old" (all shells biased diffuse);
+    // zero → balanced. Continuous axis so neighbouring nebulae
+    // transition smoothly between regimes.
+    float stratOffset = (fract(v_seed * 73.1) - 0.5) * 0.8;
+    // Central-source flavour — VISIBILITY of the central
+    // pinpoint, NOTHING else. Does not affect interior fill;
+    // that's a separate axis below.
+    //   0 = visible pinpoint at centre
+    //   1 = hidden source (no pinpoint; cavity gas still glows)
+    //   2 = off-centre pinpoint
+    int centralFlavour = int(fract(v_seed * 17.31) * 3.0);
+    vec2 pulsarOffset = vec2(0.0);
+    if (centralFlavour == 2) {
+      pulsarOffset = vec2(
+        snoiseCrab(vec2(v_seed * 13.0, 0.0)),
+        snoiseCrab(vec2(0.0, v_seed * 17.0))
+      ) * 0.55;
+    }
+
+    // Interior-fill density — INDEPENDENT axis. Was previously
+    // tangled with centralFlavour (hide the pulsar → kill the
+    // cavity). Now: 50 % full body / 35 % moderate / 15 % etched.
+    // Etched mode also boosts the fibre gain so the linework
+    // character becomes a deliberate aesthetic instead of an
+    // accidental drift.
+    float fillRoll = fract(v_seed * 47.3);
+    float fillMult;
+    float aestheticFibreGain;
+    if (fillRoll < 0.50) {
+      fillMult = 1.20;            // full body
+      aestheticFibreGain = 1.00;
+    } else if (fillRoll < 0.85) {
+      fillMult = 0.80;            // moderate
+      aestheticFibreGain = 1.05;
+    } else {
+      fillMult = 0.40;            // sparse / etched aesthetic
+      aestheticFibreGain = 1.45;
+    }
+
+    // Per-palette shell colours, per-shell weights, and pulsar
+    // character. Each palette is a different physical species —
+    // not just a hue rotation — so the brightness profile across
+    // shells AND the central source character vary by palette.
+    //
+    //   0 — Crab synchrotron: cyan/yellow/orange/red/red,
+    //       roughly even shell weights, sharp hot pinpoint.
+    //   1 — Helix OIII: green/cyan/pale/soft red/dim,
+    //       front-loaded weights (inner OIII bright), softer
+    //       cooler pulse.
+    //   2 — NGC 7027 hot blue: blue/cyan/pale orange/pink/muted,
+    //       moderate weights, blue-cored hot star.
+    //   3 — Dust-reddened: amber/orange/red/deep/brown,
+    //       back-loaded weights (outer dust dominant), dim amber
+    //       central source with no pulse.
+    vec3 shell0Col, shell1Col, shell2Col, shell3Col, shell4Col;
+    vec3 paletteGlow, paletteCore;
+    float w0, w1, w2, w3, w4;
+    float pulsarFalloff, pulsarPulseRate, pulsarBrightness;
+    if (paletteIdx == 0) {
+      shell0Col = vec3(0.55, 0.83, 0.75);
+      shell1Col = vec3(0.92, 0.95, 0.32);
+      shell2Col = vec3(1.00, 0.68, 0.20);
+      shell3Col = vec3(0.98, 0.36, 0.16);
+      shell4Col = vec3(0.95, 0.20, 0.20);
+      paletteGlow = vec3(0.55, 0.85, 1.00);
+      paletteCore = vec3(1.00, 0.95, 0.85);
+      w0 = 0.22; w1 = 0.20; w2 = 0.18; w3 = 0.16; w4 = 0.13;
+      pulsarFalloff = 280.0;
+      pulsarPulseRate = 8.00;
+      pulsarBrightness = 1.70;
+    } else if (paletteIdx == 1) {
+      shell0Col = vec3(0.40, 0.90, 0.55);
+      shell1Col = vec3(0.50, 0.95, 0.85);
+      shell2Col = vec3(0.92, 0.98, 0.78);
+      shell3Col = vec3(0.95, 0.55, 0.45);
+      shell4Col = vec3(0.78, 0.30, 0.30);
+      paletteGlow = vec3(0.55, 0.95, 0.85);
+      paletteCore = vec3(0.75, 1.00, 0.85);
+      w0 = 0.30; w1 = 0.25; w2 = 0.18; w3 = 0.12; w4 = 0.08;
+      pulsarFalloff = 150.0;
+      pulsarPulseRate = 4.50;
+      pulsarBrightness = 1.30;
+    } else if (paletteIdx == 2) {
+      shell0Col = vec3(0.45, 0.65, 1.00);
+      shell1Col = vec3(0.55, 0.95, 1.00);
+      shell2Col = vec3(0.95, 0.85, 0.55);
+      shell3Col = vec3(0.95, 0.50, 0.65);
+      shell4Col = vec3(0.80, 0.32, 0.50);
+      paletteGlow = vec3(0.55, 0.75, 1.00);
+      paletteCore = vec3(0.65, 0.80, 1.00);
+      w0 = 0.28; w1 = 0.22; w2 = 0.16; w3 = 0.18; w4 = 0.14;
+      pulsarFalloff = 200.0;
+      pulsarPulseRate = 6.00;
+      pulsarBrightness = 1.50;
+    } else {
+      shell0Col = vec3(0.85, 0.65, 0.35);
+      shell1Col = vec3(0.95, 0.50, 0.20);
+      shell2Col = vec3(0.95, 0.32, 0.15);
+      shell3Col = vec3(0.72, 0.22, 0.12);
+      shell4Col = vec3(0.50, 0.18, 0.12);
+      paletteGlow = vec3(0.95, 0.65, 0.40);
+      paletteCore = vec3(1.00, 0.75, 0.40);
+      w0 = 0.10; w1 = 0.14; w2 = 0.18; w3 = 0.22; w4 = 0.28;
+      pulsarFalloff = 100.0;
+      pulsarPulseRate = 0.00;
+      pulsarBrightness = 0.80;
+    }
+    // Apply density multiplier to all per-shell weights.
+    w0 *= densityMult; w1 *= densityMult; w2 *= densityMult;
+    w3 *= densityMult; w4 *= densityMult;
+    // Pulsar visible only when centralFlavour says so; halo /
+    // mid-glow brightness comes from the INDEPENDENT fillMult
+    // axis. The two are now decoupled — hidden-source nebulae
+    // can still have bright cavities, etched-aesthetic nebulae
+    // can still have visible pulsars.
+    float pulsarMul    = (centralFlavour == 1) ? 0.0 : 1.0;
+    float innerHaloMul = fillMult;
+    float midGlowMul   = fillMult;
+
+    // ── Morphology category ───────────────────────────────
+    // 0–5: ellipsoidal (default closed-volume shells).
+    // 6–7: filamentary — replaces r3D with a quadratic-Bezier
+    // tube SDF, producing bent dust lanes / S-curves / variable-
+    // thickness jets that the ellipsoid primitive can't reach.
+    // ~25 % of seeds route to filamentary.
+    int morphCat = int(fract(v_seed * 53.7) * 8.0);
+    bool isFilament = morphCat >= 6;
+
+    // Quadratic Bezier control points (used only when isFilament).
+    // P0 / P2 are endpoints along a per-Crab axis; P1 is the mid
+    // control offset from the segment midpoint by a per-Crab bend
+    // direction × bend amplitude. Curve total reach kept inside
+    // the integration volume (~ ±2.4 v_baseR-units).
+    vec3 filamentP0 = vec3(0.0);
+    vec3 filamentP1 = vec3(0.0);
+    vec3 filamentP2 = vec3(0.0);
+    if (isFilament) {
+      float endAng = v_seed * 5.7;
+      vec3 endDir = normalize(vec3(
+        cos(endAng),
+        0.6 * sin(endAng),
+        0.3 * sin(endAng * 1.3)
+      ));
+      float endLen = 2.4;
+      filamentP0 = -endDir * endLen;
+      filamentP2 =  endDir * endLen;
+      // Bend direction orthonormal to endDir, rotated per-Crab.
+      vec3 refV = abs(endDir.y) < 0.9
+                ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+      vec3 perp1 = normalize(cross(endDir, refV));
+      vec3 perp2 = cross(endDir, perp1);
+      float bendAng = v_seed * 13.7;
+      vec3 bendDir = perp1 * cos(bendAng) + perp2 * sin(bendAng);
+      // Bend amplitude in [0.6, 2.0] — most filaments moderately
+      // bent, some seeds produce strongly S-curved outliers.
+      float bendAmp = 0.6 + 1.4 * fract(v_seed * 71.3);
+      filamentP1 = bendDir * bendAmp;
+    }
+
+    // Very slow Lissajous flow through the 3D FBM domain.
+    // Multipliers 0.01 / 0.02 / 0.03 are 2-decimal → sin/cos at
+    // TIME_WRAP match values at t=0 (no wrap pop). Periods:
+    // ~628s (≈10.5 min), ~314s, ~209s. The z-component drifts
+    // too, so the simplex isn't just translating in the (x, y)
+    // plane — it's "boiling" through 3D, giving the shells slow
+    // continuous topology change over many minutes. Amplitude
+    // bumped (1.5 → 2.0) so over a full slow cycle the sample
+    // point traverses a noticeable patch of FBM space.
+    vec3 flow = vec3(sin(u_time * 0.01 + v_seed),
+                     cos(u_time * 0.02 + v_seed * 1.3),
+                     sin(u_time * 0.03 + v_seed * 2.1)) * 2.0;
+
+    float fbmScale = 0.55;
+
+    // Per-Crab ellipsoidal shape: random eccentricity in
+    // [0.08, 0.25] and random rotation angle. All shells share
+    // ecc and angle so the body stays coherent.
+    float ecc = 0.08 + 0.17 * fract(v_seed * 7.31);
+    float ang = v_seed * 1.7;
+    float cosA = cos(ang), sinA = sin(ang);
+    float majA = 1.0 + ecc;
+    float minA = 1.0 - ecc;
+    vec2 rotLocN = vec2(loc.x * cosA + loc.y * sinA,
+                       -loc.x * sinA + loc.y * cosA)
+                 / max(v_baseR, 1.0);
+    float xN = rotLocN.x / majA;
+    float yN = rotLocN.y / minA;
+    float xy_term = xN * xN + yN * yN;
+
+    // BIPOLAR ASYMMETRY with FBM-jittered waist + wild lobe
+    // asymmetry. Base term gives the cigar shape; waist jitter
+    // breaks the geometrically-clean pinch; lobeAsym samples a
+    // very-low-frequency FBM and applies it to ONE hemisphere
+    // only (the +pole side), so one lobe routinely ends up
+    // bigger / brighter / further out than the other. Per-Crab
+    // amplitude lobeAsymAmp ranges so most nebulae are nearly
+    // symmetric but some seeds produce wildly asymmetric outliers.
+    float poleAng = v_seed * 1.7 + 0.3;
+    vec2 poleDir = vec2(cos(poleAng), sin(poleAng));
+    float rotLen = length(rotLocN);
+    float dirAlongPole = rotLen > 0.001
+      ? dot(rotLocN, poleDir) / rotLen : 0.0;
+    float biPolarBase = -bipolarAmp * (dirAlongPole * dirAlongPole - 0.40);
+    float waistJitter = 0.18 * snoiseCrab(loc * (0.7 / max(v_baseR, 1.0))
+                                        + seedOff + flow.xy);
+    // Per-Crab lobe-asymmetry amplitude. Skewed distribution
+    // (squared) so most nebulae have low asymmetry but a few
+    // get wildly lopsided outliers.
+    float lobeAsymRoll = fract(v_seed * 41.7);
+    float lobeAsymAmp = 0.45 * lobeAsymRoll * lobeAsymRoll;
+    // Very-low-frequency FBM. Sampled at a different scale per
+    // Crab via seedOff. step(0.0, dirAlongPole) selects the
+    // +pole hemisphere only — −pole side is unaffected.
+    float lobeFBM = fbm3DCrab(vec3(rotLocN * 0.45 + seedOff
+                                  + vec2(57.0, 73.0), v_seed * 11.0));
+    float lobeAsym = lobeAsymAmp * lobeFBM
+                   * step(0.0, dirAlongPole);
+    float biPolar = biPolarBase + waistJitter + lobeAsym;
+
+    // HIGH-FREQUENCY DOMAIN WARP — adds wisps-inside-wisps
+    // detail at a finer scale than the slow flow-driven
+    // base FBM (which lives at ~0.55 cycles / v_baseR). At
+    // 5x base frequency this is ~2.75 cycles / v_baseR.
+    // Amplitude small (0.07 puv-units) so it perturbs sample
+    // positions modestly without smearing structure.
+    vec2 hiWarp = vec2(
+      snoiseCrab(rotLocN * 5.0 + seedOff),
+      snoiseCrab(rotLocN * 5.0 + seedOff + vec2(11.0, 7.0))
+    ) * 0.07;
+
+    // Volumetric integration along the line of sight z. The 3D
+    // scalar field is
+    //
+    //     field(p) = |p|/v_baseR + 0.75 · fbm3D(p · fbmScale)
+    //
+    // Shells are level sets of this field at fixed values
+    // (0.55, 1.05, 1.55, 2.10). For each fragment we step along z
+    // from -ZMAX to +ZMAX, evaluate the field, and accumulate
+    // every shell's Gaussian contribution at every step.
+    //
+    // This is what produces the 3D look:
+    //   • At the limb of a shell (line of sight tangent), several
+    //     consecutive z steps land near the shell threshold —
+    //     contributions stack → bright limb.
+    //   • Lines of sight crossing the shell front-and-back at a
+    //     given 2D position pick up contributions at TWO distinct
+    //     z values along the integral — produces visible depth.
+    //   • No per-shell sqrt(Rn² - r²) boundary — that's what
+    //     created the previous circular artefacts.
+    //   • Fragments outside any shell silhouette still get the
+    //     full integration (with field values too far from any
+    //     threshold to contribute), so there's no carved-out
+    //     circle anywhere.
+    const int N_STEPS = 7;
+    const float ZMAX = 2.7;
+    float shellMask = 0.0;
+    vec3 shellColAccum = vec3(0.0);
+
+    // ── Per-shell edge masks (Design A) ───────────────────
+    // Compute TWO 2D noise signals once per fragment — one
+    // ridged (crisp shock filaments) and one smooth value FBM
+    // (diffuse haze). Each shell block inside the integration
+    // loop mixes between them based on its intrinsic softness
+    // (radial role: inner crisp → outer diffuse) plus the
+    // per-nebula stratOffset. Different shells in the SAME
+    // nebula now have different edge regimes — natural shock
+    // stratification, not a single uniform contour.
+    float fibreFreq = mix(2.5, 8.0, smoothstep(0.0, 2.0, r))
+                    * fibreFreqMult;
+    float ridgedSample = ridgedFBMCrab(loc * fibreFreq / v_baseR
+                                     + seedOff * 0.7);
+    float ridgedEdge = pow(clamp(ridgedSample, 0.0, 1.0), fibrePow);
+    // Smooth value FBM at lower frequency — diffuse haze with its
+    // own character, distinct from the ridged crisp filaments.
+    float smoothSample = vnoiseCrab(loc * (fibreFreq * 0.55) / v_baseR
+                                  + seedOff * 0.7 + vec2(13.7, 7.3));
+    float smoothEdge = smoothstep(0.25, 0.75, smoothSample);
+
+    // FRONT-TO-BACK volumetric integration with transmittance.
+    // trans = 1.0 in front of the volume; decays as we accumulate
+    // density through each step. Per-step contributions are pre-
+    // multiplied by trans so back shells are dimmed by the front
+    // shells' density — gives real volumetric self-shadowing.
+    float trans = 1.0;
+
+    for (int i = 0; i < N_STEPS; i++) {
+      float t = (float(i) + 0.5) / float(N_STEPS);
+      // Reversed direction — i=0 is the FRONT face, i=N_STEPS-1
+      // is the BACK face.
+      float zStep = ZMAX - 2.0 * ZMAX * t;
+      // Apply hi-freq warp to puv input AND bipolar bias to the
+      // resulting field (computed once before the loop).
+      vec3 p3 = vec3(puv + hiWarp, zStep) * fbmScale + seedOff3 + flow;
+      float fbm = fbm3DCrab(p3);
+
+      // 3D distance field. Ellipsoidal vs filamentary path
+      // depends on per-Crab morphology category. Filamentary
+      // computes distance to a quadratic Bezier tube and
+      // normalises by per-position thickness — closed shells
+      // become tube layers wrapping a bent curve.
+      float r3D;
+      float field;
+      if (isFilament) {
+        vec3 pos3 = vec3(puv, zStep);
+        // Closest point on quadratic Bezier — coarse subdivided
+        // sampling (12 evenly-spaced t values) followed by 2
+        // Newton-iteration refinements from the best sample.
+        // Returns bestT ∈ [0, 1] approximating the parameter
+        // of the closest point.
+        float bestT = 0.5;
+        float bestD2 = 1e9;
+        for (int i = 0; i < 12; i++) {
+          float t = (float(i) + 0.5) / 12.0;
+          float u = 1.0 - t;
+          vec3 onC = u * u * filamentP0
+                   + 2.0 * u * t * filamentP1
+                   + t * t * filamentP2;
+          vec3 dv = pos3 - onC;
+          float d2 = dot(dv, dv);
+          if (d2 < bestD2) { bestD2 = d2; bestT = t; }
+        }
+        // Newton refine: f(t) = (B(t) - P) · B'(t) = 0
+        for (int i = 0; i < 2; i++) {
+          float u = 1.0 - bestT;
+          vec3 onC = u * u * filamentP0
+                   + 2.0 * u * bestT * filamentP1
+                   + bestT * bestT * filamentP2;
+          vec3 dC = -2.0 * u * filamentP0
+                  + 2.0 * (1.0 - 2.0 * bestT) * filamentP1
+                  + 2.0 * bestT * filamentP2;
+          vec3 d2C = 2.0 * filamentP0 - 4.0 * filamentP1 + 2.0 * filamentP2;
+          vec3 diff = pos3 - onC;
+          float f  = dot(diff, dC);
+          float fp = -dot(dC, dC) + dot(diff, d2C);
+          if (abs(fp) > 1e-5) {
+            bestT = clamp(bestT - f / fp, 0.0, 1.0);
+          }
+        }
+        float u = 1.0 - bestT;
+        vec3 onCurve = u * u * filamentP0
+                     + 2.0 * u * bestT * filamentP1
+                     + bestT * bestT * filamentP2;
+        float distToCurve = distance(pos3, onCurve);
+        // Variable thickness along t — narrow at ends, fat in
+        // middle (sin(πt) profile). cavitySize is NOT applied
+        // here because the per-shell threshold already gets
+        // multiplied by cavitySize, which adjusts layer spacing
+        // around the tube without double-counting.
+        float thickness = mix(0.18, 0.55, sin(bestT * PI));
+        r3D = distToCurve / max(thickness, 0.05);
+        // No bipolar / waist jitter for filaments — they're
+        // already a directed structure; the bend is the
+        // morphology axis.
+        field = r3D + 0.75 * fbm;
+      } else {
+        // Ellipsoidal 3D radius — z scaled by minA so the
+        // ellipsoid is prolate along the rotated x' axis.
+        float zScaled = zStep / minA;
+        r3D = sqrt(xy_term + zScaled * zScaled);
+        // Bipolar bias faded to zero inside the cavity so the
+        // inner-most region stays spherical and shells don't
+        // read as rays radiating from the central source.
+        float bpFade = smoothstep(0.6, 1.3, r3D);
+        field = r3D + 0.75 * fbm + biPolar * bpFade;
+      }
+
+      // Per-step rho/colour accumulators. Each shell adds to
+      // these; after all shells we composite this step front-to-
+      // back using the running trans value.
+      float rhoStep = 0.0;
+      vec3 colStep = vec3(0.0);
+
+      // Shock mask — same ridged FBM as before, but used now as
+      // a BRIGHTNESS multiplier (gated by threshold) rather than
+      // a hue mix. Compressed regions get brighter, not bluer —
+      // fixes the muddy-olive contamination the previous version
+      // got from mixing every shell toward a cyan target.
+      float shockMask = ridgedFBMCrab(rotLocN * 2.5
+                                    + seedOff + flow.xy * 0.5);
+      shockMask = pow(clamp(shockMask, 0.0, 1.0), 1.6);
+      // Hard threshold (0.55) so only genuinely compressed regions
+      // get the brightness boost; the bulk of every shell stays at
+      // its pure base colour.
+      float shockBrighten = 1.0 + 0.55 * smoothstep(0.55, 0.85, shockMask);
+
+      // Radial saturation curve — saturated near the ionizing
+      // pulsar, muted at the outer dust. Real H-α ionization is
+      // strongest near the source. 1.25 boost in cavity, 0.80
+      // mute at outer ejecta. Applied per-shell after computing
+      // the base colour.
+      float satF = mix(1.25, 0.80, smoothstep(0.5, 2.5, r3D));
+
+      // Per-shell base thresholds (irregular spacing — 0.27,
+      // 0.20, 0.32, 0.20, 0.30 gaps) plus a per-shell angular
+      // FBM jitter that destroys the even-spacing heartbeat at
+      // any fixed direction.
+
+      // Shell 0 — innermost (sigma 0.06). Edge style: crisp
+      // ridged filaments (intrinsic softness 0.0).
+      {
+        float jit = 0.10 * snoiseCrab(rotLocN * 0.8 + seedOff
+                                    + vec2(0.0, 0.0));
+        float dF = field - (1.50 * cavitySize + jit);
+        float m = exp(-dF * dF / 0.0036);
+        if (dF > 0.0) m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
+        // Per-shell edge mask: this shell's intrinsic softness
+        // is 0.0 (fully crisp); plus per-nebula stratOffset.
+        float es = clamp(0.0 + stratOffset, 0.0, 1.0);
+        float edge = mix(ridgedEdge, smoothEdge, es);
+        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
+        float gn = mix(fibreGain * aestheticFibreGain,
+                       fibreGain * aestheticFibreGain * 0.5, es);
+        m *= fl + gn * edge;
+
+        vec3 shellC = shell0Col * shockBrighten;
+        // Cap radial saturation boost on shell 0 (inner band) so
+        // saturated palettes don't go neon.
+        float satFShell0 = min(satF, 1.05);
+        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
+        shellC = mix(vec3(luma), shellC, satFShell0);
+        rhoStep += m * w0;
+        colStep += shellC * m * w0;
+      }
+      // Shell 1 (sigma 0.07). Intrinsic softness 0.25.
+      {
+        float jit = 0.10 * snoiseCrab(rotLocN * 0.8 + seedOff
+                                    + vec2(7.3, 11.0));
+        float dF = field - (1.77 * cavitySize + jit);
+        float m = exp(-dF * dF / 0.0049);
+        if (dF > 0.0) m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
+        float es = clamp(0.25 + stratOffset, 0.0, 1.0);
+        float edge = mix(ridgedEdge, smoothEdge, es);
+        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
+        float gn = mix(fibreGain * aestheticFibreGain,
+                       fibreGain * aestheticFibreGain * 0.5, es);
+        m *= fl + gn * edge;
+
+        vec3 shellC = shell1Col * shockBrighten;
+        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
+        shellC = mix(vec3(luma), shellC, satF);
+        rhoStep += m * w1;
+        colStep += shellC * m * w1;
+      }
+      // Shell 2 (sigma 0.08). Intrinsic softness 0.50.
+      {
+        float jit = 0.10 * snoiseCrab(rotLocN * 0.8 + seedOff
+                                    + vec2(13.0, 5.7));
+        float dF = field - (1.97 * cavitySize + jit);
+        float m = exp(-dF * dF / 0.0064);
+        if (dF > 0.0) m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
+        float es = clamp(0.50 + stratOffset, 0.0, 1.0);
+        float edge = mix(ridgedEdge, smoothEdge, es);
+        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
+        float gn = mix(fibreGain * aestheticFibreGain,
+                       fibreGain * aestheticFibreGain * 0.5, es);
+        m *= fl + gn * edge;
+
+        vec3 shellC = shell2Col * shockBrighten;
+        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
+        shellC = mix(vec3(luma), shellC, satF);
+        rhoStep += m * w2;
+        colStep += shellC * m * w2;
+      }
+      // Shell 3 (sigma 0.10). Intrinsic softness 0.75.
+      {
+        float jit = 0.10 * snoiseCrab(rotLocN * 0.8 + seedOff
+                                    + vec2(23.0, 17.0));
+        float dF = field - (2.29 * cavitySize + jit);
+        float m = exp(-dF * dF / 0.0100);
+        if (dF > 0.0) m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
+        float es = clamp(0.75 + stratOffset, 0.0, 1.0);
+        float edge = mix(ridgedEdge, smoothEdge, es);
+        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
+        float gn = mix(fibreGain * aestheticFibreGain,
+                       fibreGain * aestheticFibreGain * 0.5, es);
+        m *= fl + gn * edge;
+
+        vec3 shellC = shell3Col * shockBrighten;
+        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
+        shellC = mix(vec3(luma), shellC, satF);
+        rhoStep += m * w3;
+        colStep += shellC * m * w3;
+      }
+      // Shell 4 (sigma 0.13). Intrinsic softness 1.0 (fully soft).
+      {
+        float jit = 0.10 * snoiseCrab(rotLocN * 0.8 + seedOff
+                                    + vec2(31.0, 41.0));
+        float dF = field - (2.59 * cavitySize + jit);
+        float m = exp(-dF * dF / 0.0169);
+        if (dF > 0.0) m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
+        float es = clamp(1.0 + stratOffset, 0.0, 1.0);
+        float edge = mix(ridgedEdge, smoothEdge, es);
+        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
+        float gn = mix(fibreGain * aestheticFibreGain,
+                       fibreGain * aestheticFibreGain * 0.5, es);
+        m *= fl + gn * edge;
+
+        vec3 shellC = shell4Col * shockBrighten;
+        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
+        shellC = mix(vec3(luma), shellC, satF);
+        rhoStep += m * w4;
+        colStep += shellC * m * w4;
+      }
+
+      // Composite this step with running transmittance, then
+      // attenuate trans by Beer-Lambert. Coefficient 1.5 chosen
+      // so a thick front shell (rho≈0.4) attenuates following
+      // steps by ~exp(-0.6) ≈ 0.55 — visible self-shadowing
+      // without making the back hemisphere disappear.
+      shellMask    += rhoStep * trans;
+      shellColAccum += colStep * trans;
+      trans *= exp(-rhoStep * 1.5);
+    }
+
+    if (shellMask > 0.001) shellColAccum /= shellMask;
+    // Edge masking now lives PER-SHELL inside the integration
+    // loop (Design A). Each shell mixes between ridged crisp
+    // filaments and smooth diffuse haze based on its intrinsic
+    // radial softness + per-nebula stratOffset. No global
+    // post-loop overlay needed — natural shock stratification
+    // emerges within each nebula instead of one regime imposed
+    // on all five shells.
+
+    // Pulsar position (offset for centralFlavour 3, origin
+    // otherwise). pulsarR is distance from the source — used by
+    // both the pinpoint and the inner halo so they track together.
+    vec2  pulsarP = puv - pulsarOffset;
+    float pulsarR = length(pulsarP);
+
+    // Two-stop diffuse cavity glow. Inner halo follows the
+    // pulsar's position (so off-centre sources have an off-centre
+    // halo); mid glow stays centred on the nebula's geometric
+    // origin. Per-flavour multipliers scale each independently —
+    // obscured (1) kills the halo entirely, soft-glow (2) boosts it.
+    float innerHalo = exp(-pulsarR * pulsarR * 5.5)
+                    * smoothstep(0.55, 0.0, pulsarR)
+                    * innerHaloMul;
+    float midGlow   = exp(-r * r * 1.5)
+                    * smoothstep(1.10, 0.0, r)
+                    * midGlowMul;
+    // Glow colour comes from the palette + 25% v_c1 tint.
+    vec3 glowCol = mix(paletteGlow, v_c1, 0.25);
+
+    // Pulsar pinpoint — palette-character driven. Falloff, pulse
+    // rate, brightness, and core colour all vary per palette so
+    // the central source matches the nebula type instead of being
+    // a uniform white sticker. paletteCore is no longer pre-mixed
+    // toward white, so cool palettes get genuinely cool stars.
+    float pulseT = 0.92 + 0.08 * sin(u_time * pulsarPulseRate + v_seed);
+    float pulsar = exp(-pulsarR * pulsarR * pulsarFalloff)
+                 * pulseT * pulsarMul;
+    vec3  pulsarCol = mix(paletteCore, v_c1, 0.25);
+
+    // Faint palette tint — colorIdx still nudges the per-Crab
+    // colour without overpowering the per-shell spectrum.
+    shellColAccum = mix(shellColAccum, v_c1, 0.10);
+
+    vec3 col = glowCol * (innerHalo * 0.45 + midGlow * 0.16)
+             + pulsarCol * pulsar * pulsarBrightness
+             + shellColAccum * shellMask * 1.40;
+    float a = clamp(innerHalo * 0.35 + midGlow * 0.12
+                    + pulsar + shellMask * 0.85, 0.0, 1.0);
+
+    outColor = vec4(col, a);
+    return;
   }
 
   // Pulsar — rapidly rotating neutron star. A tiny dense core
@@ -2038,6 +2790,7 @@ export function createRenderer(canvas) {
       if (s.isMonolith) flags |= 16;
       if (s.isPulsar) flags |= 32;
       if (s.isRingworld) flags |= 64;
+      if (s.isCrab) flags |= 2048;
       // Ring plate count packed in flag bits 8-10 (0-7). 0 means
       // the ringworld has no shadow plates — shader skips all
       // plate/shadow/city-light work in that case.
