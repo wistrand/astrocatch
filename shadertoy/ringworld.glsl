@@ -2,6 +2,16 @@
 // Ringworld — Shadertoy port of ASTROCATCH renderer.js (isRingworld branch)
 // =====================================================================
 //
+// Shadertoy:
+//   Name:        Tumbling ringworld habitat
+//   Description: Halo-style ring wrapping a central sun. Ray-cylinder
+//                intersection picks the near (outside / structural) and
+//                far (inside / earth-textured) faces; optional inner
+//                shadow plates with sun shadow + city lights. Drag
+//                mouse to orbit. Ported from astrocatch.live.
+//   Tags:        ringworld, halo, raycast, raycylinder
+//   License:     MIT
+//
 //   ▶ Play the game:  https://astrocatch.live
 //   ▶ Source code:    https://github.com/wistrand/astrocatch
 //
@@ -28,7 +38,7 @@ const float V_SEED = 1.7;
 
 // Ringworld screen size in pixels. Visible footprint extends to
 // roughly 3.6 × this radius (the ring's outer extent).
-const float V_BASE_R = 90.0;
+const float V_BASE_R = 60.0;
 
 // Ring radius and band height as multiples of V_BASE_R.
 //   RING_R_MULT 3.6 = classic Halo proportion.
@@ -56,6 +66,16 @@ const float PLATE_SPIN_RATE = 0.04;
 // Sun radius as a fraction of V_BASE_R. 0.55 fills the visible
 // disc nicely without bleeding into the ring.
 const float SUN_R_MULT = 0.55;
+
+// Lighting — ambient + diffuse coefficients per face.  In-game
+// values were 0.20 + 2.70·NdotV (outside) and 0.01 + 1.70·NdotV
+// (inside).  The very low inside ambient made the night side of
+// the band go almost black; bumped here so the un-lit half of
+// the inside surface still reads as gas-illuminated geometry.
+const float OUTSIDE_AMBIENT = 0.60;
+const float OUTSIDE_DIFFUSE = 2.70;
+const float INSIDE_AMBIENT  = 0.35;
+const float INSIDE_DIFFUSE  = 1.70;
 
 // ─────────────────────────────────────────────────────────────────────
 // Ringworld renderer
@@ -223,8 +243,8 @@ vec4 renderRingworld(vec2 v_local, float u_time, mat3 viewRot) {
   vec3 outward = (hit - dot(hit, axis) * axis) / R;
   float ndl = isInside ? -outward.z : outward.z;
   ndl = max(ndl, 0.0);
-  float lit = 0.20 + 2.70 * ndl;
-  float litInside = 0.01 + 1.7 * ndl;
+  float lit = OUTSIDE_AMBIENT + OUTSIDE_DIFFUSE * ndl;
+  float litInside = INSIDE_AMBIENT + INSIDE_DIFFUSE * ndl;
   float vertShade = mix(1.10, 0.80, widthT);
   float topEdge = smoothstep(0.82, 1.0, (widthT - 0.5) * 2.0);
   float botEdge = smoothstep(0.82, 1.0, (0.5 - widthT) * 2.0);

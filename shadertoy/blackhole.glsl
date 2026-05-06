@@ -2,6 +2,17 @@
 // Black hole — Shadertoy port of ASTROCATCH renderer.js
 // =====================================================================
 //
+// Shadertoy:
+//   Name:        Gravitational black hole with accretion disk
+//   Description: Edge-on accretion disk with asymmetric lensed back-
+//                arcs over an event horizon. Newtonian weak-field UV
+//                distortion warps a procedural reference grid +
+//                starfield around it. Photon ring shimmer on top.
+//                Drag mouse to move the BH across the background.
+//                Ported from astrocatch.live.
+//   Tags:        blackhole, lensing, space, gargantua
+//   License:     MIT
+//
 //   ▶ Play the game:  https://astrocatch.live
 //   ▶ Source code:    https://github.com/wistrand/astrocatch
 //

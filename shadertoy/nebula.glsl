@@ -2,11 +2,21 @@
 // Nebula — Shadertoy port of ASTROCATCH renderer.js (isNebula branch)
 // =====================================================================
 //
+// Shadertoy:
+//   Name:        Volumetric supernova-remnant nebula
+//   Description: 5-shell ray-march with simplex/value-noise FBM,
+//                palette categorical, per-shell edge masks, optional
+//                Bezier-tube filamentary morphology, pulsar pinpoint
+//                with halo + mid-glow. Drag mouse to rotate in 3D.
+//                Ported from astrocatch.live.
+//   Tags:        nebula, volumetric, raymarch, fbm
+//   License:     MIT
+//
 //   ▶ Play the game:  https://astrocatch.live
 //   ▶ Source code:    https://github.com/wistrand/astrocatch
 //
-// Self-contained re-implementation of the procedural Nebula
-// shader from docs/renderer.js. Algorithm preserved verbatim:
+// Self-contained re-implementation of the procedural nebula shader
+// from docs/renderer.js. Algorithm preserved verbatim:
 // 5-shell volumetric integration with front-to-back transmittance,
 // simplex / value-noise FBM, palette categorical, per-shell edge
 // masks (Design A), pulsar pinpoint with halo + mid-glow, optional
