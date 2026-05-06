@@ -82,7 +82,7 @@ Flags layout (bit values):
 - `128` — (unused)
 - `256` / `512` / `1024` — `ringPlateCount` (3 bits, 0–7), only
   meaningful when `isRingworld` is set
-- `2048` — isCrab
+- `2048` — isNebula
 
 The vertex shader also reads bit `32` (isPulsar) to enlarge the
 star quad to `5.0 × baseR + 8` (vs `4.3 × baseR + 8` for all
@@ -266,7 +266,7 @@ roughly 80–150 ALU + ~10 trig per fragment. Quad is 5.0× v_baseR
 extent (vs 4.3× for plain stars), so per-instance pixel count is
 ~1.4× a plain star. Aggregate per pulsar ≈ 1.5–2× a plain star.
 
-## Crab nebulae
+## Nebulae
 
 Flag bit 2048. The most expensive shader path in the renderer.
 Modelled as level sets of an r-biased simplex-FBM scalar field,
@@ -277,7 +277,7 @@ marched along the line of sight z.
 ### Shape
 
 - **Ellipsoidal (default)**: `r3D = sqrt((x'/majA)² + (y'/minA)² + (z/minA)²)`
-  with per-Crab eccentricity `[0.08, 0.25]` and rotation angle
+  with per-nebula eccentricity `[0.08, 0.25]` and rotation angle
   `v_seed · 1.7 + 0.3`. Plus a bipolar bias `−bipolarAmp · (dirAlongPole² − 0.40)`
   with FBM-jittered waist (turbulent equator) and lobe-asymmetry
   term applied to one hemisphere only. Bipolar bias faded out
@@ -287,23 +287,23 @@ marched along the line of sight z.
   tube SDF. Closest-point on `(P0, P1, P2)` curve via 12 sample
   points + 2 Newton-iteration refinements, then `r3D = distToCurve / thickness`
   with `thickness = mix(0.18, 0.55, sin(πt))` (narrow at ends,
-  fat in middle). Per-Crab seed drives endpoint axis, bend
+  fat in middle). Per-nebula seed drives endpoint axis, bend
   direction, and bend amplitude.
 
 ### Field and shells
 
 ```
-field = r3D + 0.75 * fbm3DCrab(p · 0.55) + biPolar
+field = r3D + 0.75 * fbm3DN(p · 0.55) + biPolar
 ```
 
-`fbm3DCrab` averages 2D simplex FBM on three orthogonal
+`fbm3DN` averages 2D simplex FBM on three orthogonal
 projections (xy / xz / yz) — cheap "fake 3D" simplex without a
 true 3D simplex implementation.
 
 Five shells at field thresholds `1.50 · cavitySize`, `1.77 ·
 cavitySize`, `1.97 · cavitySize`, `2.29 · cavitySize`, `2.59 ·
 cavitySize`. Per-shell jitter offsets the threshold along each
-direction by `0.10 · snoiseCrab(rotLocN · 0.8 + perShellOffset)`,
+direction by `0.10 · snoiseN(rotLocN · 0.8 + perShellOffset)`,
 breaking the even-spacing heartbeat at any fixed angle. Each
 shell renders a Gaussian on `|field − threshold|` with sigma
 `0.06–0.13` (inner crisp, outer soft) and an asymmetric outer-
@@ -345,8 +345,8 @@ m *= mix(fibreFloor, fibreFloor + 0.30, es)
 
 `ridgedEdge` and `smoothEdge` are computed once per fragment
 before the integration loop; the per-shell `mix` blends between
-them. Both come from the value-noise path (`ridgedFBMCrab` /
-`vnoiseCrab`); `vhashCrab` uses Hoskins' sin-free hash so there
+them. Both come from the value-noise path (`ridgedFBMN` /
+`vnoiseN`); `vhashN` uses Hoskins' sin-free hash so there
 are no axis-aligned tiling artifacts.
 
 ### Per-nebula categorical axes
@@ -390,16 +390,16 @@ dust: 100 / 0.00 — no pulse).
 
 *Cost:* the most expensive shader path. Per-fragment ALU is
 ~3000 (ellipsoidal) to ~4500 (filamentary). 7 z-steps × ~9
-simplex calls (fbm3DCrab) + 5 ridged-FBM hashes per shell
+simplex calls (fbm3DN) + 5 ridged-FBM hashes per shell
 (ridged + smooth edge masks) + per-step shock-mask + 5 shell
 Gaussian evaluations + per-shell asymmetry + edge-mix +
 per-step composite. Roughly **9–14× a plain star** per
 fragment. Quad is the standard 4.3× v_baseR + 8, so per-
 instance pixel count is the same as plain. Aggregate per
-visible Crab ≈ 10× plain star. Crabs spawn at 5–10% rates
+visible nebula ≈ 10× plain star. Nebulae spawn at 5–10% rates
 (per `SPAWN_TABLE`) so typical scenes have 0–1 visible at a
 time; the inspector grid (`nebula.html`) is the worst case
-where many simultaneous Crabs stack.
+where many simultaneous nebulae stack.
 
 ## Crash wobble
 
@@ -432,7 +432,7 @@ fragment-ALU share, not wall time:
 ### Per-variant fragment cost ranking
 
 Approximate ALU per fragment, on the same per-quad pixel count
-basis. Crab is dramatically heavier than every other variant.
+basis. Nebula is dramatically heavier than every other variant.
 
 | Variant | Per-fragment ALU | Relative to plain star |
 |---|---|---|
@@ -441,21 +441,21 @@ basis. Crab is dramatically heavier than every other variant.
 | Pulsar | ~150 | 0.4× (smaller body, big quad) |
 | Ringworld | ~200 | 0.6× |
 | Black hole | ~100 + ~80 fullscreen pass | varies |
-| **Crab nebula (ellipsoidal)** | **~3000** | **~9×** |
-| **Crab nebula (filamentary)** | **~4500** | **~13×** |
+| **Nebula (ellipsoidal)** | **~3000** | **~9×** |
+| **Nebula (filamentary)** | **~4500** | **~13×** |
 
-Crab cost is dominated by the 7-step volumetric integration:
+Nebula cost is dominated by the 7-step volumetric integration:
 each step does a 3-projection 3-octave simplex FBM (~9 simplex
 calls), evaluates 5 shell Gaussians with per-shell asymmetric
 darkening and edge-mask mixing, and composites with running
-transmittance. Filamentary Crabs add a Bezier closest-point
+transmittance. Filamentary Nebulae add a Bezier closest-point
 search (12 samples + 2 Newton iterations) per z-step.
 
 Back-of-envelope totals:
-- **Plain scene** (no BH, no Crab): ~1× the fullscreen pass.
+- **Plain scene** (no BH, no nebula): ~1× the fullscreen pass.
   Runs comfortably at 60 fps on any modern GPU, ~5–8 ms on
   integrated mobile.
-- **Scene with one visible Crab**: adds ~10× one plain star's
+- **Scene with one visible nebula**: adds ~10× one plain star's
   fragment work. With 6–8 visible stars, this is +20–30% total
   star-batch cost — still 60 fps on desktop, possibly noticeable
   on integrated mobile.
@@ -463,12 +463,12 @@ Back-of-envelope totals:
   of the lensing composite. Still 60 fps on desktop; mobile
   integrated GPUs may dip to 45–55 fps depending on FBO size.
 - **Inspector grid (`nebula.html?grid=8`)**: 64 simultaneous
-  Crabs. Total Crab cost ≈ 13 GFLOP/frame ALU. Desktop fine;
+  nebulae. Total nebula cost ≈ 13 GFLOP/frame ALU. Desktop fine;
   mobile expects frame drops at large grid sizes.
 
-If Crab becomes a bottleneck, the cheap levers in priority:
+If Nebula becomes a bottleneck, the cheap levers in priority:
 - Reduce `N_STEPS` from 7 to 5 (~30% cheaper).
-- Drop `fbm3octCrab` to 2 octaves instead of 3 (~25% cheaper).
+- Drop `fbm3octN` to 2 octaves instead of 3 (~25% cheaper).
 - Skip filamentary Newton refinement — use only 12-sample
   estimate.
 

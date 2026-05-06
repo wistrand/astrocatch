@@ -144,7 +144,7 @@ docs/
   physics.js          pure physics module, used by browser and node
   star-rendering.js   browser-only: binary positions, ejecta, comets
   debug.html / .js    variant inspector — one of every star type
-  nebula.html / .js   procedural Crab-nebula population grid
+  nebula.html / .js   procedural nebula population grid
                       (?seed=N&grid=NxM)
 scripts/
   physics-test.js     node test runner

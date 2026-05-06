@@ -62,7 +62,7 @@ points, sparkle burst, twinkly sound, comet removed.
 
 `SPAWN_TABLE` is a list of rows at star-index control points.
 Each row lists weights for each variant (`plain`, `binary`,
-`bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `crab`).
+`bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `nebula`).
 Weights interpolate linearly between rows and plateau past the
 last row. Normalized at sample time, so values don't need to
 sum to 100.
@@ -72,11 +72,11 @@ Planets and comets are **orthogonal** rolls applied on top:
 - **Planets**: ramp from 0 to `PLANET_PROB_MAX` over
   `PLANET_RAMP_STARS` captures. Allowed on `plain` and `bh`
   variants only; binaries, monoliths, ringworlds, pulsars, and
-  Crab nebulae skip (their visuals already occupy the orbit
+  Nebulae skip (their visuals already occupy the orbit
   volume).
 - **Comets**: flat `COMET_PROB` chance from `COMET_MIN_STAR`+.
   Allowed on any variant except monoliths (alien/alone vibe).
-  Pulsars and Crabs are fine — debris disks around real pulsars
+  Pulsars and Nebulae are fine — debris disks around real pulsars
   and comets weaving through nebula filaments both read
   naturally.
 
@@ -85,7 +85,7 @@ Decision order in `makeStar`: variant → planets → comets. Swap
 for testing.
 
 `addNextStar` pre-rolls the variant via `pickVariant(n)` so
-pulsars and Crabs can claim a higher minimum spawn radius
+pulsars and Nebulae can claim a higher minimum spawn radius
 (`r ≥ 30` vs default `r ≥ 18`); their tiny core / fine shell
 detail needs the extra resolution to read. The pre-rolled
 variant is then passed to `makeStar(..., variant)` to avoid a
@@ -201,9 +201,9 @@ gets lost. Beam cones reach `3.5 × v_baseR` at peak edge-on
 alignment; the renderer uses an enlarged 5.0× quad for pulsars
 specifically (vs 4.3× for all other variants).
 
-## Crab nebulae
+## Nebulae
 
-Flagged `isCrab: true`. Physics identical to a normal star.
+Flagged `isNebula: true`. Physics identical to a normal star.
 Rendered as a volumetrically integrated 5-shell nebula sampling
 multiple per-nebula categorical and continuous parameter axes
 from the star's seed:
@@ -228,21 +228,21 @@ from the star's seed:
   squared distribution → most nebulae mild, ~10 % wildly
   lopsided outliers).
 
-Crab nebulae skip planets (the gas envelope occupies the orbit
+Nebulae skip planets (the gas envelope occupies the orbit
 volume), allow comets, and can't be binary components. They use
 the same higher minimum spawn radius (`r ≥ 30`) as pulsars —
 the volumetric integration's 5-shell network needs room to
 develop visible structure across `r3D ≈ 0.5` to `2.5 × v_baseR`.
 
-While the ship's `currentStar.isCrab` is true, the gameplay
+While the ship's `currentStar.isNebula` is true, the gameplay
 camera eases to a 1.6× zoom (vs 1.7× for ringworlds, 1.0×
 otherwise) so the nebula's internal structure stays legible.
 The `visualR` extent for the screen-edge horizontal-camera-
-nudge logic is `r * 2.7` for Crabs (vs `r * 3.6` for ringworlds,
+nudge logic is `r * 2.7` for nebulae (vs `r * 3.6` for ringworlds,
 `r * 2.5` for everything else).
 
 The `nebula.html` inspector page (`?seed=N&grid=NxM`) renders a
-deterministic grid of Crab nebulae for population review.
+deterministic grid of Nebulae for population review.
 URL-driven seed and grid size make populations reproducible
 across reloads.
 

@@ -1,6 +1,6 @@
-// 3x3 random Crab nebula inspector. No background, no labels,
+// 3x3 random Nebula inspector. No background, no labels,
 // no input — just a static grid of nine differently-seeded
-// Crab nebulae for visual review of the procedural shader.
+// Nebulae for visual review of the procedural shader.
 
 import { createRenderer } from "./renderer.js";
 import { PALETTE_LEN } from "./star-rendering.js";
@@ -46,14 +46,14 @@ function makeNebula(x, y, r, colorIdx, seed) {
     isPulsar: false,
     isRingworld: false,
     ringPlateCount: 0,
-    isCrab: true,
+    isNebula: true,
   };
 }
 
 // URL param ?seed=<float> drives the base seed for the whole grid.
 // If absent, we pick a random seed and write it back to the URL via
 // history.replaceState so the bar always shows the current seed.
-// Each cell derives its own per-Crab seed from base + cellIndex *
+// Each cell derives its own per-nebula seed from base + cellIndex *
 // stride; the renderer then feeds that into v_seed and every per-
 // nebula categorical/continuous axis (palette, bipolar amp, cavity
 // size, fibre params, central flavour, pulsar offset, morphCat...)
@@ -225,7 +225,7 @@ function loop(t) {
       isRingworld: false,
       ringPlateCount: 0,
       isPulsar: false,
-      isCrab: true,
+      isNebula: true,
     });
   }
   renderer.drawStarBatch(starBatch, cam);
