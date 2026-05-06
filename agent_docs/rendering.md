@@ -71,10 +71,23 @@ No libraries. Shaders live as template strings inside `renderer.js`.
 16 floats per instance (64 bytes):
 `vec2 center, vec4 c1(rgb+baseR), vec4 c2(rgb+seed), vec4 params(hasRays, nGran, pulse, flags), vec2 wobble(amount, angle)`.
 
-Flags: bit 0 = isCurrent, bit 1 = isNext, bit 2 = isPast,
-bit 3 = isBlackHole, bit 4 = isMonolith, bit 6 = isRingworld,
-bits 8–10 = `ringPlateCount` (0–7, only meaningful when
-isRingworld is set).
+Flags layout (bit values):
+- `1` — isCurrent
+- `2` — isNext
+- `4` — isPast
+- `8` — isBlackHole
+- `16` — isMonolith
+- `32` — isPulsar
+- `64` — isRingworld
+- `128` — (unused)
+- `256` / `512` / `1024` — `ringPlateCount` (3 bits, 0–7), only
+  meaningful when `isRingworld` is set
+- `2048` — isCrab
+
+The vertex shader also reads bit `32` (isPulsar) to enlarge the
+star quad to `5.0 × baseR + 8` (vs `4.3 × baseR + 8` for all
+other variants). Pulsar lens-flare halos and streaks otherwise
+hit the rectangular quad boundary at peak alignment.
 
 ## Black holes
 
@@ -214,6 +227,180 @@ smoothstep + 5-sin domain-warped city fBm + `pow` (~70 ALU + 5
 sins + 1 pow). Weighted aggregate: ~70% more fragment work than
 plate-free. Still well under a visible black hole.
 
+## Pulsars
+
+Flag bit 32. Tiny dense neutron-star body (`coreR = 0.32 ×
+v_baseR`) with two opposed lighthouse beams sweeping a magnetic
+axis offset ~30° from a slowly drifting spin axis. Self-contained
+shader branch — no FBO.
+
+The spin axis itself drifts smoothly across the sphere via three
+independent 2-decimal `u_time` rates (`0.03 / 0.02 / 0.04`); when
+the drift carries it close to +Z, the magnetic axis sweeps
+through camera direction and `flash = pow(|mag.z|, 8)` ramps to
+near 1.0 for a brief alignment burst.
+
+Visual layers:
+- **Core** — small bright pinpoint, palette-tinted via `v_c1`,
+  with `flash`-driven brightness boost.
+- **Side beams** — two opposed cones along ±`bDir` (the magnetic
+  axis projected to 2D). Cone vertex at the projected pole
+  (`b2L * coreR` from origin), cone tapers from `0.06 · v_baseR`
+  to `0.30 · v_baseR`. Beam is masked by Gaussian width and a
+  smooth length envelope. Outflowing-plasma modulation: a low-
+  frequency phase ripple plus a helical-knot intensity field
+  that corkscrews along the beam, giving 3D depth.
+- **Halo** — Gaussian glow that blooms with `flash`.
+- **Lens flare composite** — 6-point diffraction spikes
+  (`pow(|cos(3θ)|, 80)`), anamorphic streak (Gaussian along a
+  per-pulsar axis), iris ring (`smoothstep` on `|d − 2.4 · v_baseR|`)
+  with a slowly drifting crescent cut, plus chromatic core fringe.
+  All gated by `flash` so they appear only during alignment.
+- **Edge fade** — a circular alpha smoothstep at the edge of the
+  enlarged 5.0× quad keeps the lens flare from showing the
+  rectangular cutoff at peak flash.
+
+*Cost:* moderate-high. Spin/perp/Rodrigues setup (~30 ALU + 5
+trig per fragment), then the beam, halo, and 5 flare layers —
+roughly 80–150 ALU + ~10 trig per fragment. Quad is 5.0× v_baseR
+extent (vs 4.3× for plain stars), so per-instance pixel count is
+~1.4× a plain star. Aggregate per pulsar ≈ 1.5–2× a plain star.
+
+## Crab nebulae
+
+Flag bit 2048. The most expensive shader path in the renderer.
+Modelled as level sets of an r-biased simplex-FBM scalar field,
+with five nested ellipsoidal shells (or one Bezier-tube
+filamentary morphology, ~25% of seeds), volumetrically ray-
+marched along the line of sight z.
+
+### Shape
+
+- **Ellipsoidal (default)**: `r3D = sqrt((x'/majA)² + (y'/minA)² + (z/minA)²)`
+  with per-Crab eccentricity `[0.08, 0.25]` and rotation angle
+  `v_seed · 1.7 + 0.3`. Plus a bipolar bias `−bipolarAmp · (dirAlongPole² − 0.40)`
+  with FBM-jittered waist (turbulent equator) and lobe-asymmetry
+  term applied to one hemisphere only. Bipolar bias faded out
+  inside the cavity (`smoothstep(0.6, 1.3, r3D)`) so the centre
+  stays spherical and shells don't read as rays from the source.
+- **Filamentary (~25%)**: replaces `r3D` with a quadratic-Bezier
+  tube SDF. Closest-point on `(P0, P1, P2)` curve via 12 sample
+  points + 2 Newton-iteration refinements, then `r3D = distToCurve / thickness`
+  with `thickness = mix(0.18, 0.55, sin(πt))` (narrow at ends,
+  fat in middle). Per-Crab seed drives endpoint axis, bend
+  direction, and bend amplitude.
+
+### Field and shells
+
+```
+field = r3D + 0.75 * fbm3DCrab(p · 0.55) + biPolar
+```
+
+`fbm3DCrab` averages 2D simplex FBM on three orthogonal
+projections (xy / xz / yz) — cheap "fake 3D" simplex without a
+true 3D simplex implementation.
+
+Five shells at field thresholds `1.50 · cavitySize`, `1.77 ·
+cavitySize`, `1.97 · cavitySize`, `2.29 · cavitySize`, `2.59 ·
+cavitySize`. Per-shell jitter offsets the threshold along each
+direction by `0.10 · snoiseCrab(rotLocN · 0.8 + perShellOffset)`,
+breaking the even-spacing heartbeat at any fixed angle. Each
+shell renders a Gaussian on `|field − threshold|` with sigma
+`0.06–0.13` (inner crisp, outer soft) and an asymmetric outer-
+side darkening (`m *= mix(1.0, 0.18-0.40, smoothstep(0, σ, dF))`)
+so shells read as "lit from within" — inner-facing surfaces
+bright, space-facing dim.
+
+### Volumetric integration
+
+Front-to-back ray-march: 7 z-steps from `+ZMAX` to `−ZMAX` (=
+`±2.7 v_baseR`). At each step:
+1. Sample 3D field at `(loc, zStep)`.
+2. Evaluate all 5 shell Gaussians, with per-shell asymmetric
+   darkening and per-shell edge mask (Design A — see below).
+3. Accumulate `rhoStep` and `colStep`.
+4. Composite with running transmittance via Beer-Lambert:
+   `shellMask += rhoStep * trans; trans *= exp(-rhoStep * 1.5)`.
+
+Self-shadowing emerges naturally — front-side density attenuates
+back-side contributions. Limb-brightening also emerges because
+multiple z-steps land near the shell threshold at silhouettes.
+
+### Per-shell edge masks (Design A)
+
+Each shell has its OWN edge character — inner shells use ridged
+FBM (crisp shock filaments), outer shells use smooth value FBM
+(diffuse dust haze). Per-shell intrinsic softness `s ∈ {0.0,
+0.25, 0.5, 0.75, 1.0}` for shells 0–4. Per-nebula `stratOffset
+∈ [-0.4, +0.4]` shifts the gradient — negative biases all shells
+crisp ("young"), positive biases all soft ("old"). Inside each
+shell block:
+
+```glsl
+float es = clamp(intrinsic_s + stratOffset, 0, 1);
+float edge = mix(ridgedEdge, smoothEdge, es);
+m *= mix(fibreFloor, fibreFloor + 0.30, es)
+   + mix(fibreGain, fibreGain * 0.5, es) * edge;
+```
+
+`ridgedEdge` and `smoothEdge` are computed once per fragment
+before the integration loop; the per-shell `mix` blends between
+them. Both come from the value-noise path (`ridgedFBMCrab` /
+`vnoiseCrab`); `vhashCrab` uses Hoskins' sin-free hash so there
+are no axis-aligned tiling artifacts.
+
+### Per-nebula categorical axes
+
+All driven by `v_seed`:
+
+- **paletteIdx ∈ {0, 1, 2, 3}**: Crab synchrotron / OIII Helix /
+  Hot blue NGC 7027 / dust-reddened. Each palette ships its own
+  5 shell colors, glow tint, core tint, per-shell weights
+  (front-loaded for Helix, back-loaded for dust, etc.), pulsar
+  falloff, pulse rate, brightness — palettes are different
+  physical species, not hue rotations.
+- **morphCat (8 buckets, 25% filamentary)**: ellipsoid vs
+  Bezier-tube filament.
+- **centralFlavour ∈ {0, 1, 2}**: visible pinpoint / hidden
+  source / off-centre pinpoint. Decoupled from interior fill —
+  hidden source still glows the cavity gas.
+- **interiorFillCat (3 weighted buckets)**: 50% full body / 35%
+  moderate / 15% etched. Etched mode boosts fibre gain so the
+  linework character is intentional.
+
+Continuous axes: `bipolarAmp [0.30, 0.95]`, `cavitySize [0.60, 1.60]`,
+`densityMult [0.70, 1.40]`, `fibreFreqMult [0.60, 1.50]`,
+`fibrePow [1.0, 2.5]`, `fibreFloor [0.20, 0.45]`, `fibreGain [1.0, 1.8]`,
+`stratOffset [-0.4, +0.4]`, `lobeAsymAmp [0, 0.45²]` (squared,
+skewed toward mild).
+
+### Cavity glow + pulsar pinpoint
+
+Two-stop interior glow: tight `innerHalo = exp(-r²·5.5)·smoothstep(0.55, 0, r)`
+follows the (possibly-offset) pulsar position; softer
+`midGlow = exp(-r²·1.5)·smoothstep(1.10, 0, r)` stays centred on
+nebula origin. Both scaled by `fillMult` so etched nebulae have
+dim cavities and full nebulae have bright ones, independent of
+pulsar visibility.
+
+Pulsar pinpoint: `exp(-pulsarR²·pulsarFalloff) * pulseT * pulsarMul`,
+where `pulsarFalloff` and `pulsarPulseRate` come from the
+palette (Crab: 280 / 8.00 Hz; Helix: 150 / 4.50; blue: 200 / 6.00;
+dust: 100 / 0.00 — no pulse).
+
+*Cost:* the most expensive shader path. Per-fragment ALU is
+~3000 (ellipsoidal) to ~4500 (filamentary). 7 z-steps × ~9
+simplex calls (fbm3DCrab) + 5 ridged-FBM hashes per shell
+(ridged + smooth edge masks) + per-step shock-mask + 5 shell
+Gaussian evaluations + per-shell asymmetry + edge-mix +
+per-step composite. Roughly **9–14× a plain star** per
+fragment. Quad is the standard 4.3× v_baseR + 8, so per-
+instance pixel count is the same as plain. Aggregate per
+visible Crab ≈ 10× plain star. Crabs spawn at 5–10% rates
+(per `SPAWN_TABLE`) so typical scenes have 0–1 visible at a
+time; the inspector grid (`nebula.html`) is the worst case
+where many simultaneous Crabs stack.
+
 ## Crash wobble
 
 When a ship crashes into a star, the star shader receives wobble
@@ -235,22 +422,55 @@ fragment-ALU share, not wall time:
 
 | Pass             | Share | Notes                               |
 |------------------|-------|-------------------------------------|
-| `fullscreen` bg  | ~35%  | Runs over every pixel every frame.  |
-| `star` batch     | ~25%  | Grows with star count and variant mix. A single visible ringworld adds ~5%; a monolith ~2%. |
+| `fullscreen` bg  | ~30%  | Runs over every pixel every frame.  |
+| `star` batch     | ~25%  | Grows with star count and variant mix. See per-variant cost ranking below. |
 | `circle` batch   | ~10%  | bgStars, ball, planets, particles, hints. Cheap per pixel but many instances. |
 | `polyline`       | ~2%   | Trail + replay + comet tails.       |
 | `lensing` pass   | +60%  | Added **on top** only while a BH is on screen — roughly doubles total fragment work. |
 | JS / state       | ~5%   | `draw()` batch build + renderer uniform uploads. Minor; physics/gameplay ticks are counted separately. |
 
+### Per-variant fragment cost ranking
+
+Approximate ALU per fragment, on the same per-quad pixel count
+basis. Crab is dramatically heavier than every other variant.
+
+| Variant | Per-fragment ALU | Relative to plain star |
+|---|---|---|
+| Monolith | ~50 | 0.15× |
+| Plain star | ~340 | 1× |
+| Pulsar | ~150 | 0.4× (smaller body, big quad) |
+| Ringworld | ~200 | 0.6× |
+| Black hole | ~100 + ~80 fullscreen pass | varies |
+| **Crab nebula (ellipsoidal)** | **~3000** | **~9×** |
+| **Crab nebula (filamentary)** | **~4500** | **~13×** |
+
+Crab cost is dominated by the 7-step volumetric integration:
+each step does a 3-projection 3-octave simplex FBM (~9 simplex
+calls), evaluates 5 shell Gaussians with per-shell asymmetric
+darkening and edge-mask mixing, and composites with running
+transmittance. Filamentary Crabs add a Bezier closest-point
+search (12 samples + 2 Newton iterations) per z-step.
+
 Back-of-envelope totals:
-- **Plain scene** (no BH): ~1× the fullscreen pass, i.e. one
-  pass worth of fragment work. Runs comfortably at 60 fps on
-  any modern GPU, ~5–8 ms on integrated mobile.
+- **Plain scene** (no BH, no Crab): ~1× the fullscreen pass.
+  Runs comfortably at 60 fps on any modern GPU, ~5–8 ms on
+  integrated mobile.
+- **Scene with one visible Crab**: adds ~10× one plain star's
+  fragment work. With 6–8 visible stars, this is +20–30% total
+  star-batch cost — still 60 fps on desktop, possibly noticeable
+  on integrated mobile.
 - **Scene with one visible BH**: ~1.6× the plain scene because
   of the lensing composite. Still 60 fps on desktop; mobile
   integrated GPUs may dip to 45–55 fps depending on FBO size.
-- **Scene with ringworld + BH**: ringworld adds ~5% on top of
-  the BH cost — not the bottleneck; the lensing pass is.
+- **Inspector grid (`nebula.html?grid=8`)**: 64 simultaneous
+  Crabs. Total Crab cost ≈ 13 GFLOP/frame ALU. Desktop fine;
+  mobile expects frame drops at large grid sizes.
+
+If Crab becomes a bottleneck, the cheap levers in priority:
+- Reduce `N_STEPS` from 7 to 5 (~30% cheaper).
+- Drop `fbm3octCrab` to 2 octaves instead of 3 (~25% cheaper).
+- Skip filamentary Newton refinement — use only 12-sample
+  estimate.
 
 Scaling inputs to watch:
 - **Viewport pixel count** (`W * H * DPR²`) — linear multiplier

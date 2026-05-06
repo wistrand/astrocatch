@@ -9,6 +9,9 @@ docs/
   renderer.js        # browser-only ES module: WebGL2 renderer + shaders
   audio.js           # browser-only ES module: procedural WebAudio SFX + music
   physics.js         # pure physics ES module — used by browser and node
+  star-rendering.js  # browser-only — binary positions, ejecta, comets
+  debug.html / .js   # variant inspector — one of every star type in a grid
+  nebula.html / .js  # Crab-nebula population grid (?seed=N&grid=NxM)
 scripts/
   physics-test.js    # node test runner — imports ../docs/physics.js
   check-distances.js # standalone diagnostic for addNextStar's distance curve
@@ -80,11 +83,15 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
 
 - **Rendering** (`renderer.js`): WebGL2, 5 shader programs
   (fullscreen / lensing / circle / star / polyline). Stars, black
-  holes, raymarched 3D monolith slabs, and tumbling ringworld habitats rendered procedurally
-  per pixel. Black holes use a conditional full-screen FBO +
-  lensing composite pass with procedural grid for visible
-  distortion. Star shader supports crash wobble and tidal locking
-  for binaries. Background includes procedural spiral galaxies.
+  holes, raymarched 3D monolith slabs, tumbling ringworld habitats,
+  pulsars (lighthouse beams + lens-flare composite), and Crab
+  nebulae (level-set volumetric shells with simplex FBM, palette
+  categorical, per-shell edge masks, optional Bezier-tube
+  filamentary morphology) rendered procedurally per pixel. Black
+  holes use a conditional full-screen FBO + lensing composite
+  pass with procedural grid for visible distortion. Star shader
+  supports crash wobble and tidal locking for binaries.
+  Background includes procedural spiral galaxies.
   No Canvas2D, no libraries.
   → [Details](agent_docs/rendering.md)
 
@@ -97,19 +104,31 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
 
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
   (quick-launch bonus + streak multiplier + comet bonus).
-  `SPAWN_TABLE` of interpolated variant weights (plain/binary/
-  bh/bhBinary/monolith/ringworld) by star index; planets and comets are
-  orthogonal rolls on top. Binary stars (two sub-stars orbiting
-  COM, tidally locked). Monoliths play as normal stars but
-  render as rotating 3D slabs. Ringworlds are normal-physics
-  stars with a tumbling earth-textured band; each carries a
-  `ringPlateCount` (0–7) that adds rotating shadow plates, sun
-  shadows, and warm city lights on the night sides. Camera
-  auto-zooms 1.5× while the ship is captured. Save/resume
-  roundtrips preserve `ringPlateCount`. BH binaries get physics-driven ejecta from
-  donor to accretor. Crash wobble. Pause, arrow-key velocity
-  nudge, launch-window indicator. Help overlay. Replay with
-  dynamic follow-cam. Focus-click suppression.
+  `SPAWN_TABLE` of interpolated variant weights (plain / binary /
+  bh / bhBinary / monolith / ringworld / pulsar / crab) by star
+  index; planets and comets are orthogonal rolls on top. Binary
+  stars (two sub-stars orbiting COM, tidally locked). Monoliths
+  play as normal stars but render as rotating 3D slabs.
+  Ringworlds are normal-physics stars with a tumbling earth-
+  textured band; each carries a `ringPlateCount` (0–7) that adds
+  rotating shadow plates, sun shadows, and warm city lights on
+  the night sides. Pulsars are tiny dense neutron-star bodies
+  with two opposed lighthouse beams that sweep a slowly-drifting
+  magnetic axis; alignment with the camera produces a brief
+  lens-flare burst. Crab nebulae are normal-physics stars
+  rendered as five nested ellipsoidal (or filamentary) shells
+  via volumetric ray-march, sampling per-nebula seed-driven
+  axes for palette / morphology / central-source flavour /
+  interior-fill density / lobe asymmetry / edge stratification.
+  Camera auto-zooms while the ship is captured around a
+  ringworld (1.7×) or Crab (1.6×). Save/resume roundtrips
+  preserve `ringPlateCount`, `isPulsar`, `isCrab`. BH binaries
+  get physics-driven ejecta from donor to accretor. Pulsars and
+  Crabs both have a higher minimum spawn radius (`r ≥ 30`) so
+  detail reads — pulsar core is 0.32× v_baseR, Crab shell
+  network needs room to develop. Crash wobble. Pause, arrow-key
+  velocity nudge, launch-window indicator. Help overlay. Replay
+  with dynamic follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences

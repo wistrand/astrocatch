@@ -62,22 +62,34 @@ points, sparkle burst, twinkly sound, comet removed.
 
 `SPAWN_TABLE` is a list of rows at star-index control points.
 Each row lists weights for each variant (`plain`, `binary`,
-`bh`, `bhBinary`, `monolith`, `ringworld`). Weights interpolate linearly
-between rows and plateau past the last row. Normalized at
-sample time, so values don't need to sum to 100.
+`bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `crab`).
+Weights interpolate linearly between rows and plateau past the
+last row. Normalized at sample time, so values don't need to
+sum to 100.
 
 Planets and comets are **orthogonal** rolls applied on top:
 
 - **Planets**: ramp from 0 to `PLANET_PROB_MAX` over
   `PLANET_RAMP_STARS` captures. Allowed on `plain` and `bh`
-  variants; binaries, monoliths, and ringworlds skip (their
-  visuals already occupy the orbit volume).
+  variants only; binaries, monoliths, ringworlds, pulsars, and
+  Crab nebulae skip (their visuals already occupy the orbit
+  volume).
 - **Comets**: flat `COMET_PROB` chance from `COMET_MIN_STAR`+.
-  Allowed on any variant.
+  Allowed on any variant except monoliths (alien/alone vibe).
+  Pulsars and Crabs are fine — debris disks around real pulsars
+  and comets weaving through nebula filaments both read
+  naturally.
 
 Decision order in `makeStar`: variant → planets → comets. Swap
 `SPAWN_TABLE_GAME` for `SPAWN_TABLE_DEBUG` to force-spawn a type
 for testing.
+
+`addNextStar` pre-rolls the variant via `pickVariant(n)` so
+pulsars and Crabs can claim a higher minimum spawn radius
+(`r ≥ 30` vs default `r ≥ 18`); their tiny core / fine shell
+detail needs the extra resolution to read. The pre-rolled
+variant is then passed to `makeStar(..., variant)` to avoid a
+second roll producing a different result.
 
 ## Star generation
 
@@ -164,6 +176,75 @@ the shader's shadow-plates / day-night / city-lights path:
 
 The ringworld resume/continue orbit radius is `3.2 × r` so the
 ship clears the band (at `2.6 × r`).
+
+## Pulsars
+
+Flagged `isPulsar: true`. Physics identical to a normal star
+(gravity, collision, capture). Rendered as a tiny dense neutron-
+star body with two opposed lighthouse beams sweeping a slowly-
+drifting magnetic axis; alignment with the camera produces a
+brief lens-flare burst (diffraction spikes, anamorphic streak,
+iris ring with crescent cut, halo bloom). Body colour and pulse
+character take from the per-star `colorIdx` palette so different
+pulsars read visually distinct.
+
+Pulsars skip planets (the body is too small to support a
+visible planetary system) but allow comets — debris disks
+around real pulsars are documented (PSR B1257+12 was the first
+exoplanet host). They can't be binary components (the lens-
+flare composite assumes a single source).
+
+Pulsars use a higher minimum spawn radius (`r ≥ 30`) so the
+small body and large lens-flare quad both render at usable
+detail — at default `r = 18` the visible core is only ~6 px and
+gets lost. Beam cones reach `3.5 × v_baseR` at peak edge-on
+alignment; the renderer uses an enlarged 5.0× quad for pulsars
+specifically (vs 4.3× for all other variants).
+
+## Crab nebulae
+
+Flagged `isCrab: true`. Physics identical to a normal star.
+Rendered as a volumetrically integrated 5-shell nebula sampling
+multiple per-nebula categorical and continuous parameter axes
+from the star's seed:
+
+- **Palette class** (4 buckets): Crab synchrotron, OIII Helix,
+  hot blue NGC 7027, dust-reddened. Each ships its own shell
+  colours, weights, glow tint, and pulsar character.
+- **Morphology class** (8 buckets, 25 % filamentary): default
+  ellipsoidal shells, or quadratic-Bezier tube filament
+  (cigar / bent / S-curve dust lane) for ~1 in 4 nebulae.
+- **Central-source flavour** (3 buckets): visible pinpoint /
+  hidden source / off-centre pinpoint. Decoupled from interior
+  fill so a hidden-source nebula can still have bright cavity
+  gas (Helix-like) and a visible-pulsar nebula can have a
+  sparse cavity (etched aesthetic).
+- **Interior fill density** (3 weighted buckets): 50 % full
+  body / 35 % moderate / 15 % etched. Etched mode boosts the
+  edge fibre gain so the linework character is intentional.
+- Plus continuous: bipolar amplitude, cavity size, density,
+  fibre frequency / pow / floor / gain, stratification offset
+  (radial crisp-to-soft gradient), lobe asymmetry (skewed
+  squared distribution → most nebulae mild, ~10 % wildly
+  lopsided outliers).
+
+Crab nebulae skip planets (the gas envelope occupies the orbit
+volume), allow comets, and can't be binary components. They use
+the same higher minimum spawn radius (`r ≥ 30`) as pulsars —
+the volumetric integration's 5-shell network needs room to
+develop visible structure across `r3D ≈ 0.5` to `2.5 × v_baseR`.
+
+While the ship's `currentStar.isCrab` is true, the gameplay
+camera eases to a 1.6× zoom (vs 1.7× for ringworlds, 1.0×
+otherwise) so the nebula's internal structure stays legible.
+The `visualR` extent for the screen-edge horizontal-camera-
+nudge logic is `r * 2.7` for Crabs (vs `r * 3.6` for ringworlds,
+`r * 2.5` for everything else).
+
+The `nebula.html` inspector page (`?seed=N&grid=NxM`) renders a
+deterministic grid of Crab nebulae for population review.
+URL-driven seed and grid size make populations reproducible
+across reloads.
 
 ## Crash wobble
 

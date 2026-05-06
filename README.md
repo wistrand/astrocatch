@@ -35,7 +35,11 @@ pulls you in and you orbit that one too.
   mechanics, but with gravitational lensing that warps the
   background around it. A black hole paired with a companion
   star pulls glowing ejecta from the donor. Rarely, a
-  tumbling 3D monolith appears instead of a star.
+  tumbling 3D monolith appears instead of a star, or a
+  ringworld habitat with day-night shadow plates and
+  city lights, or a pulsar with sweeping lighthouse beams,
+  or a fully volumetric supernova-remnant nebula whose
+  fragmented shells you orbit through.
 - **Nudge your orbit** with the left/right arrow keys to
   fine-tune your trajectory before launching.
 - **Help & shortcuts** — click the **?** button or press **H**
@@ -133,16 +137,20 @@ before it reaches a player.
 
 ```
 docs/
-  index.html         tiny shell — DOM + CSS, one <script type="module">
-  gameplay.js        browser-only: state, input, orchestration
-  renderer.js        browser-only: WebGL2 renderer + shader programs
-  audio.js           browser-only: procedural WebAudio sound effects
-  physics.js         pure physics module, used by browser and node
+  index.html          tiny shell — DOM + CSS, one <script type="module">
+  gameplay.js         browser-only: state, input, orchestration
+  renderer.js         browser-only: WebGL2 renderer + shader programs
+  audio.js            browser-only: procedural WebAudio sound effects
+  physics.js          pure physics module, used by browser and node
+  star-rendering.js   browser-only: binary positions, ejecta, comets
+  debug.html / .js    variant inspector — one of every star type
+  nebula.html / .js   procedural Crab-nebula population grid
+                      (?seed=N&grid=NxM)
 scripts/
-  physics-test.js    node test runner
-  check-distances.js standalone diagnostic for the difficulty curve
-  serve.js           dependency-free local static server (serves docs/)
-package.json         "type": "module" + npm scripts
+  physics-test.js     node test runner
+  check-distances.js  standalone diagnostic for the difficulty curve
+  serve.js            dependency-free local static server (serves docs/)
+package.json          "type": "module" + npm scripts
 ```
 
 The browser-facing game lives entirely in `docs/`, so the repo can
