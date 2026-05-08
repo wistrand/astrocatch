@@ -270,6 +270,7 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame, out
   let prevD = Infinity;
   let minD = Infinity;
   let minDFrame = -1;
+  let minDX = 0, minDY = 0;
   let minDVx = 0, minDVy = 0;
 
   for (let f = 1; f <= PREDICT_MAX_FRAMES; f++) {
@@ -327,6 +328,8 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame, out
     if (d < minD) {
       minD = d;
       minDFrame = f;
+      minDX = x;
+      minDY = y;
       minDVx = vx;
       minDVy = vy;
     }
@@ -357,9 +360,17 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame, out
         outResult.periFrame = minDFrame;
         outResult.periDist = minD;
         outResult.vMagAtPeri = vMagAtPeri;
+        outResult.periX = minDX;
+        outResult.periY = minDY;
+        outResult.periVx = minDVx;
+        outResult.periVy = minDVy;
         return outResult;
       }
-      return { periFrame: minDFrame, periDist: minD, vMagAtPeri };
+      return {
+        periFrame: minDFrame, periDist: minD, vMagAtPeri,
+        periX: minDX, periY: minDY,
+        periVx: minDVx, periVy: minDVy,
+      };
     }
     prevD = d;
   }

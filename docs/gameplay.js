@@ -1345,6 +1345,9 @@ function captureStar(idx) {
   // Keep the star buffer populated
   while (stars.length < idx + 8) addNextStar();
 
+  // Projected window was for THIS just-arrived star — drop it
+  // before recomputing the live one.
+  ball.projectedLaunchWindow = null;
   // Recompute the launch-window indicator for the new orbit.
   computeLaunchWindow();
 
@@ -1379,20 +1382,32 @@ const LAUNCH_WINDOW_SAMPLES = 36;
 // perturbation. Updated inside computeLaunchWindow().
 const LAUNCH_WINDOW_RECOMPUTE_FRAMES = 12; // ~0.1 s at 120 Hz
 let lastLaunchWindowFrame = -1;
+let lastProjectedLaunchWindowFrame = -1;
 // Pre-allocated scratch for sample states + result entries.
 // Reused across recomputes to avoid GC churn on long sessions.
 // The `used` flag replaces the null-slot pattern.
 const _lwSamples = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwWindow = new Array(LAUNCH_WINDOW_SAMPLES);
+// Second pool for the projected launch window drawn at the
+// target star while a queued in-transit boost is pending.
+const _lwProjSamples = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwProjWindow = new Array(LAUNCH_WINDOW_SAMPLES);
 for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
   _lwSamples[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
   _lwWindow[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+  _lwProjSamples[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwProjWindow[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
 }
 const _LW_STEP = (Math.PI * 2) / LAUNCH_WINDOW_SAMPLES;
 // Scratch object reused across all predictCapture calls from
 // the launch-window hotpath. Avoids ~100 small allocations per
-// recompute.
-const _lwPredictOut = { periFrame: 0, periDist: 0, vMagAtPeri: 0 };
+// recompute. Includes peri position/velocity fields populated
+// by predictCapture so the projected-window path can read the
+// post-capture state without an extra forward sim.
+const _lwPredictOut = {
+  periFrame: 0, periDist: 0, vMagAtPeri: 0,
+  periX: 0, periY: 0, periVx: 0, periVy: 0,
+};
 function slotForTheta(theta) {
   let t = theta;
   if (t < 0) t += Math.PI * 2;
@@ -1400,48 +1415,35 @@ function slotForTheta(theta) {
   return Math.floor(t / _LW_STEP);
 }
 
-function computeLaunchWindow() {
-  if (!ball) return;
-  ball.launchWindow = null;
-  if (ball.pendingCapture >= 0) return;
-  const cs = stars[ball.currentStar];
-  const next = stars[ball.currentStar + 1];
-  if (!cs || !next) return;
-
-  // Forward-sim a clone of the ball using the nearest-star
-  // gravity model until we've swept a full 2π of angle around
-  // the star, sampling positions uniformly in angle. If the
-  // ball is on an escape trajectory (energy >= 0), abort.
+// Inner forward-sim + slot-fill + predict loop for one launch
+// window. Returns the number of slots filled (caller decides if
+// it's enough). Accepts arbitrary input state so both the live
+// indicator and the projected (queued-boost) variant can share
+// the implementation.
+function runLaunchWindowSim(
+  x0, y0, vx0, vy0, csIdx, samplesArr, windowArr, startFrame
+) {
+  const cs = stars[csIdx];
+  const next = stars[csIdx + 1];
+  if (!cs || !next) return 0;
   const GM = cs.gm;
-  const rx0 = ball.x - cs.x, ry0 = ball.y - cs.y;
-  const v2 = ball.vx * ball.vx + ball.vy * ball.vy;
+  const rx0 = x0 - cs.x, ry0 = y0 - cs.y;
+  const v2 = vx0 * vx0 + vy0 * vy0;
   const r0 = Math.hypot(rx0, ry0);
   const energy = 0.5 * v2 - GM / r0;
-  if (energy >= 0) return; // escaping, no closed orbit
+  if (energy >= 0) return 0; // escaping, no closed orbit
 
-  // Sample at FIXED angular positions in the star's frame
-  // (0°, Δθ, 2Δθ, …) so the dots stay anchored in space as
-  // the ball orbits through them.
-  let x = ball.x, y = ball.y, vx = ball.vx, vy = ball.vy;
-  // Reset pooled sample slots — no allocation per recompute.
-  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) _lwSamples[i].used = false;
+  let x = x0, y = y0, vx = vx0, vy = vy0;
+  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) samplesArr[i].used = false;
   let filled = 0;
-  // Record initial slot. slotForTheta is a module-level helper
-  // to avoid creating a closure per recompute.
   {
     const idx = slotForTheta(Math.atan2(ry0, rx0));
-    const s = _lwSamples[idx];
+    const s = samplesArr[idx];
     s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
     filled++;
   }
   const dt = 1;
   const maxSteps = 2000;
-  // Adaptive sub-stepping: ω = L / r² spikes near perihelion on
-  // eccentric orbits, and a single dt=1 step can sweep more than
-  // one slot's angular width — permanently leaving those slots
-  // unfilled since each slot only records on first visit. Each
-  // outer iteration estimates angular travel per step and splits
-  // into N substeps so each substep crosses at most ~half a slot.
   const HALF_SLOT = _LW_STEP * 0.5;
   const MAX_SUBSTEPS = 32;
   outer: for (let step = 0; step < maxSteps; step++) {
@@ -1454,7 +1456,6 @@ function computeLaunchWindow() {
       : 1;
     const subDt = dt / subSteps;
     for (let sub = 0; sub < subSteps; sub++) {
-      // Velocity-Verlet step with gravity from cs only.
       const dx = cs.x - x, dy = cs.y - y;
       const r2 = dx * dx + dy * dy;
       const r = Math.sqrt(r2);
@@ -1471,7 +1472,7 @@ function computeLaunchWindow() {
       vy += 0.5 * (ay + ay2) * subDt;
       x = nx; y = ny;
       const curSlot = slotForTheta(Math.atan2(y - cs.y, x - cs.x));
-      const s = _lwSamples[curSlot];
+      const s = samplesArr[curSlot];
       if (!s.used) {
         s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
         filled++;
@@ -1479,27 +1480,21 @@ function computeLaunchWindow() {
       }
     }
   }
-  if (filled < 4) return;
+  if (filled < 4) return filled;
 
-  // Test each sample with predictCapture across the same boost
-  // factor grid that applyBoostAndArm uses (linear from
-  // BOOST_SEARCH_MIN to BOOST_SEARCH_MAX in BOOST_SEARCH_STEPS
-  // points). A coarser grid would miss narrow valid windows and
-  // produce visible gaps where the game would actually succeed.
   const minF = AC.BOOST_SEARCH_MIN;
   const maxF = AC.BOOST_SEARCH_MAX;
   const fSteps = AC.BOOST_SEARCH_STEPS;
   const fSpan = maxF - minF;
-  const startFrame = ball.frame || 0;
   for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
-    const s = _lwSamples[i];
-    const w = _lwWindow[i];
+    const s = samplesArr[i];
+    const w = windowArr[i];
     if (!s.used) { w.used = false; continue; }
     let success = false;
     for (let k = 0; k < fSteps; k++) {
       const t = k / (fSteps - 1);
       const f = minF + fSpan * t;
-      const pred = AC.predictCapture(stars, ball.currentStar,
+      const pred = AC.predictCapture(stars, csIdx,
         s.x, s.y, s.vx * (1 + f), s.vy * (1 + f),
         startFrame, _lwPredictOut);
       if (pred) { success = true; break; }
@@ -1509,9 +1504,80 @@ function computeLaunchWindow() {
     w.tx = s.vx / sp; w.ty = s.vy / sp;
     w.ok = success; w.used = true;
   }
+  return filled;
+}
+
+function computeLaunchWindow() {
+  if (!ball) return;
+  ball.launchWindow = null;
+  if (ball.pendingCapture >= 0) return;
+  const filled = runLaunchWindowSim(
+    ball.x, ball.y, ball.vx, ball.vy,
+    ball.currentStar, _lwSamples, _lwWindow, ball.frame || 0,
+  );
+  if (filled < 4) return;
   ball.launchWindow = _lwWindow;
   ball.launchWindowStarIdx = ball.currentStar;
   lastLaunchWindowFrame = ball.frame || 0;
+}
+
+// Projected launch window for a queued in-transit boost. Predicts
+// the post-capture state around the target star (peri snapshot +
+// burn clamp into the safe v-band, mirroring `burnStep`), then
+// runs the same launch-window sim from there toward the next-next
+// star. Lets the player see *before* capture whether their queued
+// tap will land on a valid launch position.
+function computeProjectedLaunchWindow() {
+  if (!ball) return;
+  ball.projectedLaunchWindow = null;
+  if (ball.pendingCapture < 0) return;
+  const targetIdx = ball.pendingCapture;
+  const target = stars[targetIdx];
+  const afterTarget = stars[targetIdx + 1];
+  if (!target || !afterTarget) return;
+  // Predict the peri snapshot around target from the ball's
+  // current in-transit state.
+  const startFrame = ball.frame || 0;
+  const pred = AC.predictCapture(
+    stars, ball.currentStar,
+    ball.x, ball.y, ball.vx, ball.vy,
+    startFrame, _lwPredictOut,
+  );
+  if (!pred) return;
+  // Burn clamp: |v| at peri must lie in [vCirc, vMax] where
+  // vMax is set by the target's Voronoi-cell apoMax. Mirrors
+  // `burnStep` in physics.js — keep the two in sync.
+  let nearestNeighbor = Infinity;
+  for (let i = ball.currentStar; i < stars.length; i++) {
+    if (i === targetIdx) continue;
+    const ddx = stars[i].x - target.x;
+    const ddy = stars[i].y - target.y;
+    const dd = Math.hypot(ddx, ddy);
+    if (dd < nearestNeighbor) nearestNeighbor = dd;
+  }
+  const apoMax = nearestNeighbor * AC.PERI_VORONOI_FRAC;
+  const pd = _lwPredictOut.periDist;
+  if (!(pd > 0)) return;
+  const aMax = (pd + apoMax) / 2;
+  const vMaxAtPeri = Math.sqrt(target.gm * (2 / pd - 1 / aMax));
+  const vCircAtPeri = Math.sqrt(target.gm / pd);
+  const vMag = _lwPredictOut.vMagAtPeri;
+  let newMag = vMag;
+  if (newMag < vCircAtPeri) newMag = vCircAtPeri;
+  if (newMag > vMaxAtPeri) newMag = vMaxAtPeri;
+  const k = (vMag > 0.001 && newMag > 0) ? newMag / vMag : 1;
+  const px = _lwPredictOut.periX;
+  const py = _lwPredictOut.periY;
+  const pvx = _lwPredictOut.periVx * k;
+  const pvy = _lwPredictOut.periVy * k;
+  const projStartFrame = startFrame + _lwPredictOut.periFrame;
+  const filled = runLaunchWindowSim(
+    px, py, pvx, pvy,
+    targetIdx, _lwProjSamples, _lwProjWindow, projStartFrame,
+  );
+  if (filled < 4) return;
+  ball.projectedLaunchWindow = _lwProjWindow;
+  ball.projectedLaunchWindowStarIdx = targetIdx;
 }
 
 function updateScoreUI(bump, bonus, streak) {
@@ -1591,6 +1657,15 @@ function boost() {
     // the target star is a valid launch position. Quick-launch
     // bonus auto-tiers to Blazing (framesInOrbit = 0 at replay).
     ball.queuedBoost = true;
+    // If the launch-window indicator is on, immediately compute
+    // a projected window for the post-capture orbit around the
+    // target. The player can then see whether their gamble has
+    // a tick at the predicted arrival angle. Recomputed on a
+    // throttled cadence in the main update loop too.
+    if (showLaunchWindow) {
+      computeProjectedLaunchWindow();
+      lastProjectedLaunchWindowFrame = ball.frame || 0;
+    }
     // Subtle visual cue — small symmetric ring in the target
     // star's colour so the player can tell their tap registered
     // and what they're primed for. Distinct from a normal
@@ -1845,6 +1920,19 @@ function renderTick() {
         >= LAUNCH_WINDOW_RECOMPUTE_FRAMES) {
       computeLaunchWindow();
       lastLaunchWindowFrame = frame;
+    }
+  }
+  // Throttled projected-launch-window recompute while a queued
+  // in-transit boost is pending. The peri prediction sharpens as
+  // transit progresses so the indicator gets more accurate the
+  // closer the ball gets to the target.
+  if (showLaunchWindow && ball && ball.queuedBoost
+      && ball.pendingCapture >= 0) {
+    const frame = ball.frame || 0;
+    if (frame - lastProjectedLaunchWindowFrame
+        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES) {
+      computeProjectedLaunchWindow();
+      lastProjectedLaunchWindowFrame = frame;
     }
   }
 
@@ -2193,6 +2281,35 @@ function draw() {
         if (!s.used || !s.ok) continue;
         const cx = cs.x + (s.x - cs.x) * inset;
         const cy = cs.y + (s.y - cs.y) * inset;
+        renderer.drawPolyline([
+          { x: cx - s.tx * tickLen, y: cy - s.ty * tickLen },
+          { x: cx + s.tx * tickLen, y: cy + s.ty * tickLen },
+        ], cam, 0.9, headCol, headCol);
+      }
+    }
+  }
+
+  // Projected launch-window — drawn around the target star while
+  // a queued in-transit boost is pending. Same tick style but
+  // dimmer + slightly faster pulse so the player can tell it's
+  // a *prediction* rather than the live indicator.
+  if (showLaunchWindow && ball && ball.queuedBoost
+      && ball.projectedLaunchWindow
+      && ball.pendingCapture >= 0
+      && ball.projectedLaunchWindowStarIdx === ball.pendingCapture) {
+    const ts = stars[ball.projectedLaunchWindowStarIdx];
+    if (ts) {
+      const lw = ball.projectedLaunchWindow;
+      const pulse = 0.85 + 0.30 * Math.sin(nowSec * 3.6);
+      const a = 0.30 * pulse;
+      const headCol = [a, a, a, a];
+      const tickLen = 5;
+      const inset = 0.9;
+      for (let i = 0; i < lw.length; i++) {
+        const s = lw[i];
+        if (!s.used || !s.ok) continue;
+        const cx = ts.x + (s.x - ts.x) * inset;
+        const cy = ts.y + (s.y - ts.y) * inset;
         renderer.drawPolyline([
           { x: cx - s.tx * tickLen, y: cy - s.ty * tickLen },
           { x: cx + s.tx * tickLen, y: cy + s.ty * tickLen },
