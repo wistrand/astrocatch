@@ -917,6 +917,47 @@ export function createAudio() {
     });
   }
 
+  // Section-start state work. Pure state update — does NOT fire
+  // audio events. Factored out of scheduleStep so the resync loop
+  // can run it for skipped step-0 boundaries (otherwise the new
+  // section would play with the previous section's progression /
+  // BPM / tier).
+  function applySectionStart() {
+    let tier = 0;
+    if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[1]) tier = 2;
+    else if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[0]) tier = 1;
+    currentTier = tier;
+    activeProgression = MUSIC_PROGRESSIONS[tier * 2 + (sectionCount & 1)];
+    sectionCount++;
+    // Streak-driven tempo ramp. Each streak level adds 4 BPM up
+    // to the cap. Resets to base when streak is 0 (broken or
+    // fresh run). Only changes at section boundaries so the
+    // tempo transition is musically clean.
+    const streakBPM = Math.min(MUSIC_BPM + currentStreak * 4, MUSIC_BPM_MAX);
+    currentStepSec = 60 / streakBPM / 4;
+  }
+
+  // Bar-start pattern picking. Pure state update for lead/bass
+  // patterns. Factored out so the resync loop can pick patterns
+  // for skipped bar downbeats. The audio events (stab + pad)
+  // remain inline in scheduleStep where the time argument is
+  // the live future audio-clock value.
+  function applyBarPatterns(time) {
+    function pickPattern(bank, ranges, noiseY) {
+      const range = ranges[currentTier];
+      const lo = range[0];
+      const hi = range[1];
+      const rNoise = simplex2(time * 0.9, noiseY);
+      const rT = (rNoise + 1) * 0.5;
+      let rIdx = lo + Math.floor(rT * (hi - lo));
+      if (rIdx >= hi) rIdx = hi - 1;
+      if (rIdx < lo) rIdx = lo;
+      return bank[rIdx];
+    }
+    currentLeadPattern = pickPattern(MUSIC_LEAD_PATTERNS, MUSIC_LEAD_PATTERN_RANGES, 7.3);
+    currentBassPattern = pickPattern(MUSIC_BASS_PATTERNS, MUSIC_BASS_PATTERN_RANGES, 13.1);
+  }
+
   function scheduleStep(step, time) {
     if (muted) return;
     const bar = Math.floor(step / MUSIC_STEPS_PER_BAR);
@@ -928,24 +969,11 @@ export function createAudio() {
     // current section always plays out before the new one
     // starts. Tier 2 gets the intense progression; tier 1 the
     // medium one; tier 0 the calm default.
-    if (step === 0) {
-      let tier = 0;
-      if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[1]) tier = 2;
-      else if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[0]) tier = 1;
-      currentTier = tier;
-      activeProgression = MUSIC_PROGRESSIONS[tier * 2 + (sectionCount & 1)];
-      sectionCount++;
-      // Streak-driven tempo ramp. Each streak level adds 4 BPM
-      // up to the cap. Resets to base when streak is 0 (broken
-      // or fresh run). Only changes at section boundaries so
-      // the tempo transition is musically clean.
-      const streakBPM = Math.min(MUSIC_BPM + currentStreak * 4, MUSIC_BPM_MAX);
-      currentStepSec = 60 / streakBPM / 4;
-    }
+    if (step === 0) applySectionStart();
 
     const chordIdx = activeProgression[bar];
 
-    // Bar downbeat: fire the stab + pad + pick the lead
+    // Bar downbeat: fire the stab + pad + pick the lead/bass
     // rhythm pattern for this bar.
     if (stepInBar === 0) {
       // Stab first — punchy chord hit that announces the new
@@ -958,19 +986,7 @@ export function createAudio() {
       // Pick lead + bass rhythm patterns for this bar.
       // Sampled at different simplex Y coordinates so lead and
       // bass don't pick patterns in lockstep.
-      function pickPattern(bank, ranges, noiseY) {
-        const range = ranges[currentTier];
-        const lo = range[0];
-        const hi = range[1];
-        const rNoise = simplex2(time * 0.9, noiseY);
-        const rT = (rNoise + 1) * 0.5;
-        let rIdx = lo + Math.floor(rT * (hi - lo));
-        if (rIdx >= hi) rIdx = hi - 1;
-        if (rIdx < lo) rIdx = lo;
-        return bank[rIdx];
-      }
-      currentLeadPattern = pickPattern(MUSIC_LEAD_PATTERNS, MUSIC_LEAD_PATTERN_RANGES, 7.3);
-      currentBassPattern = pickPattern(MUSIC_BASS_PATTERNS, MUSIC_BASS_PATTERN_RANGES, 13.1);
+      applyBarPatterns(time);
     }
 
     // Bass — rhythm from the per-bar pattern, with occasional
@@ -1035,7 +1051,13 @@ export function createAudio() {
   }
 
   function setStreak(n) {
-    currentStreak = typeof n === "number" ? Math.max(0, n) : 0;
+    // isFinite guard matches setIntensity above. typeof NaN is
+    // "number", and Math.max(0, NaN) returns NaN — which would
+    // propagate into streakBPM → currentStepSec → nextStepTime
+    // and silently kill the scheduler (NaN < horizon is false,
+    // so no notes get scheduled until music restarts).
+    currentStreak = (typeof n === "number" && isFinite(n))
+      ? Math.max(0, n) : 0;
   }
 
   function scheduler() {
@@ -1060,6 +1082,20 @@ export function createAudio() {
     while (nextStepTime < safeFloor) {
       nextStepTime += currentStepSec;
       currentStep = (currentStep + 1) % MUSIC_TOTAL_STEPS;
+      // Run the section / bar state work for any boundary the
+      // resync sweeps past. Without this, a stall straddling a
+      // 64-step section boundary would leave the next section
+      // playing the previous section's progression / BPM, and a
+      // stall straddling a bar downbeat would leave the bar with
+      // stale lead/bass patterns. We don't fire the audio events
+      // (stab/pad) — their schedule time would be in the past
+      // and produce clicks. State updates are lossless: they
+      // depend only on current intensity / streak / sectionCount
+      // parity, all of which we still have.
+      if (currentStep === 0) applySectionStart();
+      if (currentStep % MUSIC_STEPS_PER_BAR === 0) {
+        applyBarPatterns(nextStepTime);
+      }
     }
 
     const horizon = c.currentTime + MUSIC_SCHEDULE_AHEAD;
@@ -1095,7 +1131,14 @@ export function createAudio() {
     if (!c) return;
     if (schedulerRunning) return;
     schedulerRunning = true;
-    currentStep = 0;
+    // Preserve currentStep across pause/resume cycles so the
+    // player picks up where they left off instead of getting
+    // bounced to the top of a fresh section every time. Module-
+    // init state has currentStep = 0, so cold start still begins
+    // at the top. nextStepTime resets to a small lead so we
+    // don't try to schedule notes at past times after a long
+    // pause; the resync loop's safeFloor (0.03s) is below this
+    // 0.08s lead, so currentStep doesn't get advanced on resume.
     nextStepTime = c.currentTime + 0.08;
     scheduler();
   }
