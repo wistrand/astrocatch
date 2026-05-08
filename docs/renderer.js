@@ -1364,7 +1364,29 @@ void main() {
                                   + vec2(57.0, 73.0), v_seed * 11.0));
     float lobeAsym = lobeAsymAmp * lobeFBM
                    * step(0.0, dirAlongPole);
-    float biPolar = biPolarBase + waistJitter + lobeAsym;
+
+    // Butterfly equatorial pinch — sharp cavity at dirAlongPole
+    // ≈ 0. cot²θ peaks at the equator and falls off Gaussian-
+    // sharply toward the poles, carving a thin waist that the
+    // smooth cos²θ bipolar bias can't reach. ~20 % of non-
+    // filament seeds get the categorical roll. Smoothstep gate
+    // on bipolarAmp keeps spheroidal nebulae from picking up an
+    // awkward notched waist.
+    //   BUTTERFLY_NECK_AMP  — peak field bump at equator.
+    //   BUTTERFLY_SHARPNESS — exponent in exp(-cotSq * S); higher
+    //                          = thinner waist, lower = wider.
+    const float BUTTERFLY_NECK_AMP  = 0.85;
+    const float BUTTERFLY_SHARPNESS = 16.0;
+    bool isButterfly = !isFilament
+                    && fract(v_seed * 67.7) < 0.20;
+    float butterflyNeck = isButterfly
+      ? BUTTERFLY_NECK_AMP * smoothstep(0.50, 0.80, bipolarAmp)
+      : 0.0;
+    float cosSq = dirAlongPole * dirAlongPole;
+    float cotSq = cosSq / max(1.0 - cosSq, 1e-3);
+    float neck = butterflyNeck * exp(-cotSq * BUTTERFLY_SHARPNESS);
+
+    float biPolar = biPolarBase + waistJitter + lobeAsym + neck;
 
     // HIGH-FREQUENCY DOMAIN WARP — adds wisps-inside-wisps
     // detail at a finer scale than the slow flow-driven
