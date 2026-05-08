@@ -582,6 +582,11 @@ export function createAudio() {
       osc.detune.value = detuneCents;
       osc.frequency.setValueAtTime(freq, start);
       const g = c.createGain();
+      // Synchronous zero defends against a janky main-thread frame
+      // pushing the schedule past `start`: GainNode default is 1.0,
+      // and a past-time setValueAtTime(0.0001) would snap from 1.0
+      // → 0.0001 instantly through the live signal path → click.
+      g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.32, start + 0.006);
       g.gain.exponentialRampToValueAtTime(0.0001, start + noteDur);
@@ -597,6 +602,7 @@ export function createAudio() {
       osc2.detune.value = detuneCents;
       osc2.frequency.setValueAtTime(freq * 2.01, start);
       const g2 = c.createGain();
+      g2.gain.value = 0;
       g2.gain.setValueAtTime(0.0001, start);
       g2.gain.exponentialRampToValueAtTime(0.09, start + 0.006);
       g2.gain.exponentialRampToValueAtTime(0.0001, start + noteDur * 0.7);
@@ -620,6 +626,7 @@ export function createAudio() {
       osc.frequency.setValueAtTime(base, start);
       osc.frequency.exponentialRampToValueAtTime(base * 1.5, start + 0.22);
       const g = c.createGain();
+      g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.18, start + 0.006);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
@@ -704,6 +711,7 @@ export function createAudio() {
       osc.frequency.setValueAtTime(freq, start);
       osc.frequency.exponentialRampToValueAtTime(freq * 0.6, start + 0.45);
       const g = c.createGain();
+      g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.32, start + 0.01);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.55);
@@ -757,6 +765,7 @@ export function createAudio() {
       osc.frequency.setValueAtTime(freq, start);
       osc.frequency.exponentialRampToValueAtTime(freq * 0.82, start + 0.35);
       const g = c.createGain();
+      g.gain.value = 0;
       g.gain.setValueAtTime(0.0001, start);
       g.gain.linearRampToValueAtTime(0.25, start + 0.008);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.45);

@@ -967,6 +967,9 @@ function init() {
     // planet gravity perturbation.
     frame: 0,
   };
+  // Reset projected-launch-window throttle — module-scope state
+  // persists across runs even though `ball` is rebuilt fresh.
+  lastProjectedLaunchWindowFrame = -1;
   computeLaunchWindow();
 
   document.getElementById("score").textContent = "0";
@@ -1058,6 +1061,7 @@ function continueRun() {
   camXTarget = 0;
   zoomMultTarget = zoomTargetFor(s);
   zoomMult = zoomMultTarget;
+  lastProjectedLaunchWindowFrame = -1;
   computeLaunchWindow();
   document.getElementById("score").textContent = "0";
   updateSub();
@@ -1157,6 +1161,7 @@ function resumeFromSave(data) {
   zoomMult = zoomMultTarget;
   camX = 0;
   camXTarget = 0;
+  lastProjectedLaunchWindowFrame = -1;
   computeLaunchWindow();
   document.getElementById("score").textContent = "" + score;
   updateSub();
@@ -1185,11 +1190,20 @@ function updateSub() {
 // One physics frame: free flight (always) + capture-burn check.
 // Both live in physics.js and operate on `stars` and `ball`.
 function physicsStep() {
+  const wasInTransit = ball.pendingCapture >= 0;
   AC.physicsStep(stars, ball);
   ball.framesInOrbit++;
-  if (AC.burnStep(stars, ball)) {
+  const captured = AC.burnStep(stars, ball);
+  if (captured) {
     // Burn just landed the ball on a circular orbit at peri.
     captureStar(ball.pendingCapture);
+  } else if (wasInTransit && ball.pendingCapture < 0) {
+    // Transfer timed out (TRANSFER_TIMEOUT) without crossing peri:
+    // physics cleared pendingCapture but captureStar never ran. Drop
+    // any queued in-transit boost so it can't fire on a future capture
+    // the player may make many seconds later.
+    ball.queuedBoost = false;
+    ball.projectedLaunchWindow = null;
   }
 }
 
