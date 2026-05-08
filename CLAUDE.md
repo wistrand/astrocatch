@@ -136,8 +136,9 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   roundtrips preserve `ringPlateCount`, `isPulsar`, `isNebula`,
   `isTeapot`. BH binaries get physics-driven ejecta from donor
   to accretor. Pulsars and nebulae have a higher minimum spawn
-  radius (`r ≥ 30`); teapots get `r ≥ 25` so the spout tip and
-  handle tube stay readable. Crash wobble. Pause, arrow-key
+  radius (`r ≥ 30`); teapots get the biggest (`r ≥ 40`) because
+  the Easter-egg moment wants every detail of the porcelain
+  readable when one shows up. Crash wobble. Pause, arrow-key
   velocity nudge, launch-window indicator. Help overlay. Replay
   with dynamic follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)

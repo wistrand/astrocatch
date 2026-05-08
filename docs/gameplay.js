@@ -470,13 +470,13 @@ const SPAWN_TABLE_GAME = [
   //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula  teapot
   { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
   { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
-  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0 },
-  { at: 20,   plain:  66, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4, nebula: 2, teapot: 0 },
-  { at: 50,   plain:  50, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6, nebula: 3, teapot: 1 },
-  { at: 80,   plain:  39, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8, nebula: 4, teapot: 1 },
+  { at: 10,   plain:  83, binary:  3, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0 },
+  { at: 20,   plain:  67, binary:  8, bh:  5, bhBinary: 3, monolith: 1, ringworld: 0, pulsar: 4, nebula: 2, teapot: 0 },
+  { at: 50,   plain:  52, binary: 10, bh:  8, bhBinary: 4, monolith: 2, ringworld: 2, pulsar: 6, nebula: 3, teapot: 1 },
+  { at: 80,   plain:  41, binary: 10, bh: 10, bhBinary: 5, monolith: 3, ringworld: 4, pulsar: 8, nebula: 4, teapot: 1 },
 ];
 
-const SPAWN_TABLE = SPAWN_TABLE_GAME;
+const SPAWN_TABLE = SPAWN_TABLE_GAME
 
 // Planets and comets are orthogonal to the variant roll.
 // Planets ramp in over the first PLANET_RAMP_STARS stars and only
@@ -808,12 +808,14 @@ function addNextStar() {
   // Pulsars and nebulae need a bigger minimum radius — pulsars
   // because the body is only 0.32× v_baseR, nebulae because the
   // shell network needs room to develop visible structure (the
-  // nebula extends to ~3× v_baseR). Teapots get a bigger min so
-  // the spout's narrow tip and the handle's tube remain readable
-  // (tube radius is 0.06 × v_baseR — sub-pixel below ~r=18).
+  // nebula extends to ~3× v_baseR). Teapots get the biggest min
+  // because they're a rare Easter-egg feature: when one shows up
+  // it should read clearly as a porcelain teapot, with spout +
+  // handle + lid all legible. At r=40 the bounding sphere is
+  // ~70 px and the spout tip (0.05 × r ≈ 2 px) reads cleanly.
   const minR =
+    (variant === "teapot")                          ? 40 :
     (variant === "pulsar" || variant === "nebula") ? 30 :
-    (variant === "teapot")                          ? 25 :
     18;
 
   // Pick candidate radius first so we can compute the hard minimum.

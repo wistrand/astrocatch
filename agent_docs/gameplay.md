@@ -88,8 +88,10 @@ for testing.
 `addNextStar` pre-rolls the variant via `pickVariant(n)` so
 pulsars / Nebulae / teapots can claim a higher minimum spawn
 radius — pulsars and Nebulae get `r ≥ 30` (tiny core / fine
-shell detail), teapots get `r ≥ 25` (spout tip thickness is
-0.05 × v_baseR — sub-pixel below ~r=18). Default is `r ≥ 18`.
+shell detail), teapots get `r ≥ 40` (rare Easter-egg variant
+that should read clearly when it appears — bounding sphere is
+~70 px and spout-tip thickness is ~2 px at the floor). Default
+is `r ≥ 18`.
 The pre-rolled variant is then passed to `makeStar(..., variant)`
 to avoid a second roll producing a different result.
 
@@ -284,9 +286,12 @@ A typical run from star 0 won't see one; deep runs reliably
 do. The Easter-egg payoff lands when the player's already
 invested.
 
-**Higher minR (`r ≥ 25`).** The spout's tip thickness is
-0.05 × v_baseR. Below `r ≈ 18` it goes sub-pixel and disappears
-into AA. 25 keeps spout and handle tube readable.
+**Higher minR (`r ≥ 40`).** Bigger than pulsar (30) and nebula
+(30) — teapots are a rare Easter-egg moment, so when one shows
+up it should read clearly as a teapot, not as a "small object
+with handles". At r=40 the bounding sphere is ~70 px and every
+detail (lid, spout tip, handle tube, china pattern) is legible.
+The spout's 0.05 × r tip thickness is ~2 px at the floor.
 
 **Camera zoom.** While the ship's `currentStar.isTeapot` is
 true, the camera eases to a 1.6× zoom (matching the nebula
