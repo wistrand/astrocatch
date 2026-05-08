@@ -125,9 +125,12 @@ before it reaches a player.
   FBO composite pass. BH binaries have physics-driven ejecta
   from the donor star. Procedural spiral galaxies drift in the
   background.
-- **Rendering is WebGL2**, not Canvas2D. Five shader programs
-  (fullscreen / lensing / circle / star / polyline) cover every
-  primitive.
+- **Rendering is WebGL2**, not Canvas2D. Six shader programs
+  (fullscreen / lensing / circle / star / nebula / polyline)
+  cover every primitive. The star + nebula programs share one
+  source compiled twice with `#define NEBULA_ONLY` toggling the
+  heavy nebula branch — keeps mobile-class GPUs out of nebula's
+  register tier when no nebulae are visible.
   The star is evaluated procedurally per pixel in the fragment
   shader — corona, streamers, glow, photosphere, granulation,
   core highlight — so every star stays animated without the

@@ -6,7 +6,7 @@ state and hands the renderer typed batches of instances.
 
 ## Shader programs
 
-Five programs cover the entire render surface:
+Six programs cover the entire render surface:
 
 - **`fullscreen`** — background radial gradient + procedural spiral
   galaxies. Each galaxy has a logarithmic-spiral disk with 2–4
@@ -49,13 +49,32 @@ Five programs cover the entire render surface:
   Interstellar-style edge-on accretion disk with asymmetric
   lensed arcs and per-BH tilt from `v_seed`. Batch entries
   can override `seed` for tidal locking (binary sub-stars).
-  Past stars short-circuit to a dim ember.
+  Past stars short-circuit to a dim ember. Receives every star
+  *except* live nebulas — those route to the `nebula` program.
   *Cost:* variable by branch (see per-variant sections below).
   Plain-star path is ~30–80 ALU + ~10 trig per fragment with
   5–8-iteration streamer/granule loops; past-star branch is
   near-zero; monolith/ringworld branches are heavier. Quad
   covers corona radius (~2–3× `baseR`), so pixel count per
   instance dwarfs per-pixel ALU for late-game star counts.
+  Worst-case branch is ringworld+plates (~32 reg).
+- **`nebula`** — same source as `star`, compiled with
+  `#define NEBULA_ONLY` prepended. The preprocessor strips out
+  the noise helpers and the `if (isNebula) { ... }` block from
+  the `star` build, and strips out everything else from the
+  `nebula` build. Two GL programs, one source of truth. CPU
+  partitions stars: `isNebula && !isPast` → `nebula` program,
+  everything else (including past nebulae, which render as the
+  dim ember) → `star` program. Two `drawArraysInstanced` calls
+  per frame when nebulae are visible; the second is gated by
+  count > 0. Both share the same VAO + instance buffer; the
+  partitioning runs in a single pass through the star list.
+  *Cost:* nebula path itself is ~2500-3200 ALU per fragment
+  (see per-variant section). Splitting it out lets the `star`
+  program drop into a smaller register tier on mobile-class
+  GPUs (was nebula-set, now ringworld+plates-set), improving
+  SIMT occupancy on every plain-star fragment in scenes with
+  no nebulae visible — i.e. the 90 %+ case in normal play.
 - **`polyline`** — dynamic line strip extruded to a triangle strip.
   Used for trail, connector hints, velocity arrow, replay ghost
   path, and comet tails.
@@ -268,7 +287,12 @@ extent (vs 4.3× for plain stars), so per-instance pixel count is
 
 ## Nebulae
 
-Flag bit 2048. The most expensive shader path in the renderer.
+Flag bit 2048. The most expensive shader path in the renderer —
+runs in its own GL program (`nebula`) compiled from STAR_FS with
+`#define NEBULA_ONLY`. Live nebulae are partitioned out of the
+star batch and drawn in a second `drawArraysInstanced` call;
+past nebulae render through the common `star` program as the
+dim ember (no flag dispatch needed).
 Modelled as level sets of an r-biased simplex-FBM scalar field,
 with five nested ellipsoidal shells (or one Bezier-tube
 filamentary morphology, ~25% of seeds), volumetrically ray-
@@ -429,7 +453,8 @@ fragment-ALU share, not wall time:
 | Pass             | Share | Notes                               |
 |------------------|-------|-------------------------------------|
 | `fullscreen` bg  | ~30%  | Runs over every pixel every frame.  |
-| `star` batch     | ~25%  | Grows with star count and variant mix. See per-variant cost ranking below. |
+| `star` batch     | ~20%  | Most stars in late game. Lighter shader since nebula split out. |
+| `nebula` batch   | +10–25% | Added **on top** only when nebulae are visible. Same VAO/buffer as `star`; one extra `useProgram` + `bufferData` + draw. |
 | `circle` batch   | ~10%  | bgStars, ball, planets, particles, hints. Cheap per pixel but many instances. |
 | `polyline`       | ~2%   | Trail + replay + comet tails.       |
 | `lensing` pass   | +60%  | Added **on top** only while a BH is on screen — roughly doubles total fragment work. |

@@ -96,6 +96,12 @@ template string. Open that file and search for `if (isNebula)`,
 `if (isRingworld)`, `if (isBlackHole)`, `if (isMonolith)` to see
 the original context each port was extracted from.
 
+The nebula path is gated behind `#ifdef NEBULA_ONLY` and lives
+in a second GL program compiled from the same source; live
+nebulae render through that program instead of the common one
+to avoid taxing the rest of the variants with nebula's register
+footprint.
+
 ## License
 
 MIT (matches the parent project's `package.json`).  Each `.glsl`

@@ -436,6 +436,29 @@ void main() {
     float theta = atan(v_local.y, v_local.x);
     float dash = step(0.4, fract(theta * (12.0 / (2.0 * PI))));
     a = ring * dash;
+  } else if (kind == 4) {
+    // Hero bg star: solid disc at innerR + Gaussian bloom halo +
+    // four-pointed diffraction cross. The quad is sized to outerR
+    // so both bloom and spike have room to extend past the disc;
+    // innerR carries the disc radius. Bloom is the visible mass
+    // (you see the halo before you see the spike); spike is the
+    // sharp cinematic accent.
+    float discR = innerR;
+    float discA = 1.0 - smoothstep(discR - aw, discR, d);
+    // Gaussian bloom: peaks at the disc edge, fades over ~2.5×
+    // the disc radius. Sells the "this star is bright" cue at a
+    // glance.
+    float bloomR = discR * 2.5;
+    float bloom = exp(-d * d / max(bloomR * bloomR, 0.01));
+    // Diffraction cross: Gaussian band along each axis × a radial
+    // fade. Brighter and longer-lived than the bloom edge so the
+    // cross silhouette pokes through the halo cleanly.
+    float armW = max(discR * 0.45, 0.6);
+    float armX = exp(-(v_local.y * v_local.y) / (armW * armW));
+    float armY = exp(-(v_local.x * v_local.x) / (armW * armW));
+    float armFade = exp(-d * (0.9 / max(outerR, 1.0)));
+    float spike = max(armX, armY) * armFade;
+    a = max(discA, max(bloom * 0.45, spike * 0.85));
   }
 
   outColor = v_color * a;
@@ -525,6 +548,7 @@ out vec4 outColor;
 const float PI = 3.14159265;
 const float TAU = 6.28318530;
 
+#ifdef NEBULA_ONLY
 // Value-noise + ridged multifractal — used to break Voronoi cell
 // walls out of their smooth-contour "jelly" appearance. ridgedFBM
 // produces fibrous line-like ridges at multiple scales; multiplied
@@ -676,6 +700,7 @@ float fbm3DN(vec3 p) {
        + 0.32 * snoise3DN(p * 2.07)
        + 0.16 * snoise3DN(p * 4.28);
 }
+#endif
 
 void main() {
   // Wobble deformation — squeeze the star into an ellipse along
@@ -1116,6 +1141,7 @@ void main() {
     }
   }
 
+#ifdef NEBULA_ONLY
   // nebula-style supernova remnant — modelled as level sets of an
   // r-biased simplex FBM scalar field. Concretely:
   //
@@ -1147,14 +1173,24 @@ void main() {
 
     // Palette index ∈ {0, 1, 2, 3}
     int paletteIdx = int(fract(v_seed * 13.7) * 4.0);
-    // Bipolar strength — fixed at 0.65 originally; now ranges so
-    // some nebulae are nearly spheroidal, others aggressively
-    // cigar-shaped.
-    float bipolarAmp = mix(0.30, 0.95, fract(v_seed * 3.13));
     // Shell-threshold multiplier — extended range gives compact
     // dense → sparse diffuse variety (was 0.85-1.20 → 1.4×; now
     // 0.60-1.60 → 2.7×).
     float cavitySize = mix(0.60, 1.60, fract(v_seed * 5.71));
+    // Bipolar strength — fixed at 0.65 originally; now ranges so
+    // some nebulae are nearly spheroidal, others aggressively
+    // cigar-shaped. Coupled to cavitySize: the worst-case shell-4
+    // reach is 2.59*cavitySize + 0.75 (fbm) + bipolarAmp*0.6
+    // (cigar elongation) + 0.49 (3σ + jit), and the star quad is
+    // 4.3 v_baseR-units along its side. Capping the upper end of
+    // bipolarAmp by cavitySize keeps the body inside the quad —
+    // sparse nebulas (high cavitySize) end up more spheroidal,
+    // dense nebulas (low cavitySize) keep the full cigar range.
+    float bipolarAmpMax = clamp(
+      (3.06 - 2.59 * cavitySize) / 0.6, 0.0, 0.95);
+    float bipolarAmpMin = min(0.30, bipolarAmpMax);
+    float bipolarAmp = mix(bipolarAmpMin, bipolarAmpMax,
+                            fract(v_seed * 3.13));
     // Density multiplier — scales per-shell rho weights, so some
     // nebulae have more "gas budget" than others independent of
     // their compactness.
@@ -1867,6 +1903,7 @@ void main() {
     outColor = vec4(col, a);
     return;
   }
+#endif
 
   // Pulsar — rapidly rotating neutron star. A tiny dense core
   // with two opposed lighthouse beams along a magnetic axis that
@@ -2449,6 +2486,17 @@ export function createRenderer(canvas) {
   const lensingProg    = compileProgram(gl, FULLSCREEN_VS, LENSING_FS, "lensing");
   const circleProg     = compileProgram(gl, CIRCLE_VS, CIRCLE_FS, "circle");
   const starProg       = compileProgram(gl, STAR_VS, STAR_FS, "star");
+  // Nebula uses the same source compiled with `NEBULA_ONLY` defined.
+  // The preprocessor strips the noise helpers and the `if (isNebula)`
+  // branch out of the common build, dropping its register footprint
+  // to ~ringworld-with-plates level (was set by nebula). The nebula
+  // build keeps everything; its register count was already nebula-
+  // dominated so the dead other-variant branches don't add cost.
+  const nebulaFs = STAR_FS.replace(
+    "#version 300 es",
+    "#version 300 es\n#define NEBULA_ONLY 1"
+  );
+  const nebulaProg     = compileProgram(gl, STAR_VS, nebulaFs, "nebula");
   const polylineProg   = compileProgram(gl, POLYLINE_VS, POLYLINE_FS, "polyline");
 
   // ── Conditional scene FBO for gravitational lensing ─────
@@ -2580,6 +2628,9 @@ export function createRenderer(canvas) {
   //    state doesn't allocate. ──────────────────────────────
   let circleScratch = new Float32Array(64 * CIRCLE_FLOATS_PER_INSTANCE);
   let starScratch = new Float32Array(32 * STAR_FLOATS_PER_INSTANCE);
+  // Separate scratch for the nebula sub-batch — same layout as
+  // starScratch, populated alongside it during partitioning.
+  let nebulaScratch = new Float32Array(8 * STAR_FLOATS_PER_INSTANCE);
   let polylineScratch = new Float32Array(512 * POLYLINE_FLOATS_PER_VERTEX);
   function ensureCircleScratch(n) {
     const needed = n * CIRCLE_FLOATS_PER_INSTANCE;
@@ -2595,6 +2646,14 @@ export function createRenderer(canvas) {
       let len = starScratch.length;
       while (len < needed) len *= 2;
       starScratch = new Float32Array(len);
+    }
+  }
+  function ensureNebulaScratch(n) {
+    const needed = n * STAR_FLOATS_PER_INSTANCE;
+    if (nebulaScratch.length < needed) {
+      let len = nebulaScratch.length;
+      while (len < needed) len *= 2;
+      nebulaScratch = new Float32Array(len);
     }
   }
   function ensurePolylineScratch(n) {
@@ -2613,15 +2672,13 @@ export function createRenderer(canvas) {
   // via per-instance speed/phase + u_time.
   let bgStars = null;
   function initBgStars(W, H) {
-    // Populated across a fixed 2400×1600 canonical space, so the
-    // count is tuned for that area density (~2× a typical laptop
-    // viewport). Dropping to 220 here would halve the apparent
-    // density vs the pre-normalization code.
-    const n = 420;
+    // Populated across a fixed 2400×1600 canonical space (~2× a
+    // typical laptop viewport). The power-law magnitude
+    // distribution puts ~65 % in the faint dust band, so the
+    // count drives perceived dust density without changing the
+    // hero/mid-mag balance.
+    const n = 700;
     ensureCircleScratch(n);
-    const tintWhite = [1, 1, 1];
-    const tintBlue  = [0.74, 0.83, 1.0];
-    const tintWarm  = [1.0, 0.9, 0.76];
     // Seeded PRNG (mulberry32). Produces the same sequence per
     // session so bg stars stay in the same spots across resizes.
     // Different sessions get different layouts via sessionSeed.
@@ -2633,6 +2690,10 @@ export function createRenderer(canvas) {
       t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     }
+    // Continuous-temperature endpoints. Cool ≈ Vega (B/A/F class);
+    // warm ≈ G/K class. Neutral white sits at the midpoint.
+    const COOL_R = 0.74, COOL_G = 0.83, COOL_B = 1.00;
+    const WARM_R = 1.00, WARM_G = 0.88, WARM_B = 0.72;
     // Distribute positions in a canonical fixed space so they
     // stay anchored across resizes. 2400×1600 is larger than any
     // common viewport; out-of-frame stars are just off-screen.
@@ -2642,26 +2703,56 @@ export function createRenderer(canvas) {
       const x = rand() * CW;
       const y = rand() * CH;
       const depth = 0.05 + rand() * 0.35;
-      const size = 0.8 + rand() * 1.8;
-      const brightness = 0.4 + rand() * 0.4;
-      let tint = tintWhite;
-      const r = rand();
-      if (r > 0.88) tint = tintBlue;
-      else if (r > 0.75) tint = tintWarm;
-      // Premultiplied rgba
+      // Magnitude axis: 0 = brightest, 1 = faintest. The
+      // distribution flows from this single sample so brightness,
+      // size, colour saturation and twinkle stay coherent.
+      const mag = rand();
+      const oneMinusMag = 1.0 - mag;
+      // Power-law brightness — many faint stars, few bright ones.
+      // Replaces the flat U[0.4, 0.8] that gave every star equal
+      // weight; now the eye gets a real apparent-magnitude
+      // hierarchy with hero stars that pop and dust that recedes.
+      const brightness = 0.06 + 0.55 * Math.pow(oneMinusMag, 3.0);
+      // Disc size correlates with magnitude — bright stars look
+      // larger because of their bloom envelope. Faint stars are
+      // sub-pixel points.
+      const discR = 0.5 + Math.pow(oneMinusMag, 2.0) * 2.5;
+      // Continuous temperature axis. Faint stars (mag near 1)
+      // squash to neutral white because the bias term is scaled
+      // by sqrt(1 - mag); bright stars (mag near 0) span the full
+      // cool-to-warm range. tempRoll controls direction.
+      const tempRoll = rand();
+      const t = 0.5 + (tempRoll - 0.5) * 0.6 * Math.sqrt(oneMinusMag);
+      const r1 = COOL_R + (WARM_R - COOL_R) * t;
+      const g1 = COOL_G + (WARM_G - COOL_G) * t;
+      const b1 = COOL_B + (WARM_B - COOL_B) * t;
+      // Twinkle: faint stars dance more in the eye's noise floor,
+      // bright stars hold steadier. Phase still random so they
+      // don't all dim together.
+      const twinkleSpeed = (1.4 + rand() * 2.5) * (0.3 + mag * 1.2);
+      const twinklePhase = rand() * Math.PI * 2;
+      // Top ~12 % of stars (brightest) become "hero" stars rendered
+      // with kind == 4 — solid disc plus a faint diffraction cross.
+      // outerR carries the spike-bound (quad size); innerR carries
+      // the disc radius itself. Other kinds keep innerR = 0.
+      const isHero = mag < 0.02;
+      const outerR = isHero ? discR * 3.5 : discR;
+      const innerR = isHero ? discR : 0;
+      const kind   = isHero ? 4 : 0;
+      // Premultiplied rgba.
       const a = brightness;
       circleScratch[base + 0] = x;
       circleScratch[base + 1] = y;
-      circleScratch[base + 2] = size;      // outerR
-      circleScratch[base + 3] = 0;         // innerR
-      circleScratch[base + 4] = tint[0] * a;
-      circleScratch[base + 5] = tint[1] * a;
-      circleScratch[base + 6] = tint[2] * a;
+      circleScratch[base + 2] = outerR;
+      circleScratch[base + 3] = innerR;
+      circleScratch[base + 4] = r1 * a;
+      circleScratch[base + 5] = g1 * a;
+      circleScratch[base + 6] = b1 * a;
       circleScratch[base + 7] = a;
       circleScratch[base + 8] = depth;
-      circleScratch[base + 9] = 1.4 + rand() * 2.5;   // twinkle speed
-      circleScratch[base + 10] = rand() * Math.PI * 2; // twinkle phase
-      circleScratch[base + 11] = 0;         // kind = solid
+      circleScratch[base + 9] = twinkleSpeed;
+      circleScratch[base + 10] = twinklePhase;
+      circleScratch[base + 11] = kind;
     }
     // Snapshot to a dedicated buffer so the scratch can be reused.
     bgStars = { count: n, data: circleScratch.slice(0, n * CIRCLE_FLOATS_PER_INSTANCE) };
@@ -2928,9 +3019,20 @@ export function createRenderer(canvas) {
     const n = stars.length;
     if (n === 0) return;
     ensureStarScratch(n);
+    ensureNebulaScratch(n);
+    // Partition: nebula instances go to the dedicated nebula
+    // program (which keeps the heavy noise helpers + nebula path);
+    // everything else goes to the common program (which drops them
+    // for lower register pressure → better SIMT occupancy on
+    // mobile). Past nebulas route through the common program — the
+    // isPast early-out renders all variants as the same dim ember.
+    let nCommon = 0;
+    let nNebula = 0;
     for (let i = 0; i < n; i++) {
       const s = stars[i];
-      const base = i * STAR_FLOATS_PER_INSTANCE;
+      const useNebula = s.isNebula && !s.isPast;
+      const dst = useNebula ? nebulaScratch : starScratch;
+      const base = (useNebula ? nNebula : nCommon) * STAR_FLOATS_PER_INSTANCE;
       const c1 = c1Of(s.colorIdx);
       const c2 = c2Of(s.colorIdx);
       // Same position-derived phase as drawStar used in Canvas2D,
@@ -2953,34 +3055,52 @@ export function createRenderer(canvas) {
         const pc = Math.max(0, Math.min(7, s.ringPlateCount | 0));
         flags |= pc << 8;
       }
-      starScratch[base + 0] = s.x;
-      starScratch[base + 1] = s.y;
-      starScratch[base + 2] = c1[0];
-      starScratch[base + 3] = c1[1];
-      starScratch[base + 4] = c1[2];
-      starScratch[base + 5] = s.r;
-      starScratch[base + 6] = c2[0];
-      starScratch[base + 7] = c2[1];
-      starScratch[base + 8] = c2[2];
-      starScratch[base + 9] = seed;
-      starScratch[base + 10] = s.hasRays ? 1 : 0;
-      starScratch[base + 11] = s.nGran;
-      starScratch[base + 12] = s.pulse || 0;
-      starScratch[base + 13] = flags;
-      starScratch[base + 14] = s.wobble || 0;
-      starScratch[base + 15] = s.wobbleAngle || 0;
+      dst[base + 0] = s.x;
+      dst[base + 1] = s.y;
+      dst[base + 2] = c1[0];
+      dst[base + 3] = c1[1];
+      dst[base + 4] = c1[2];
+      dst[base + 5] = s.r;
+      dst[base + 6] = c2[0];
+      dst[base + 7] = c2[1];
+      dst[base + 8] = c2[2];
+      dst[base + 9] = seed;
+      dst[base + 10] = s.hasRays ? 1 : 0;
+      dst[base + 11] = s.nGran;
+      dst[base + 12] = s.pulse || 0;
+      dst[base + 13] = flags;
+      dst[base + 14] = s.wobble || 0;
+      dst[base + 15] = s.wobbleAngle || 0;
+      if (useNebula) nNebula++;
+      else nCommon++;
     }
-    gl.useProgram(starProg.program);
-    gl.uniformMatrix3fv(starProg.uniforms.u_view, true, viewMat);
-    gl.uniform1f(starProg.uniforms.u_time, frameTime);
+    // Both draws share the same VAO + instance buffer. bufferData
+    // overwrites between draws; the second draw's upload doesn't
+    // affect the already-issued first draw.
     gl.bindVertexArray(starVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, starInstanceBuf);
-    gl.bufferData(
-      gl.ARRAY_BUFFER,
-      starScratch.subarray(0, n * STAR_FLOATS_PER_INSTANCE),
-      gl.STREAM_DRAW
-    );
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
+    if (nCommon > 0) {
+      gl.useProgram(starProg.program);
+      gl.uniformMatrix3fv(starProg.uniforms.u_view, true, viewMat);
+      gl.uniform1f(starProg.uniforms.u_time, frameTime);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        starScratch.subarray(0, nCommon * STAR_FLOATS_PER_INSTANCE),
+        gl.STREAM_DRAW
+      );
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nCommon);
+    }
+    if (nNebula > 0) {
+      gl.useProgram(nebulaProg.program);
+      gl.uniformMatrix3fv(nebulaProg.uniforms.u_view, true, viewMat);
+      gl.uniform1f(nebulaProg.uniforms.u_time, frameTime);
+      gl.bufferData(
+        gl.ARRAY_BUFFER,
+        nebulaScratch.subarray(0, nNebula * STAR_FLOATS_PER_INSTANCE),
+        gl.STREAM_DRAW
+      );
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, nNebula);
+    }
   }
 
   // Polyline. `points` is an array of {x, y} in world space.

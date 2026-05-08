@@ -81,8 +81,12 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   Binary stars use COM gravity with per-sub-star crash detection.
   → [Details](agent_docs/physics.md)
 
-- **Rendering** (`renderer.js`): WebGL2, 5 shader programs
-  (fullscreen / lensing / circle / star / polyline). Stars, black
+- **Rendering** (`renderer.js`): WebGL2, 6 shader programs
+  (fullscreen / lensing / circle / star / nebula / polyline). The
+  star + nebula programs share one source (`STAR_FS`) compiled
+  twice with `#define NEBULA_ONLY` toggling the noise helpers and
+  nebula branch — keeps mobile-class GPUs out of nebula's register
+  tier when no nebulas are visible. Stars, black
   holes, raymarched 3D monolith slabs, tumbling ringworld habitats,
   pulsars (lighthouse beams + lens-flare composite), and Nebula
   nebulae (level-set volumetric shells with simplex FBM, palette
