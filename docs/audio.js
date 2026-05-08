@@ -474,13 +474,24 @@ export function createAudio() {
     filter.frequency.exponentialRampToValueAtTime(1400, t + dur);
 
     const outGain = c.createGain();
-    outGain.gain.setValueAtTime(0.0001, t);
-    outGain.gain.exponentialRampToValueAtTime(0.42, t + 0.012);
+    // Initialize to 0 synchronously — GainNode.gain defaults to
+    // 1.0, so if a janky main-thread frame pushes the schedule
+    // submission below past t, setValueAtTime(0, t) lands in the
+    // past and the param snaps from 1.0 to 0 instantly — a
+    // -inf-dB step that mobile DACs hear as a click.
+    outGain.gain.value = 0;
+    outGain.gain.setValueAtTime(0, t);
+    // Linear attack over 20 ms — the previous 12 ms exponential
+    // from 0.0001 → 0.42 had an instantaneous slope of ~290/s at
+    // its endpoint (where it suddenly stops ramping). That kink
+    // clicks on some mobile DACs. Linear over 20 ms holds slope
+    // at a flat ~21/s with kinks only at start (0 → ramp) and
+    // end (ramp → hold), both at much smaller magnitudes.
+    outGain.gain.linearRampToValueAtTime(0.42, t + 0.020);
     outGain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     // Final linear ramp to actual 0 — exponentialRamp can't
     // reach 0, so without this the gain holds at 0.0001 and the
     // oscillator's stop event terminates a non-zero waveform.
-    // Some mobile DACs click on that abrupt end even at -80 dB.
     outGain.gain.linearRampToValueAtTime(0, t + dur + 0.005);
 
     // Rising perfect fifth: A5 → E6. Pitch reaches the top
