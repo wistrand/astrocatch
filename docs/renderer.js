@@ -1179,6 +1179,12 @@ void main() {
     vec3 paletteGlow, paletteCore;
     float w0, w1, w2, w3, w4;
     float pulsarFalloff, pulsarPulseRate, pulsarBrightness;
+    // Per-palette dust-scatter coefficients for the Tier-1
+    // single-scatter halo. scatterMul=0 disables scatter entirely
+    // (synchrotron palettes are direct emission, not scattered).
+    // phaseG is the Henyey-Greenstein asymmetry parameter; larger
+    // = more forward-peaked scatter, typical of bigger grains.
+    float scatterMul, phaseG;
     if (paletteIdx == 0) {
       shell0Col = vec3(0.55, 0.83, 0.75);
       shell1Col = vec3(0.92, 0.95, 0.32);
@@ -1191,6 +1197,10 @@ void main() {
       pulsarFalloff = 280.0;
       pulsarPulseRate = 8.00;
       pulsarBrightness = 1.70;
+      // Synchrotron is direct emission from relativistic
+      // electrons — no dust-scatter halo.
+      scatterMul = 0.0;
+      phaseG = 0.0;
     } else if (paletteIdx == 1) {
       shell0Col = vec3(0.40, 0.90, 0.55);
       shell1Col = vec3(0.50, 0.95, 0.85);
@@ -1208,6 +1218,9 @@ void main() {
       pulsarFalloff = 150.0;
       pulsarPulseRate = 4.50;
       pulsarBrightness = 1.30;
+      // Hot CSPN with small dust grains — mild forward scatter.
+      scatterMul = 0.4;
+      phaseG = 0.3;
     } else if (paletteIdx == 2) {
       shell0Col = vec3(0.45, 0.65, 1.00);
       shell1Col = vec3(0.55, 0.95, 1.00);
@@ -1220,6 +1233,9 @@ void main() {
       pulsarFalloff = 200.0;
       pulsarPulseRate = 6.00;
       pulsarBrightness = 1.50;
+      // Moderate scatter, stronger forward peak.
+      scatterMul = 0.7;
+      phaseG = 0.4;
     } else {
       shell0Col = vec3(0.85, 0.65, 0.35);
       shell1Col = vec3(0.95, 0.50, 0.20);
@@ -1232,6 +1248,11 @@ void main() {
       pulsarFalloff = 100.0;
       pulsarPulseRate = 0.00;
       pulsarBrightness = 0.80;
+      // Reflection-nebula regime — heavy dust, large grains,
+      // strongly forward-scattering. Halo is the dominant
+      // illumination signal here even when the source is dim.
+      scatterMul = 1.0;
+      phaseG = 0.5;
     }
     // Apply density multiplier to all per-shell weights.
     w0 *= densityMult; w1 *= densityMult; w2 *= densityMult;
@@ -1475,6 +1496,13 @@ void main() {
     // Drop a per-step divide in the ellipsoidal r3D.
     float invMinASq = 1.0 / (minA * minA);
 
+    // Henyey-Greenstein phase function precomputes for the per-
+    // step scatter integral. (1-g²) and g² are palette-derived
+    // and z-independent.
+    float phaseG2 = phaseG * phaseG;
+    float oneMinusG2 = 1.0 - phaseG2;
+    float scatterCoeff = scatterMul * pulsarBrightness;
+
     // FRONT-TO-BACK volumetric integration with transmittance.
     // trans = 1.0 in front of the volume; decays as we accumulate
     // density through each step. Per-step contributions are pre-
@@ -1639,6 +1667,10 @@ void main() {
         }
       }
       // Shell 4 (sigma 0.13). Intrinsic softness 1.0 (fully soft).
+      // dustM exports shell 4's m as the dust-density proxy used
+      // by the scatter integral below. Stays 0 outside the 3σ
+      // window so scatter only kicks in where dust is present.
+      float dustM = 0.0;
       {
         float dF = field - (2.59 * cavitySize + jit4);
         float dFsq = dF * dF;
@@ -1649,7 +1681,37 @@ void main() {
           vec3 shellC = mix(vec3(luma4), baseShell4, satF);
           rhoStep += m * w4;
           colStep += shellC * m * w4;
+          dustM = m;
         }
+      }
+
+      // Tier-1 single-scatter halo — palette-aware dust glow
+      // around the central source. Only fires for palettes with
+      // scatterMul > 0 (Crab synchrotron is excluded), and only
+      // where shell 4 (the dust proxy) is contributing.
+      // Optically-thin: no source-to-sample or sample-to-camera
+      // opacity integrals. The trans factor still attenuates the
+      // back-side scatter via the existing composite.
+      if (scatterMul > 0.0 && dustM > 0.0) {
+        vec3 fromSource = vec3(puv, zStep) - vec3(pulsarOffset, 0.0);
+        // Plummer-style soft core (0.5 v_baseR-unit radius) so
+        // 1/r² doesn't spike at samples adjacent to the source.
+        // Real sources have finite size; the dust cavity has
+        // already cleared the inner region anyway.
+        float rcs2 = dot(fromSource, fromSource) + 0.25;
+        float invR = inversesqrt(rcs2);
+        // Scattering angle: light from source at S travels to
+        // sample P, then forward-scatters toward the camera at
+        // +z. cosScat is the cos of that turn angle.
+        float cosScat = fromSource.z * invR;
+        // Phase-function softening: ε=0.05 caps the HG forward
+        // peak (was unbounded → 6.0× for g=0.5; now ≤ 4.6×).
+        // Keeps the angular asymmetry but kills the near-axis
+        // spike that combines with low rcs2 to saturate.
+        float denom = pow(1.0 + phaseG2 - 2.0 * phaseG * cosScat
+                            + 0.05, 1.5);
+        float phase = oneMinusG2 / denom;
+        colStep += paletteCore * (dustM * phase * scatterCoeff / rcs2);
       }
 
       // Composite this step with running transmittance, then
