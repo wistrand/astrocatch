@@ -1928,13 +1928,24 @@ void main() {
       sin(u_time * 0.04 + v_seed * 3.1)
     ) + vec3(1e-4));
 
-    // Stable perpendicular to spin: cross with the world axis
-    // least aligned with spin. Then rotate that perp around spin
-    // by a per-pulsar seed angle so the magnetic offset doesn't
-    // always point in the same direction relative to the drift.
-    vec3 ref = abs(spin.y) < 0.9 ? vec3(0.0, 1.0, 0.0)
-                                 : vec3(1.0, 0.0, 0.0);
-    vec3 perp = normalize(cross(spin, ref));
+    // Stable perpendicular to spin via Frisvad's continuous
+    // orthonormal frame (2012). The previous abs(spin.y) < 0.9
+    // ternary hard-switch produced a visible jet snap every time
+    // the spin drift crossed that great-circle band (~once per
+    // minute or two). Frisvad's formula has a single singular
+    // point at spin = (0,0,-1) instead of a band — and the drift
+    // visits that exact point with measure-zero probability.
+    vec3 perp;
+    if (spin.z < -0.9999) {
+      perp = vec3(-1.0, 0.0, 0.0);
+    } else {
+      float frisA = 1.0 / (1.0 + spin.z);
+      perp = vec3(1.0 - spin.x * spin.x * frisA,
+                  -spin.x * spin.y * frisA,
+                  -spin.x);
+    }
+    // Rotate perp around spin by a per-pulsar seed angle so the
+    // magnetic offset doesn't always point in the same direction.
     float seedAng = v_seed * 2.7;
     float csa = cos(seedAng), ssa = sin(seedAng);
     // perp ⟂ spin so the dot-product term of Rodrigues vanishes.
