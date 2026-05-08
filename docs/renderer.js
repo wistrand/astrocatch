@@ -1399,6 +1399,77 @@ void main() {
                                   + seedOff * 0.7 + vec2(13.7, 7.3));
     float smoothEdge = smoothstep(0.25, 0.75, smoothSample);
 
+    // ── Z-independent per-shell precomputes ───────────────
+    // The integration loop body re-evaluates these at every
+    // z-step even though none of them depend on zStep. Hoisting
+    // is bit-identical and saves ~30 snoise calls / fragment.
+
+    // Shock mask — ridged FBM gated to genuinely compressed
+    // regions; multiplies shell brightness, not hue. Threshold
+    // 0.55 keeps the bulk of every shell at its base colour.
+    float shockMask = ridgedFBMN(rotLocN * 2.5
+                                  + seedOff + flow.xy * 0.5);
+    shockMask = pow(clamp(shockMask, 0.0, 1.0), 1.6);
+    float shockBrighten = 1.0
+                        + 0.55 * smoothstep(0.55, 0.85, shockMask);
+
+    // Per-shell field-threshold jitter — angular FBM bumps that
+    // break the radially-even shell spacing. Each shell uses a
+    // different fixed offset so they jitter independently.
+    float jit0 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
+                                 + vec2(0.0, 0.0));
+    float jit1 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
+                                 + vec2(7.3, 11.0));
+    float jit2 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
+                                 + vec2(13.0, 5.7));
+    float jit3 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
+                                 + vec2(23.0, 17.0));
+    float jit4 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
+                                 + vec2(31.0, 41.0));
+
+    // Per-shell edge softness in [0,1] — intrinsic radial role
+    // (0 = inner crisp, 1 = outer diffuse) plus per-nebula
+    // stratOffset shift. Drives the ridged-vs-smooth edge blend.
+    float es0 = clamp(0.00 + stratOffset, 0.0, 1.0);
+    float es1 = clamp(0.25 + stratOffset, 0.0, 1.0);
+    float es2 = clamp(0.50 + stratOffset, 0.0, 1.0);
+    float es3 = clamp(0.75 + stratOffset, 0.0, 1.0);
+    float es4 = clamp(1.00 + stratOffset, 0.0, 1.0);
+    float edge0 = mix(ridgedEdge, smoothEdge, es0);
+    float edge1 = mix(ridgedEdge, smoothEdge, es1);
+    float edge2 = mix(ridgedEdge, smoothEdge, es2);
+    float edge3 = mix(ridgedEdge, smoothEdge, es3);
+    float edge4 = mix(ridgedEdge, smoothEdge, es4);
+    float fl0 = mix(fibreFloor, fibreFloor + 0.30, es0);
+    float fl1 = mix(fibreFloor, fibreFloor + 0.30, es1);
+    float fl2 = mix(fibreFloor, fibreFloor + 0.30, es2);
+    float fl3 = mix(fibreFloor, fibreFloor + 0.30, es3);
+    float fl4 = mix(fibreFloor, fibreFloor + 0.30, es4);
+    float gnFull = fibreGain * aestheticFibreGain;
+    float gnSoft = gnFull * 0.5;
+    float gn0 = mix(gnFull, gnSoft, es0);
+    float gn1 = mix(gnFull, gnSoft, es1);
+    float gn2 = mix(gnFull, gnSoft, es2);
+    float gn3 = mix(gnFull, gnSoft, es3);
+    float gn4 = mix(gnFull, gnSoft, es4);
+
+    // Per-shell base colours and lumas (pre satF desaturation).
+    // satF varies per z-step inside the loop; only the
+    // shockBrighten-multiplied base + its luma are z-independent.
+    vec3 baseShell0 = shell0Col * shockBrighten;
+    vec3 baseShell1 = shell1Col * shockBrighten;
+    vec3 baseShell2 = shell2Col * shockBrighten;
+    vec3 baseShell3 = shell3Col * shockBrighten;
+    vec3 baseShell4 = shell4Col * shockBrighten;
+    float luma0 = dot(baseShell0, vec3(0.299, 0.587, 0.114));
+    float luma1 = dot(baseShell1, vec3(0.299, 0.587, 0.114));
+    float luma2 = dot(baseShell2, vec3(0.299, 0.587, 0.114));
+    float luma3 = dot(baseShell3, vec3(0.299, 0.587, 0.114));
+    float luma4 = dot(baseShell4, vec3(0.299, 0.587, 0.114));
+
+    // Drop a per-step divide in the ellipsoidal r3D.
+    float invMinASq = 1.0 / (minA * minA);
+
     // FRONT-TO-BACK volumetric integration with transmittance.
     // trans = 1.0 in front of the volume; decays as we accumulate
     // density through each step. Per-step contributions are pre-
@@ -1478,8 +1549,8 @@ void main() {
       } else {
         // Ellipsoidal 3D radius — z scaled by minA so the
         // ellipsoid is prolate along the rotated x' axis.
-        float zScaled = zStep / minA;
-        r3D = sqrt(xy_term + zScaled * zScaled);
+        // invMinASq hoisted pre-loop drops a per-step divide.
+        r3D = sqrt(xy_term + zStep * zStep * invMinASq);
         // Bipolar bias faded to zero inside the cavity so the
         // inner-most region stays spherical and shells don't
         // read as rays radiating from the central source.
@@ -1493,24 +1564,10 @@ void main() {
       float rhoStep = 0.0;
       vec3 colStep = vec3(0.0);
 
-      // Shock mask — same ridged FBM as before, but used now as
-      // a BRIGHTNESS multiplier (gated by threshold) rather than
-      // a hue mix. Compressed regions get brighter, not bluer —
-      // fixes the muddy-olive contamination the previous version
-      // got from mixing every shell toward a cyan target.
-      float shockMask = ridgedFBMN(rotLocN * 2.5
-                                    + seedOff + flow.xy * 0.5);
-      shockMask = pow(clamp(shockMask, 0.0, 1.0), 1.6);
-      // Hard threshold (0.55) so only genuinely compressed regions
-      // get the brightness boost; the bulk of every shell stays at
-      // its pure base colour.
-      float shockBrighten = 1.0 + 0.55 * smoothstep(0.55, 0.85, shockMask);
-
       // Radial saturation curve — saturated near the ionizing
-      // pulsar, muted at the outer dust. Real H-α ionization is
-      // strongest near the source. 1.25 boost in cavity, 0.80
-      // mute at outer ejecta. Applied per-shell after computing
-      // the base colour.
+      // pulsar, muted at the outer dust. 1.25 boost in cavity,
+      // 0.80 mute at outer ejecta. Depends on r3D so stays in
+      // the loop; shockBrighten is hoisted pre-loop.
       float satF = mix(1.25, 0.80, smoothstep(0.5, 2.5, r3D));
 
       // Per-shell base thresholds (irregular spacing — 0.27,
@@ -1521,106 +1578,54 @@ void main() {
       // Shell 0 — innermost (sigma 0.06). Edge style: crisp
       // ridged filaments (intrinsic softness 0.0).
       {
-        float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                    + vec2(0.0, 0.0));
-        float dF = field - (1.50 * cavitySize + jit);
+        float dF = field - (1.50 * cavitySize + jit0);
         float m = exp(-dF * dF / 0.0036);
-        if (dF > 0.0) m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
-        // Per-shell edge mask: this shell's intrinsic softness
-        // is 0.0 (fully crisp); plus per-nebula stratOffset.
-        float es = clamp(0.0 + stratOffset, 0.0, 1.0);
-        float edge = mix(ridgedEdge, smoothEdge, es);
-        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
-        float gn = mix(fibreGain * aestheticFibreGain,
-                       fibreGain * aestheticFibreGain * 0.5, es);
-        m *= fl + gn * edge;
-
-        vec3 shellC = shell0Col * shockBrighten;
+        m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
+        m *= fl0 + gn0 * edge0;
         // Cap radial saturation boost on shell 0 (inner band) so
         // saturated palettes don't go neon.
         float satFShell0 = min(satF, 1.05);
-        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-        shellC = mix(vec3(luma), shellC, satFShell0);
+        vec3 shellC = mix(vec3(luma0), baseShell0, satFShell0);
         rhoStep += m * w0;
         colStep += shellC * m * w0;
       }
       // Shell 1 (sigma 0.07). Intrinsic softness 0.25.
       {
-        float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                    + vec2(7.3, 11.0));
-        float dF = field - (1.77 * cavitySize + jit);
+        float dF = field - (1.77 * cavitySize + jit1);
         float m = exp(-dF * dF / 0.0049);
-        if (dF > 0.0) m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
-        float es = clamp(0.25 + stratOffset, 0.0, 1.0);
-        float edge = mix(ridgedEdge, smoothEdge, es);
-        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
-        float gn = mix(fibreGain * aestheticFibreGain,
-                       fibreGain * aestheticFibreGain * 0.5, es);
-        m *= fl + gn * edge;
-
-        vec3 shellC = shell1Col * shockBrighten;
-        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-        shellC = mix(vec3(luma), shellC, satF);
+        m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
+        m *= fl1 + gn1 * edge1;
+        vec3 shellC = mix(vec3(luma1), baseShell1, satF);
         rhoStep += m * w1;
         colStep += shellC * m * w1;
       }
       // Shell 2 (sigma 0.08). Intrinsic softness 0.50.
       {
-        float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                    + vec2(13.0, 5.7));
-        float dF = field - (1.97 * cavitySize + jit);
+        float dF = field - (1.97 * cavitySize + jit2);
         float m = exp(-dF * dF / 0.0064);
-        if (dF > 0.0) m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
-        float es = clamp(0.50 + stratOffset, 0.0, 1.0);
-        float edge = mix(ridgedEdge, smoothEdge, es);
-        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
-        float gn = mix(fibreGain * aestheticFibreGain,
-                       fibreGain * aestheticFibreGain * 0.5, es);
-        m *= fl + gn * edge;
-
-        vec3 shellC = shell2Col * shockBrighten;
-        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-        shellC = mix(vec3(luma), shellC, satF);
+        m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
+        m *= fl2 + gn2 * edge2;
+        vec3 shellC = mix(vec3(luma2), baseShell2, satF);
         rhoStep += m * w2;
         colStep += shellC * m * w2;
       }
       // Shell 3 (sigma 0.10). Intrinsic softness 0.75.
       {
-        float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                    + vec2(23.0, 17.0));
-        float dF = field - (2.29 * cavitySize + jit);
+        float dF = field - (2.29 * cavitySize + jit3);
         float m = exp(-dF * dF / 0.0100);
-        if (dF > 0.0) m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
-        float es = clamp(0.75 + stratOffset, 0.0, 1.0);
-        float edge = mix(ridgedEdge, smoothEdge, es);
-        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
-        float gn = mix(fibreGain * aestheticFibreGain,
-                       fibreGain * aestheticFibreGain * 0.5, es);
-        m *= fl + gn * edge;
-
-        vec3 shellC = shell3Col * shockBrighten;
-        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-        shellC = mix(vec3(luma), shellC, satF);
+        m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
+        m *= fl3 + gn3 * edge3;
+        vec3 shellC = mix(vec3(luma3), baseShell3, satF);
         rhoStep += m * w3;
         colStep += shellC * m * w3;
       }
       // Shell 4 (sigma 0.13). Intrinsic softness 1.0 (fully soft).
       {
-        float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                    + vec2(31.0, 41.0));
-        float dF = field - (2.59 * cavitySize + jit);
+        float dF = field - (2.59 * cavitySize + jit4);
         float m = exp(-dF * dF / 0.0169);
-        if (dF > 0.0) m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
-        float es = clamp(1.0 + stratOffset, 0.0, 1.0);
-        float edge = mix(ridgedEdge, smoothEdge, es);
-        float fl = mix(fibreFloor, fibreFloor + 0.30, es);
-        float gn = mix(fibreGain * aestheticFibreGain,
-                       fibreGain * aestheticFibreGain * 0.5, es);
-        m *= fl + gn * edge;
-
-        vec3 shellC = shell4Col * shockBrighten;
-        float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-        shellC = mix(vec3(luma), shellC, satF);
+        m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
+        m *= fl4 + gn4 * edge4;
+        vec3 shellC = mix(vec3(luma4), baseShell4, satF);
         rhoStep += m * w4;
         colStep += shellC * m * w4;
       }
