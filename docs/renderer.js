@@ -1344,13 +1344,21 @@ void main() {
     // bigger / brighter / further out than the other. Per-nebula
     // amplitude lobeAsymAmp ranges so most nebulae are nearly
     // symmetric but some seeds produce wildly asymmetric outliers.
-    float poleAng = v_seed * 1.7 + 0.3;
-    vec2 poleDir = vec2(cos(poleAng), sin(poleAng));
-    float rotLen = length(rotLocN);
-    float dirAlongPole = rotLen > 0.001
-      ? dot(rotLocN, poleDir) / rotLen : 0.0;
-    float biPolarBase = -bipolarAmp * (dirAlongPole * dirAlongPole - 0.40);
-    float waistJitter = 0.18 * snoiseN(loc * (0.7 / max(v_baseR, 1.0))
+    // poleAng = ang + 0.3; derive cos/sin via angle-sum identity
+    // from cosA/sinA so the trig is computed once for both the
+    // ellipsoidal rotation and the pole axis.
+    const float COS_03 = 0.95533648;
+    const float SIN_03 = 0.29552020;
+    vec2 poleDir = vec2(cosA * COS_03 - sinA * SIN_03,
+                        sinA * COS_03 + cosA * SIN_03);
+    // dot/inversesqrt instead of length+divide; max() floor folds
+    // the original > 0.001 guard into a single op.
+    float rotLen2 = dot(rotLocN, rotLocN);
+    float invRotLen = inversesqrt(max(rotLen2, 1e-6));
+    float dirAlongPole = dot(rotLocN, poleDir) * invRotLen;
+    float cosSq = dirAlongPole * dirAlongPole;
+    float biPolarBase = -bipolarAmp * (cosSq - 0.40);
+    float waistJitter = 0.18 * snoiseN(puv * 0.7
                                         + seedOff + flow.xy);
     // Per-nebula lobe-asymmetry amplitude. Skewed distribution
     // (squared) so most nebulae have low asymmetry but a few
@@ -1382,7 +1390,7 @@ void main() {
     float butterflyNeck = isButterfly
       ? BUTTERFLY_NECK_AMP * smoothstep(0.50, 0.80, bipolarAmp)
       : 0.0;
-    float cosSq = dirAlongPole * dirAlongPole;
+    // cosSq already computed pre-bipolarBase; reuse here.
     float cotSq = cosSq / max(1.0 - cosSq, 1e-3);
     float neck = butterflyNeck * exp(-cotSq * BUTTERFLY_SHARPNESS);
 
@@ -1394,10 +1402,9 @@ void main() {
     // 5x base frequency this is ~2.75 cycles / v_baseR.
     // Amplitude small (0.07 puv-units) so it perturbs sample
     // positions modestly without smearing structure.
-    vec2 hiWarp = vec2(
-      snoiseN(rotLocN * 5.0 + seedOff),
-      snoiseN(rotLocN * 5.0 + seedOff + vec2(11.0, 7.0))
-    ) * 0.07;
+    vec2 hiBase = rotLocN * 5.0 + seedOff;
+    vec2 hiWarp = vec2(snoiseN(hiBase),
+                       snoiseN(hiBase + vec2(11.0, 7.0))) * 0.07;
 
     // Volumetric integration along the line of sight z. The 3D
     // scalar field is
@@ -1438,12 +1445,12 @@ void main() {
     // stratification, not a single uniform contour.
     float fibreFreq = mix(2.5, 8.0, smoothstep(0.0, 2.0, r))
                     * fibreFreqMult;
-    float ridgedSample = ridgedFBMN(loc * fibreFreq / v_baseR
+    float ridgedSample = ridgedFBMN(puv * fibreFreq
                                      + seedOff * 0.7);
     float ridgedEdge = pow(clamp(ridgedSample, 0.0, 1.0), fibrePow);
     // Smooth value FBM at lower frequency — diffuse haze with its
     // own character, distinct from the ridged crisp filaments.
-    float smoothSample = vnoiseN(loc * (fibreFreq * 0.55) / v_baseR
+    float smoothSample = vnoiseN(puv * (fibreFreq * 0.55)
                                   + seedOff * 0.7 + vec2(13.7, 7.3));
     float smoothEdge = smoothstep(0.25, 0.75, smoothSample);
 
@@ -1464,16 +1471,12 @@ void main() {
     // Per-shell field-threshold jitter — angular FBM bumps that
     // break the radially-even shell spacing. Each shell uses a
     // different fixed offset so they jitter independently.
-    float jit0 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                 + vec2(0.0, 0.0));
-    float jit1 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                 + vec2(7.3, 11.0));
-    float jit2 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                 + vec2(13.0, 5.7));
-    float jit3 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                 + vec2(23.0, 17.0));
-    float jit4 = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                 + vec2(31.0, 41.0));
+    vec2 jitBase = rotLocN * 0.8 + seedOff;
+    float jit0 = 0.10 * snoiseN(jitBase);
+    float jit1 = 0.10 * snoiseN(jitBase + vec2(7.3, 11.0));
+    float jit2 = 0.10 * snoiseN(jitBase + vec2(13.0, 5.7));
+    float jit3 = 0.10 * snoiseN(jitBase + vec2(23.0, 17.0));
+    float jit4 = 0.10 * snoiseN(jitBase + vec2(31.0, 41.0));
 
     // Per-shell edge softness in [0,1] — intrinsic radial role
     // (0 = inner crisp, 1 = outer diffuse) plus per-nebula
@@ -1518,6 +1521,14 @@ void main() {
     // Drop a per-step divide in the ellipsoidal r3D.
     float invMinASq = 1.0 / (minA * minA);
 
+    // Factor the loop-invariant parts of the FBM sample point
+    // construction. Originally:
+    //   p3 = vec3(puv + hiWarp, zStep) * fbmScale + seedOff3 + flow;
+    // The xy and z-constant components don't depend on zStep,
+    // so the in-loop work collapses to a single fma in z.
+    vec2  p3xyConst = (puv + hiWarp) * fbmScale + seedOff3.xy + flow.xy;
+    float p3zConst  = seedOff3.z + flow.z;
+
     // Henyey-Greenstein phase function precomputes for the per-
     // step scatter integral. (1-g²) and g² are palette-derived
     // and z-independent.
@@ -1538,8 +1549,9 @@ void main() {
       // is the BACK face.
       float zStep = ZMAX - 2.0 * ZMAX * t;
       // Apply hi-freq warp to puv input AND bipolar bias to the
-      // resulting field (computed once before the loop).
-      vec3 p3 = vec3(puv + hiWarp, zStep) * fbmScale + seedOff3 + flow;
+      // resulting field (computed once before the loop). xy and
+      // z-constant parts hoisted as p3xyConst / p3zConst.
+      vec3 p3 = vec3(p3xyConst, zStep * fbmScale + p3zConst);
       float fbm = fbm3DN(p3);
 
       // 3D distance field. Ellipsoidal vs filamentary path
@@ -1730,8 +1742,10 @@ void main() {
         // peak (was unbounded → 6.0× for g=0.5; now ≤ 4.6×).
         // Keeps the angular asymmetry but kills the near-axis
         // spike that combines with low rcs2 to saturate.
-        float denom = pow(1.0 + phaseG2 - 2.0 * phaseG * cosScat
-                            + 0.05, 1.5);
+        // pow(x, 1.5) spelled out as x * sqrt(x); some compilers
+        // miss the fold and emit log/exp.
+        float dInner = 1.0 + phaseG2 - 2.0 * phaseG * cosScat + 0.05;
+        float denom = dInner * sqrt(dInner);
         float phase = oneMinusG2 / denom;
         colStep += paletteCore * (dustM * phase * scatterCoeff / rcs2);
       }
