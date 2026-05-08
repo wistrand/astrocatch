@@ -95,7 +95,12 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   holes use a conditional full-screen FBO + lensing composite
   pass with procedural grid for visible distortion. Star shader
   supports crash wobble and tidal locking for binaries.
-  Background includes procedural spiral galaxies.
+  Background includes procedural spiral galaxies. Rare Russell-
+  teapot variant — sphere-traced SDF (body / lid / knob / Bezier
+  spout / elliptical-torus handle), procedural cobalt-on-porcelain
+  pattern, glossy ceramic shading with v_c1-tinted specular and
+  slowly-precessing key light. Tumble axis biased toward world up
+  so the lid stays roughly vertical; spawns near profile view.
   No Canvas2D, no libraries.
   → [Details](agent_docs/rendering.md)
 
@@ -109,10 +114,10 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
   (quick-launch bonus + streak multiplier + comet bonus).
   `SPAWN_TABLE` of interpolated variant weights (plain / binary /
-  bh / bhBinary / monolith / ringworld / pulsar / nebula) by star
-  index; planets and comets are orthogonal rolls on top. Binary
-  stars (two sub-stars orbiting COM, tidally locked). Monoliths
-  play as normal stars but render as rotating 3D slabs.
+  bh / bhBinary / monolith / ringworld / pulsar / nebula / teapot)
+  by star index; planets and comets are orthogonal rolls on top.
+  Binary stars (two sub-stars orbiting COM, tidally locked).
+  Monoliths play as normal stars but render as rotating 3D slabs.
   Ringworlds are normal-physics stars with a tumbling earth-
   textured band; each carries a `ringPlateCount` (0–7) that adds
   rotating shadow plates, sun shadows, and warm city lights on
@@ -124,13 +129,15 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   via volumetric ray-march, sampling per-nebula seed-driven
   axes for palette / morphology / central-source flavour /
   interior-fill density / lobe asymmetry / edge stratification.
+  Teapots are Russell-style Easter-egg variants — sphere-traced
+  SDF teapot with china pattern, ~1 % spawn rate from star ≥ 50.
   Camera auto-zooms while the ship is captured around a
-  ringworld (1.7×) or Nebula (1.6×). Save/resume roundtrips
-  preserve `ringPlateCount`, `isPulsar`, `isNebula`. BH binaries
-  get physics-driven ejecta from donor to accretor. Pulsars and
-  nebulae both have a higher minimum spawn radius (`r ≥ 30`) so
-  detail reads — pulsar core is 0.32× v_baseR, nebula shell
-  network needs room to develop. Crash wobble. Pause, arrow-key
+  ringworld (1.7×), Nebula (1.6×), or teapot (1.6×). Save/resume
+  roundtrips preserve `ringPlateCount`, `isPulsar`, `isNebula`,
+  `isTeapot`. BH binaries get physics-driven ejecta from donor
+  to accretor. Pulsars and nebulae have a higher minimum spawn
+  radius (`r ≥ 30`); teapots get `r ≥ 25` so the spout tip and
+  handle tube stay readable. Crash wobble. Pause, arrow-key
   velocity nudge, launch-window indicator. Help overlay. Replay
   with dynamic follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)

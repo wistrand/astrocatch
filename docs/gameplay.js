@@ -51,7 +51,8 @@ let zoomMultTarget = 1.0;
 function zoomTargetFor(star) {
   if (!star) return 1.0;
   if (star.isRingworld) return IS_TOUCH ? 1.5 : 1.7;
-  if (star.isNebula)      return IS_TOUCH ? 1.4 : 1.6;
+  if (star.isNebula)    return IS_TOUCH ? 1.4 : 1.6;
+  if (star.isTeapot)    return IS_TOUCH ? 1.4 : 1.6;
   return 1.0;
 }
 // World-space horizontal camera pan. Normally 0; nudged when
@@ -355,6 +356,7 @@ function serializeStar(s, full) {
   if (s.isRingworld) stub.ringPlateCount = s.ringPlateCount | 0;
   stub.isPulsar = !!s.isPulsar;
   stub.isNebula = !!s.isNebula;
+  stub.isTeapot = !!s.isTeapot;
   if (s.planets) stub.planets = s.planets;
   if (s.comets) stub.comets = s.comets;
   if (s.binary) {
@@ -460,18 +462,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0 },
-  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 10, pulsar: 1, nebula: 20 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 5, pulsar: 1, nebula: 5, teapot: 15 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0 },
-  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2, nebula: 0 },
-  { at: 20,   plain:  66, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4, nebula: 2 },
-  { at: 50,   plain:  51, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6, nebula: 3 },
-  { at: 80,   plain:  40, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8, nebula: 4 },
+  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula  teapot
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
+  { at: 10,   plain:  82, binary:  3, bh:  2, bhBinary: 1, monolith: 1, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0 },
+  { at: 20,   plain:  66, binary:  8, bh:  5, bhBinary: 3, monolith: 2, ringworld: 0, pulsar: 4, nebula: 2, teapot: 0 },
+  { at: 50,   plain:  50, binary: 10, bh:  8, bhBinary: 4, monolith: 4, ringworld: 2, pulsar: 6, nebula: 3, teapot: 1 },
+  { at: 80,   plain:  39, binary: 10, bh: 10, bhBinary: 5, monolith: 5, ringworld: 4, pulsar: 8, nebula: 4, teapot: 1 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -571,6 +573,10 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     // surrounded by procedural synchrotron filaments. Same physics
     // as a normal star.
     isNebula: false,
+    // Teapot flag — Russell's china teapot, sphere-traced SDF.
+    // Same physics as a normal star. Rare Easter-egg variant
+    // gated to deep runs (star index >= ~50).
+    isTeapot: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     // If addNextStar already rolled the variant (so it could
@@ -597,22 +603,25 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
       s.isPulsar = true;
     } else if (variant === "nebula") {
       s.isNebula = true;
+    } else if (variant === "teapot") {
+      s.isTeapot = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
     // only. Ramps up with star index. Skipped on variants whose
     // visual or physical setup already occupies the orbit volume.
     if (!s.isBinary && !s.isMonolith && !s.isRingworld
-        && !s.isPulsar && !s.isNebula) {
+        && !s.isPulsar && !s.isNebula && !s.isTeapot) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
       }
     }
     // Comet: orthogonal roll, applied to any variant except
-    // monoliths (keeps them alien/alone). Pulsars and nebulae are
-    // fine — comets weaving through filaments / past a pulsar
-    // reads naturally.
-    if (!s.isMonolith && starIdx >= COMET_MIN_STAR
+    // monoliths (keeps them alien/alone) and teapots (the Russell
+    // gag reads cleanest with the teapot solo on screen). Pulsars
+    // and nebulae are fine — comets weaving through filaments /
+    // past a pulsar reads naturally.
+    if (!s.isMonolith && !s.isTeapot && starIdx >= COMET_MIN_STAR
         && Math.random() < COMET_PROB) {
       assignComets(s, starIdx);
     }
@@ -799,8 +808,13 @@ function addNextStar() {
   // Pulsars and nebulae need a bigger minimum radius — pulsars
   // because the body is only 0.32× v_baseR, nebulae because the
   // shell network needs room to develop visible structure (the
-  // nebula extends to ~3× v_baseR).
-  const minR = (variant === "pulsar" || variant === "nebula") ? 30 : 18;
+  // nebula extends to ~3× v_baseR). Teapots get a bigger min so
+  // the spout's narrow tip and the handle's tube remain readable
+  // (tube radius is 0.06 × v_baseR — sub-pixel below ~r=18).
+  const minR =
+    (variant === "pulsar" || variant === "nebula") ? 30 :
+    (variant === "teapot")                          ? 25 :
+    18;
 
   // Pick candidate radius first so we can compute the hard minimum.
   const r = Math.max(minR, (34 + Math.random() * 24) - difficulty * 14);
@@ -1076,6 +1090,7 @@ function resumeFromSave(data) {
     ringPlateCount: raw.ringPlateCount | 0,
     isPulsar: !!raw.isPulsar,
     isNebula: !!raw.isNebula,
+    isTeapot: !!raw.isTeapot,
   }));
   // Re-orbit the ball around the saved anchor star with a fresh
   // circular orbit — same math as continueRun. The saved x/y/vx/
@@ -1258,6 +1273,7 @@ function captureStar(idx) {
     stars[leavingIdx].ringPlateCount = 0;
     stars[leavingIdx].isPulsar = false;
     stars[leavingIdx].isNebula = false;
+    stars[leavingIdx].isTeapot = false;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -1808,6 +1824,7 @@ function renderTick() {
   const effZoom = ZOOM * zoomMult;
   const visualR = cs0.isRingworld ? cs0.r * 3.6
                 : cs0.isNebula      ? cs0.r * 2.7
+                : cs0.isTeapot      ? cs0.r * 1.7
                                   : cs0.r * 2.5;
   const screenXNoPan = W / 2 + (cs0.x - W / 2) * effZoom;
   const visualRpx = visualR * effZoom;
@@ -2199,6 +2216,7 @@ function draw() {
         ringPlateCount: s.ringPlateCount,
         isPulsar: s.isPulsar,
         isNebula: s.isNebula,
+        isTeapot: s.isTeapot,
       });
     }
   }

@@ -62,34 +62,36 @@ points, sparkle burst, twinkly sound, comet removed.
 
 `SPAWN_TABLE` is a list of rows at star-index control points.
 Each row lists weights for each variant (`plain`, `binary`,
-`bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `nebula`).
-Weights interpolate linearly between rows and plateau past the
-last row. Normalized at sample time, so values don't need to
-sum to 100.
+`bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `nebula`,
+`teapot`). Weights interpolate linearly between rows and plateau
+past the last row. Normalized at sample time, so values don't
+need to sum to 100.
 
 Planets and comets are **orthogonal** rolls applied on top:
 
 - **Planets**: ramp from 0 to `PLANET_PROB_MAX` over
   `PLANET_RAMP_STARS` captures. Allowed on `plain` and `bh`
-  variants only; binaries, monoliths, ringworlds, pulsars, and
-  Nebulae skip (their visuals already occupy the orbit
-  volume).
+  variants only; binaries, monoliths, ringworlds, pulsars,
+  Nebulae, and teapots skip (their visuals already occupy the
+  orbit volume).
 - **Comets**: flat `COMET_PROB` chance from `COMET_MIN_STAR`+.
-  Allowed on any variant except monoliths (alien/alone vibe).
-  Pulsars and Nebulae are fine — debris disks around real pulsars
-  and comets weaving through nebula filaments both read
-  naturally.
+  Allowed on any variant except monoliths (alien/alone vibe) and
+  teapots (the Russell gag reads cleanest with the teapot solo
+  on screen). Pulsars and Nebulae are fine — debris disks around
+  real pulsars and comets weaving through nebula filaments both
+  read naturally.
 
 Decision order in `makeStar`: variant → planets → comets. Swap
 `SPAWN_TABLE_GAME` for `SPAWN_TABLE_DEBUG` to force-spawn a type
 for testing.
 
 `addNextStar` pre-rolls the variant via `pickVariant(n)` so
-pulsars and Nebulae can claim a higher minimum spawn radius
-(`r ≥ 30` vs default `r ≥ 18`); their tiny core / fine shell
-detail needs the extra resolution to read. The pre-rolled
-variant is then passed to `makeStar(..., variant)` to avoid a
-second roll producing a different result.
+pulsars / Nebulae / teapots can claim a higher minimum spawn
+radius — pulsars and Nebulae get `r ≥ 30` (tiny core / fine
+shell detail), teapots get `r ≥ 25` (spout tip thickness is
+0.05 × v_baseR — sub-pixel below ~r=18). Default is `r ≥ 18`.
+The pre-rolled variant is then passed to `makeStar(..., variant)`
+to avoid a second roll producing a different result.
 
 ## Star generation
 
@@ -245,6 +247,54 @@ The `nebula.html` inspector page (`?seed=N&grid=NxM`) renders a
 deterministic grid of Nebulae for population review.
 URL-driven seed and grid size make populations reproducible
 across reloads.
+
+## Russell's teapots
+
+Flagged `isTeapot: true`. Physics identical to a normal star
+(gravity, capture, scoring). Rendered as a sphere-traced SDF
+porcelain teapot — body / lid / knob / Bezier-tube spout /
+elliptical-torus handle, smin-blended into a single ceramic
+surface. Procedural cobalt-on-porcelain pattern (3D value-noise
+FBM, no UV seam) with a clean foot and a half-cobalt collar
+band at the body-lid junction. Glossy ceramic shading: three-
+light setup with a slowly-precessing key light, Phong specular
+tinted by the per-instance star colour `v_c1` (so each teapot
+has a recognisable glaze cast), power-3 fresnel rim.
+
+Tumble axis is strongly +Y biased (`tAxis.y ≥ 0.96` after
+normalize) so the body stays roughly vertical with at most ~16°
+tilt as the teapot rotates; lid stays clearly upward. Initial
+angle is bimodally distributed near `0` or `π` so teapots spawn
+near profile (spout to either side), not face-on.
+
+The SDF coordinate frame puts the lid at +y. World coordinates
+in this codebase use +Y-down (`screenMat` flips to clip space),
+so the rendering branch negates `loc.y` when entering the SDF
+frame to keep "lid up" on screen.
+
+**Russell reference.** Bertrand Russell's 1952 thought experiment
+posits a tiny porcelain teapot orbiting the Sun between Earth
+and Mars, too small to be detected by any telescope. Used
+philosophically to argue against unfalsifiable claims. The
+in-game teapot is, as the shadertoy port's description puts it,
+*not that teapot* — but it's a deliberate Russellian wink.
+
+**Spawn rate.** 0 % until star 50, then 1/89 ≈ 1.1 % at endgame.
+A typical run from star 0 won't see one; deep runs reliably
+do. The Easter-egg payoff lands when the player's already
+invested.
+
+**Higher minR (`r ≥ 25`).** The spout's tip thickness is
+0.05 × v_baseR. Below `r ≈ 18` it goes sub-pixel and disappears
+into AA. 25 keeps spout and handle tube readable.
+
+**Camera zoom.** While the ship's `currentStar.isTeapot` is
+true, the camera eases to a 1.6× zoom (matching the nebula
+multiplier). `visualR` for the screen-edge horizontal-camera-
+nudge logic is `r * 1.7` (the SDF bounding sphere).
+
+**Save/resume.** Round-trips `isTeapot` alongside the other
+variant flags. Captured teapots persist through saves.
 
 ## Crash wobble
 

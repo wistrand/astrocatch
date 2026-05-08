@@ -11,6 +11,7 @@ fragment shader that compiles cleanly in Shadertoy's `Image` slot.
 | [`ringworld.glsl`](ringworld.glsl) | Ringworld habitat — ray-cylinder intersection, near (outside / structural) and far (inside / earth-textured) faces, optional inner shadow plates with sun shadow + city lights. | Drag → 3D camera orbit. |
 | [`blackhole.glsl`](blackhole.glsl) | Black hole — event horizon, edge-on accretion disk with asymmetric lensed back-arcs, gravitational lensing distortion, procedural reference grid, photon ring.  Combines per-instance star branch + fullscreen lensing pass into a single shader. | Drag → move BH across the procedural starfield. |
 | [`monolith.glsl`](monolith.glsl) | Monolith — analytic ray-vs-axis-aligned-slab intersection in box-local coordinates (1:4:9 proportion), Rodrigues-rotation tumble around a per-monolith random axis, dominant-axis face normal selection, directional diffuse + power-4 fresnel rim. | Drag → 3D camera orbit. |
+| [`teapot.glsl`](teapot.glsl) | Russell's china teapot — SDF raymarch (body / shoulder / lid / knob / Bezier-tube spout / elliptical-torus handle, smooth-min'd), procedural cobalt-on-porcelain pattern via 3D value-noise FBM (no UV seam), foot fade + half-cobalt collar band at the body-lid junction, glossy ceramic specular + rim. Now in-game — flag bit 4096, ~1 % spawn rate from star ≥ 50. | None (auto-tumble). |
 
 Open Shadertoy → New → paste a file's contents into the `Image`
 buffer → Compile.
@@ -43,6 +44,11 @@ result. Examples:
 - `monolith.glsl`: `ASPECT_X / Y / Z` (default 0.189 : 0.747 : 1.692
   for the canonical 1:4:9 monolith), `TUMBLE_RATE`, `LIGHT_DIR`,
   `RIM_COLOR`, `RIM_INTENSITY`.
+- `teapot.glsl`: `TUMBLE_RATE`, `TEAPOT_SEED` (drives tumble axis
+  direction), `KEY_DIR / FILL_DIR / AMBIENT`, `SPECULAR_POW /
+  SPECULAR_AMP`, `RIM_POW / RIM_AMP`, `PORCELAIN / COBALT` (china
+  palette), `PATTERN_THRESHOLD / PATTERN_SHARPNESS` (sharper =
+  more crisply painted strokes).
 
 The `NEBULA_SEED` / `V_SEED` knob seeds noise offsets and any
 seed-derived directions, so changing it rolls a different shape
@@ -83,6 +89,15 @@ the harness changes:
 - `monolith.glsl` is the cheapest: ~50 ALU/fragment for the
   Rodrigues matrix + slab intersection. Most pixels miss the
   slab and short-circuit before any lighting.
+- `teapot.glsl` is heavy on the silhouette pixels (sphere-trace
+  loop, up to 48 steps × 5-primitive smin'd SDF + 3-tap forward-
+  difference normal), cheap on far misses thanks to a bounding-
+  sphere early-out at the top of `sdTeapot` — `length(p) - 1.7`
+  short-circuits the primitive union when the ray is comfortably
+  outside the bounding sphere, dropping the per-step cost to
+  ~5 ALU. Per hit ~5000 ALU; far miss ~150 ALU; frame average
+  for a viewport showing one teapot ~2400 ALU. Mostly bound by
+  hit/near-miss pixels.
 
 ## Source
 
@@ -91,10 +106,11 @@ Code: <https://github.com/wistrand/astrocatch>
 
 The full per-instance star fragment shader (with all variants —
 plain stars, binaries, monoliths, ringworlds, pulsars, black
-holes, nebulae) lives in `docs/renderer.js` as the `STAR_FS`
-template string. Open that file and search for `if (isNebula)`,
-`if (isRingworld)`, `if (isBlackHole)`, `if (isMonolith)` to see
-the original context each port was extracted from.
+holes, nebulae, teapots) lives in `docs/renderer.js` as the
+`STAR_FS` template string. Open that file and search for
+`if (isNebula)`, `if (isRingworld)`, `if (isBlackHole)`,
+`if (isMonolith)`, `if (isTeapot)` to see the original context
+each port was extracted from.
 
 The nebula path is gated behind `#ifdef NEBULA_ONLY` and lives
 in a second GL program compiled from the same source; live

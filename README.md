@@ -39,7 +39,9 @@ pulls you in and you orbit that one too.
   ringworld habitat with day-night shadow plates and
   city lights, or a pulsar with sweeping lighthouse beams,
   or a fully volumetric supernova-remnant nebula whose
-  fragmented shells you orbit through.
+  fragmented shells you orbit through. Very rarely, on
+  deep runs, a tumbling blue-and-white china teapot —
+  Russell's, after the philosophical thought experiment.
 - **Nudge your orbit** with the left/right arrow keys to
   fine-tune your trajectory before launching.
 - **Help & shortcuts** — click the **?** button or press **H**

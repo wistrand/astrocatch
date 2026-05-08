@@ -173,6 +173,16 @@ stars = [
     s.isNebula = true;
     addComet(s);
   }),
+
+  cell(0, 6, "teapot", (s) => { s.isTeapot = true; }),
+  cell(1, 6, "teapot (coral)", (s) => {
+    s.isTeapot = true;
+    s.colorIdx = 5; // coral — warm specular tint
+  }),
+  cell(2, 6, "teapot (teal)", (s) => {
+    s.isTeapot = true;
+    s.colorIdx = 6; // teal — cool specular tint
+  }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -370,6 +380,7 @@ function loop(t) {
         ringPlateCount: s.ringPlateCount | 0,
         isPulsar: s.isPulsar,
         isNebula: s.isNebula,
+        isTeapot: s.isTeapot,
       });
     }
   }

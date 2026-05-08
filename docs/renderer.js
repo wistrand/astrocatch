@@ -548,6 +548,161 @@ out vec4 outColor;
 const float PI = 3.14159265;
 const float TAU = 6.28318530;
 
+// ─── Teapot SDF helpers (used by isTeapot path below) ────────────
+// All ungated — the teapot lives in the common star program rather
+// than a separate one. Its peak register footprint (~10 reg) sits
+// well under the program ceiling already set by ringworld+plates,
+// so no tier impact.
+
+// Smooth minimum (iq's polynomial form). Used to blend the teapot
+// primitives into a single smooth ceramic surface.
+float smin(float a, float b, float k) {
+  float h = max(k - abs(a - b), 0.0) / k;
+  return min(a, b) - h * h * k * 0.25;
+}
+
+// Imperfect ellipsoid (iq) — conservative under-estimate, fine
+// for raymarching with under-stepped advance.
+float sdEllipsoid(vec3 p, vec3 r) {
+  float k0 = length(p / r);
+  float k1 = length(p / (r * r));
+  return k0 * (k0 - 1.0) / k1;
+}
+
+float sdSphere(vec3 p, float r) { return length(p) - r; }
+
+// Quadratic Bezier tube — 6-sample coarse search + 2-Newton
+// refines. Used for the curved spout. Same routine the nebula
+// filament path uses inline; here as a reusable function.
+float sdBezierTube(vec3 p, vec3 P0, vec3 P1, vec3 P2,
+                   float thickBase, float thickTip) {
+  float bestT = 0.5, bestD2 = 1e9;
+  for (int i = 0; i < 6; i++) {
+    float t = (float(i) + 0.5) / 6.0;
+    float u = 1.0 - t;
+    vec3 onC = u * u * P0 + 2.0 * u * t * P1 + t * t * P2;
+    float d2 = dot(p - onC, p - onC);
+    if (d2 < bestD2) { bestD2 = d2; bestT = t; }
+  }
+  vec3 d2C = 2.0 * P0 - 4.0 * P1 + 2.0 * P2;
+  for (int i = 0; i < 2; i++) {
+    float u = 1.0 - bestT;
+    vec3 onC = u * u * P0
+             + 2.0 * u * bestT * P1
+             + bestT * bestT * P2;
+    vec3 dC  = -2.0 * u * P0
+             + 2.0 * (1.0 - 2.0 * bestT) * P1
+             + 2.0 * bestT * P2;
+    vec3 diff = p - onC;
+    float f  = dot(diff, dC);
+    float fp = -dot(dC, dC) + dot(diff, d2C);
+    if (abs(fp) > 1e-5) bestT = clamp(bestT - f / fp, 0.0, 1.0);
+  }
+  float u = 1.0 - bestT;
+  vec3 onCurve = u * u * P0
+               + 2.0 * u * bestT * P1
+               + bestT * bestT * P2;
+  return distance(p, onCurve) - mix(thickBase, thickTip, bestT);
+}
+
+// 3D value noise for the china pattern — wraps continuously around
+// the teapot surface with no UV seam.
+float vhash3(vec3 p) {
+  p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+  p += dot(p, p.yzx + 33.33);
+  return fract((p.x + p.y) * p.z);
+}
+
+float vnoise3(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float c000 = vhash3(i);
+  float c100 = vhash3(i + vec3(1.0, 0.0, 0.0));
+  float c010 = vhash3(i + vec3(0.0, 1.0, 0.0));
+  float c110 = vhash3(i + vec3(1.0, 1.0, 0.0));
+  float c001 = vhash3(i + vec3(0.0, 0.0, 1.0));
+  float c101 = vhash3(i + vec3(1.0, 0.0, 1.0));
+  float c011 = vhash3(i + vec3(0.0, 1.0, 1.0));
+  float c111 = vhash3(i + vec3(1.0, 1.0, 1.0));
+  return mix(
+    mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y),
+    mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y),
+    f.z);
+}
+
+float fbm3D(vec3 p) {
+  float t = 0.0;
+  float amp = 0.5;
+  for (int i = 0; i < 4; i++) {
+    t += vnoise3(p) * amp;
+    p *= 2.07;
+    amp *= 0.55;
+  }
+  return t;
+}
+
+// Teapot SDF — body + lid + knob + Bezier spout + custom
+// elliptical-torus handle, all smin'd. Bounding-sphere early-out
+// at the top. Coordinates normalised so 1 unit = v_baseR for
+// in-game use.
+float sdTeapot(vec3 p) {
+  float bound = length(p) - 1.7;
+  if (bound > 0.30) return bound;
+  float bodyLower = sdEllipsoid(p, vec3(1.00, 0.60, 1.00));
+  float bodyUpper = sdEllipsoid(p - vec3(0.0, 0.50, 0.0),
+                                 vec3(0.65, 0.20, 0.65));
+  float body = smin(bodyLower, bodyUpper, 0.10);
+  body = -smin(-body, p.y + 0.55, 0.04);  // flat foot
+  float lid = sdEllipsoid(p - vec3(0.0, 0.66, 0.0),
+                           vec3(0.50, 0.10, 0.50));
+  float knob = sdSphere(p - vec3(0.0, 0.80, 0.0), 0.10);
+  float spout = sdBezierTube(p,
+    vec3(0.85, 0.05, 0.0),
+    vec3(1.25, 0.30, 0.0),
+    vec3(1.45, 0.60, 0.0),
+    0.18, 0.05);
+  // Handle: vertically-elongated elliptical torus.
+  vec3 hp = p - vec3(-0.92, 0.32, 0.0);
+  vec2 hq = vec2(hp.x / 0.18, hp.y / 0.30);
+  float distToRing = (length(hq) - 1.0) * min(0.18, 0.30);
+  float handle = length(vec2(distToRing, hp.z)) - 0.06;
+  float d = body;
+  d = smin(d, lid,    0.05);
+  d = smin(d, knob,   0.04);
+  d = smin(d, spout,  0.05);
+  d = smin(d, handle, 0.05);
+  return d;
+}
+
+// 3-tap forward-difference normal.
+vec3 sdTeapotNormal(vec3 p) {
+  const float h = 0.001;
+  float d0 = sdTeapot(p);
+  return normalize(vec3(
+    sdTeapot(p + vec3(h, 0.0, 0.0)) - d0,
+    sdTeapot(p + vec3(0.0, h, 0.0)) - d0,
+    sdTeapot(p + vec3(0.0, 0.0, h)) - d0));
+}
+
+// China pattern (cobalt-on-porcelain) with porcelain foot fade
+// and a half-cobalt collar at the body-lid junction.
+vec3 chinaPattern(vec3 p) {
+  float macro = fbm3D(p * 4.5);
+  float meso  = fbm3D(p * 13.0 + vec3(2.0, 5.0, 7.0));
+  float micro = vnoise3(p * 32.0);
+  float field = macro * 0.65 + meso * 0.30 + micro * 0.05;
+  float pattern = smoothstep(0.30, 0.90, field);
+  pattern *= smoothstep(-0.53, -0.45, p.y);
+  float bandY  = smoothstep(0.48, 0.50, p.y)
+               - smoothstep(0.60, 0.65, p.y);
+  float onAxis = 1.0 - smoothstep(0.70, 0.82, length(p.xz));
+  pattern = mix(pattern, 0.55, bandY * onAxis);
+  vec3 PORCELAIN = vec3(0.97, 0.95, 0.90);
+  vec3 COBALT    = vec3(0.05, 0.10, 0.55);
+  return mix(PORCELAIN, COBALT, pattern);
+}
+
 #ifdef NEBULA_ONLY
 // Value-noise + ridged multifractal — used to break Voronoi cell
 // walls out of their smooth-contour "jelly" appearance. ridgedFBM
@@ -734,6 +889,11 @@ void main() {
   // Bits 256/512/1024 reserved for ringPlateCount (decoded below
   // in the ringworld branch). Nebula uses bit 2048 to stay clear.
   bool isNebula = (flags & 2048) != 0;
+  // Teapot — the Russell variant. Tumbling porcelain SDF. Rare
+  // Easter-egg spawn; renders inside the common star program
+  // because its raymarch peak (~10 reg) doesn't push the program
+  // worse than ringworld+plates already does.
+  bool isTeapot = (flags & 4096) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -823,6 +983,104 @@ void main() {
     float fresnel = pow(1.0 - abs(normal.z), 4.0);
     vec3 rim = vec3(0.45, 0.6, 0.9) * fresnel * 0.55;
     outColor = vec4(vec3(body) + rim, aa);
+    return;
+  }
+
+  // Russell's china teapot — sphere-traced SDF (body + lid + knob
+  // + Bezier spout + elliptical-torus handle), procedural cobalt-
+  // on-porcelain pattern, glossy ceramic shading. Tumbles around a
+  // per-instance random axis. Coordinates inside the SDF are
+  // normalised so 1 unit = v_baseR; bounding sphere is ~1.7
+  // v_baseR-units. Quad is the standard 4.3 v_baseR + 8 — way
+  // bigger than the teapot needs, but the bounding-sphere early-
+  // out keeps the corner fragments at ~5 ALU/step.
+  if (isTeapot) {
+    // Sample point in unit-normalised local frame; camera at z=-3.5
+    // (in normalised units) looking toward origin. World coords use
+    // +Y-down (screenMat flips to clip), so we negate loc.y on the
+    // way into the SDF frame — the SDF puts the lid at +Y, the foot
+    // at -Y, and we need that to map to "up on screen, down on
+    // screen" respectively.
+    float locScale = 1.0 / max(v_baseR, 1.0);
+    vec3 ro = vec3(loc.x * locScale, -loc.y * locScale, -3.5);
+    vec3 rd = vec3(0.0, 0.0, 1.0);
+    // Tumble: Rodrigues rotation around a per-teapot seed axis.
+    // Strong +Y bias so the body stays roughly vertical (lid up):
+    // after normalize, tAxis.y ≥ 0.96, giving a max body-tilt of
+    // ~16° during the tumble. Weaker bias produced many seeds
+    // with X- or Z-aligned axes that rotated the body through
+    // "bottom toward camera" orientations.
+    vec3 tAxis = normalize(vec3(
+      sin(v_seed * 1.3) * 0.20,
+      cos(v_seed * 1.7) + 2.0,
+      sin(v_seed * 2.1) * 0.20));
+    // Initial angle biased to one of the two profile views (spout
+    // at +X or -X). seedFlip picks left/right, jitter spreads the
+    // start within ±π/4 of profile so teapots aren't all at the
+    // exact same angle. Avoids spawning face-on (spout pointing
+    // at or away from camera) which reads as the worst angle.
+    float seedFlip = step(0.5, fract(v_seed * 13.7));
+    float tInitOff = seedFlip * PI
+                   + (fract(v_seed * 7.31) - 0.5) * (PI * 0.5);
+    float tAng = u_time * 0.20 + tInitOff;
+    float tC = cos(tAng), tS = sin(tAng), tIc = 1.0 - tC;
+    mat3 tR = mat3(
+      tC + tAxis.x * tAxis.x * tIc,
+        tAxis.y * tAxis.x * tIc + tAxis.z * tS,
+        tAxis.z * tAxis.x * tIc - tAxis.y * tS,
+      tAxis.x * tAxis.y * tIc - tAxis.z * tS,
+        tC + tAxis.y * tAxis.y * tIc,
+        tAxis.z * tAxis.y * tIc + tAxis.x * tS,
+      tAxis.x * tAxis.z * tIc + tAxis.y * tS,
+        tAxis.y * tAxis.z * tIc - tAxis.x * tS,
+        tC + tAxis.z * tAxis.z * tIc);
+    mat3 tRinv = transpose(tR);
+    vec3 roL = tRinv * ro;
+    vec3 rdL = tRinv * rd;
+    // Sphere-trace.
+    float tMarch = 0.0;
+    bool hit = false;
+    vec3 hitP = vec3(0.0);
+    for (int i = 0; i < 48; i++) {
+      vec3 p = roL + rdL * tMarch;
+      float dT = sdTeapot(p);
+      if (dT < 0.001) { hit = true; hitP = p; break; }
+      if (tMarch > 8.0) break;
+      tMarch += dT * 0.95;
+    }
+    if (!hit) { outColor = vec4(0.0); return; }
+    // Shade the hit point.
+    vec3 normalLocal = sdTeapotNormal(hitP);
+    vec3 normal = tR * normalLocal;
+    vec3 viewDir = -rd;
+    vec3 base = chinaPattern(hitP);
+    // Three-light ceramic — key + fill + ambient + Phong specular
+    // + power-3 fresnel rim. Same parameters as the shadertoy
+    // proof-of-concept.
+    // Slowly rotating key light — gives the highlight a "sun
+    // moving across the sky" feel independent of the teapot's
+    // tumble. Vertical tilt (y=0.8) is preserved; azimuth
+    // precesses at 0.10 rad/s ≈ one revolution per minute. Per-
+    // teapot phase via v_seed so multiple teapots don't all
+    // flash their highlights in sync. Pre-scaled so length is
+    // exactly 1 — no normalize needed (sqrt(0.6² + 0.8²) = 1).
+    float keyAng = u_time * 0.10 + v_seed * 0.5;
+    vec3 keyDir = vec3(0.6 * cos(keyAng), 0.8, 0.6 * sin(keyAng));
+    vec3 fillDir = normalize(vec3(-0.4, 0.2, 0.8));
+    float keyL  = max(dot(normal, keyDir),  0.0);
+    float fillL = max(dot(normal, fillDir), 0.0) * 0.3;
+    vec3 ambient = vec3(0.50, 0.50, 0.50);
+    vec3 col = base * (ambient + keyL + fillL);
+    vec3 reflectDir = reflect(-keyDir, normal);
+    float spec = pow(max(dot(reflectDir, viewDir), 0.0), 64.0);
+    // Specular tinted by the per-instance star colour (v_c1) — gives
+    // each teapot a recognisable "glaze tint" without touching the
+    // cobalt-on-porcelain body palette. White at the highlight peak
+    // would be physically purer; the tint sells per-instance identity.
+    col += spec * v_c1 * 0.35;
+    float rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
+    col += rim * vec3(0.55, 0.65, 0.85) * 0.35;
+    outColor = vec4(col, 1.0);
     return;
   }
 
@@ -3059,6 +3317,7 @@ export function createRenderer(canvas) {
       if (s.isPulsar) flags |= 32;
       if (s.isRingworld) flags |= 64;
       if (s.isNebula) flags |= 2048;
+      if (s.isTeapot) flags |= 4096;
       // Ring plate count packed in flag bits 8-10 (0-7). 0 means
       // the ringworld has no shadow plates — shader skips all
       // plate/shadow/city-light work in that case.

@@ -102,6 +102,7 @@ Flags layout (bit values):
 - `256` / `512` / `1024` — `ringPlateCount` (3 bits, 0–7), only
   meaningful when `isRingworld` is set
 - `2048` — isNebula
+- `4096` — isTeapot
 
 The vertex shader also reads bit `32` (isPulsar) to enlarge the
 star quad to `5.0 × baseR + 8` (vs `4.3 × baseR + 8` for all
@@ -431,6 +432,95 @@ instance pixel count is the same as plain. Nebulae spawn at
 visible at a time; the inspector grid (`nebula.html`) is the
 worst case where many simultaneous nebulae stack.
 
+## Russell's teapots
+
+Flag bit 4096. Rare Easter-egg variant — the Russell teapot
+thought experiment realised as a physical object: tumbling
+porcelain teapot in space. Sphere-traced SDF rendered inside
+the common `star` program (no separate program; register peak
+~10 reg, well under the ringworld+plates ceiling).
+
+### SDF
+
+Five smin-blended primitives:
+
+- **Body** — two ellipsoids smin'd at k=0.10. Lower (1.0, 0.6,
+  1.0) is the wide bulge, upper (0.65, 0.20, 0.65) at y=0.50 is
+  the shoulder taper. Smooth-max with a horizontal plane at
+  y=-0.55 (k=0.04 fillet) gives a flat foot — the teapot has a
+  base to sit on.
+- **Lid** — flatter spheroid (0.50, 0.10, 0.50) at y=0.66, smin'd
+  to body at k=0.05.
+- **Knob** — sphere r=0.10 at y=0.80.
+- **Spout** — quadratic-Bezier tube, control points
+  `(0.85, 0.05) → (1.25, 0.30) → (1.45, 0.60)`, thickness tapers
+  0.18 → 0.05. 6-sample coarse search + 2 Newton refines (the
+  arc has a single bend, so 6 samples suffice — vs the 12 the
+  nebula filament path needs for high-bend cases).
+- **Handle** — vertically-elongated elliptical torus on the -x
+  side. Custom inline SDF (semi-axes 0.18 × 0.30, tube 0.06)
+  rather than scaling a standard `sdTorus`, which would distort
+  the SDF and risk overshoots.
+
+Bounding-sphere early-out at the top: if `length(p) - 1.7 > 0.30`
+return the bound directly without evaluating any primitives. Far-
+march fragments take ~5 ALU/step instead of ~245.
+
+### Pattern
+
+Cobalt-on-porcelain via 3-octave 3D value-noise FBM (no UV seam
+that 2D-cylindrical mapping would produce on the handle's tube).
+Two structural framings on top of the procedural noise:
+
+- **Foot fade** — `pattern *= smoothstep(-0.53, -0.45, p.y)` so
+  the flat base is clean porcelain.
+- **Collar band** — half-cobalt ring at the body-lid junction,
+  bandY in `[0.50, 0.60]`, gated radially via
+  `length(p.xz) < 0.85` so the spout (passes through this y at
+  radial 1.13+) and handle (outer arc at radial 1.09) keep their
+  procedural decoration rather than turning into a solid blue
+  belt around the whole teapot.
+
+### Shading
+
+Three-light ceramic — key (slowly precessing around y at 0.10
+rad/s) + fixed fill + neutral ambient. Phong specular (power 64)
+tinted by the per-instance star colour `v_c1` so each teapot has
+a recognisable glaze cast. Power-3 fresnel rim with a fixed
+cool-blue tint.
+
+### Tumble
+
+Rodrigues rotation around a per-teapot axis at 0.20 rad/s
+(≈31 s revolution). The axis has a strong +y bias
+(`cos(seed * 1.7) + 2.0`, with x/z components scaled by 0.20) so
+after normalize `tAxis.y ≥ 0.96` — the body's vertical axis
+traces a tiny cone of ≤16° as the teapot rotates. Lid stays
+clearly upward at every moment.
+
+Initial angle bimodally distributed near `0` or `π` (the two
+profile views, spout at +x or -x) so teapots spawn closer to
+profile rather than face-on. After spawn, the tumble carries
+through all azimuths.
+
+### Coordinate frame
+
+Note: world Y is *down* in this codebase (screen-pixel
+convention; `screenMat` flips to clip-space). The teapot SDF puts
+the lid at +y and the foot at -y, so the rendering branch
+negates `loc.y` when building the ray origin to keep "lid up,
+foot down" on screen. This is the only variant that depends on
+world-up direction; monolith/ringworld/etc. are rotationally
+ambiguous in the relevant axes.
+
+*Cost:* sphere-trace at 48 steps. Per-fragment varies wildly:
+~150 ALU on far misses (bound returns immediately), ~5000 on
+hits, ~5500 on near-miss silhouette band. Frame average for a
+viewport showing one teapot at standard size: ~1700-2400 ALU.
+Comparable to nebula. Spawns at ~1 % from star ≥ 50 so typical
+scenes have zero teapots; impact on aggregate frame cost is
+negligible most of the time.
+
 ## Crash wobble
 
 When a ship crashes into a star, the star shader receives wobble
@@ -472,6 +562,7 @@ basis. Nebula is dramatically heavier than every other variant.
 | Pulsar | ~150 | 0.4× (smaller body, big quad) |
 | Ringworld | ~200 | 0.6× |
 | Black hole | ~100 + ~80 fullscreen pass | varies |
+| Teapot (frame avg) | ~1700-2400 | ~5-7× (heavy on hits ~5000, cheap on far misses ~150 due to bounding sphere) |
 | **Nebula (ellipsoidal)** | **~2500** | **~7×** |
 | **Nebula (filamentary)** | **~3200** | **~10×** |
 
