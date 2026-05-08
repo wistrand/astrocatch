@@ -7,7 +7,7 @@ fragment shader that compiles cleanly in Shadertoy's `Image` slot.
 
 | File | Ports | Mouse |
 |---|---|---|
-| [`nebula.glsl`](nebula.glsl) | Volumetric supernova-remnant nebula — 5-shell ray-march, simplex / value-noise FBM, palette categorical, per-shell edge masks, optional Bezier-tube filamentary morphology. | Drag → 3D rotation. |
+| [`nebula.glsl`](nebula.glsl) | Volumetric supernova-remnant nebula — 5-shell ray-march, simplex / value-noise FBM, palette categorical, per-shell edge masks, optional Bezier-tube filamentary morphology, optional butterfly equatorial pinch, optional Tier-1 single-scatter dust halo. | None (static). |
 | [`ringworld.glsl`](ringworld.glsl) | Ringworld habitat — ray-cylinder intersection, near (outside / structural) and far (inside / earth-textured) faces, optional inner shadow plates with sun shadow + city lights. | Drag → 3D camera orbit. |
 | [`blackhole.glsl`](blackhole.glsl) | Black hole — event horizon, edge-on accretion disk with asymmetric lensed back-arcs, gravitational lensing distortion, procedural reference grid, photon ring.  Combines per-instance star branch + fullscreen lensing pass into a single shader. | Drag → move BH across the procedural starfield. |
 | [`monolith.glsl`](monolith.glsl) | Monolith — analytic ray-vs-axis-aligned-slab intersection in box-local coordinates (1:4:9 proportion), Rodrigues-rotation tumble around a per-monolith random axis, dominant-axis face normal selection, directional diffuse + power-4 fresnel rim. | Drag → 3D camera orbit. |
@@ -29,7 +29,11 @@ result. Examples:
 
 - `nebula.glsl`: `PALETTE_IDX 0..3` (Crab synchrotron / OIII Helix /
   hot blue / dust-reddened), `BIPOLAR_AMP`, `CAVITY_SIZE`,
-  `IS_FILAMENT`, `STRAT_OFFSET`, ...
+  `IS_FILAMENT`, `IS_BUTTERFLY` (equatorial pinch),
+  `BUTTERFLY_NECK_AMP / BUTTERFLY_SHARPNESS`, `STRAT_OFFSET`, ...
+  Per-palette dust scatter (`scatterMul` / `phaseG`) is set in the
+  palette dispatch block — Crab=0 (synchrotron is direct emission),
+  Helix=0.4, NGC 7027=0.7, dust-reddened=1.0.
 - `ringworld.glsl`: `RING_PLATE_COUNT 0..7`, `TUMBLE_RATE`,
   `SUN_R_MULT`, `OUTSIDE_AMBIENT / OUTSIDE_DIFFUSE / INSIDE_AMBIENT
   / INSIDE_DIFFUSE` (lighting balance per face — bumped from the
@@ -63,10 +67,13 @@ the harness changes:
 
 ## Performance notes
 
-- `nebula.glsl` is the heaviest of the three: 7-step volumetric
-  ray-march × ~9 simplex calls per step + 5 shell evaluations.
-  ~3000 ALU/fragment ellipsoidal, ~4500 ALU filamentary. Resize
-  the canvas down on integrated GPUs.
+- `nebula.glsl` is the heaviest port: 7-step volumetric ray-march,
+  ~250 ALU/step from the 3D FBM alone plus 5 shell evaluations
+  (each shell skips when |dF| > 3σ; transmittance early-out for
+  dense fragments). ~3000 ALU/fragment ellipsoidal Crab,
+  ~3850 ALU filamentary dust-reddened. Resize the canvas down on
+  integrated GPUs. The dust-scatter halo and butterfly pinch are
+  optional knobs at the top.
 - `ringworld.glsl` is moderate: ray-cylinder × 2 (ring + plates)
   + hex tiling on the outside face + multi-octave clouds /
   city-lights on the inside. ~200 ALU/fragment.

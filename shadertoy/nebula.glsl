@@ -4,30 +4,32 @@
 //
 // Shadertoy:
 //   Name:        Volumetric supernova-remnant nebula
-//   Description: 5-shell ray-march with simplex/value-noise FBM,
-//                palette categorical, per-shell edge masks, optional
-//                Bezier-tube filamentary morphology, pulsar pinpoint
-//                with halo + mid-glow. Drag mouse to rotate in 3D.
-//                Ported from astrocatch.live.
+//   Description: 5-shell volumetric ray-march with simplex/value-noise
+//                FBM, palette categorical, per-shell edge masks,
+//                optional Bezier-tube filamentary morphology, butterfly
+//                equatorial pinch, dust-scatter halo, pulsar pinpoint
+//                with halo + mid-glow. Ported from astrocatch.live.
 //   Tags:        nebula, volumetric, raymarch, fbm
 //   License:     MIT
 //
-//   ▶ Play the game:  https://astrocatch.live
-//   ▶ Source code:    https://github.com/wistrand/astrocatch
+//   Play the game:  https://astrocatch.live
+//   Source code:    https://github.com/wistrand/astrocatch
 //
 // Self-contained re-implementation of the procedural nebula shader
 // from docs/renderer.js. Algorithm preserved verbatim:
 // 5-shell volumetric integration with front-to-back transmittance,
 // simplex / value-noise FBM, palette categorical, per-shell edge
-// masks (Design A), pulsar pinpoint with halo + mid-glow, optional
-// quadratic-Bezier filamentary morphology.
+// masks (Design A), optional quadratic-Bezier filamentary morphology,
+// optional butterfly equatorial pinch, optional Tier-1 single-scatter
+// dust halo (Henyey-Greenstein phase function), pulsar pinpoint with
+// halo + mid-glow.
 //
-// All tweakable knobs are exposed as `const` declarations at the top —
+// All tweakable knobs are exposed as const declarations at the top —
 // change them and re-press Compile to roll a new look.
 //
-// Cost: heavy. 7-step volumetric ray-march × ~15 noise evaluations per
-// step. ~3000 ALU/fragment ellipsoidal, ~4500 ALU/fragment filamentary.
-// Disable the filamentary morph if perf matters.
+// Cost: heavy. 7-step volumetric ray-march, ~3000-3700 ALU/fragment
+// ellipsoidal, ~3700-3850 ALU/fragment filamentary. Disable the
+// filamentary morph if perf matters.
 
 const float PI  = 3.14159265;
 const float TAU = 6.28318530;
@@ -37,14 +39,13 @@ const float TAU = 6.28318530;
 // ─────────────────────────────────────────────────────────────────────
 
 // Master noise seed. Drives sample offsets, per-shell jitter patterns,
-// and randomized per-nebula component directions (bipolar pole axis,
-// filament bend direction, pulsar offset hash, etc.). Change to roll
-// a new pattern.
+// bipolar pole axis direction, filament bend direction, etc.
 const float NEBULA_SEED = 142.0;
 
 // Palette class:
 //   0 = Crab synchrotron  (cyan / yellow / orange / red / red)
-//   1 = Helix OIII        (green / cyan / pale / soft red / dim red)
+//   1 = Helix OIII        (green / cyan / pale / soft red / dim red,
+//                          bimodal radial — OIII core + Hα halo)
 //   2 = NGC 7027 hot blue (blue / cyan / pale orange / pink / muted)
 //   3 = Dust-reddened     (amber / orange / red / deep red / brown)
 const int PALETTE_IDX = 0;
@@ -58,6 +59,14 @@ const int CENTRAL_FLAVOUR = 0;
 // false = ellipsoidal closed-volume shells (default)
 // true  = quadratic-Bezier tube morphology (filamentary nebula)
 const bool IS_FILAMENT = false;
+
+// Butterfly equatorial pinch — sharp cavity at the bipolar equator
+// that the smooth cos²θ bipolar bias can't reach. Only relevant when
+// BIPOLAR_AMP is high enough; smoothstep gate keeps spheroidal
+// nebulae from picking up an awkward notched waist.
+const bool  IS_BUTTERFLY        = false;
+const float BUTTERFLY_NECK_AMP  = 0.85;  // peak field bump at equator
+const float BUTTERFLY_SHARPNESS = 8.0;   // higher = thinner waist
 
 // Bipolar pinch strength. 0.30 ≈ nearly spheroidal, 0.95 ≈ strong
 // cigar/peanut. Pinches equator inward, bulges poles outward.
@@ -106,11 +115,10 @@ const float AESTHETIC_FIBRE_GAIN = 1.00;
 const vec2 PULSAR_OFFSET = vec2(0.30, -0.20);
 
 // Filament Bezier mid-control bend amplitude.  Larger = stronger
-// S-curve.  Only used when IS_FILAMENT.  Bend DIRECTION is derived
-// from NEBULA_SEED for chaos.
+// S-curve. Only used when IS_FILAMENT.
 const float FILAMENT_BEND_AMP = 1.10;
 
-// Nebula screen radius in pixels.  v_baseR equivalent — the unit of
+// Nebula screen radius in pixels. v_baseR equivalent — the unit of
 // every distance in the algorithm. The nebula visibly extends to
 // roughly 3.0 × this radius.
 const float V_BASE_R = 120.0;
@@ -120,7 +128,7 @@ const float V_BASE_R = 120.0;
 const vec3 V_C1 = vec3(0.55, 0.85, 1.00);
 
 // ─────────────────────────────────────────────────────────────────────
-// Noise helpers (verbatim from renderer.js)
+// Noise helpers
 // ─────────────────────────────────────────────────────────────────────
 
 // Sin-free Hoskins hash — replaces the classic fract(sin) hash to
@@ -195,7 +203,7 @@ float fbm3octN(vec2 p) {
        + 0.16 * snoiseN(p * 4.28);
 }
 
-// "Fake 3D" simplex FBM via three orthogonal 2D projections.  Cheap
+// "Fake 3D" simplex FBM via three orthogonal 2D projections. Cheap
 // way to get distinct values at different z without a true 3D
 // simplex implementation.
 float fbm3DN(vec3 p) {
@@ -208,7 +216,7 @@ float fbm3DN(vec3 p) {
 // Nebula renderer
 // ─────────────────────────────────────────────────────────────────────
 
-vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
+vec4 renderNebula(vec2 loc, float u_time) {
   float v_baseR = V_BASE_R;
   float v_seed  = NEBULA_SEED;
   vec3  v_c1    = V_C1;
@@ -219,17 +227,25 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
   vec2  seedOff  = vec2(v_seed * 7.3, v_seed * 11.7);
   vec3  seedOff3 = vec3(seedOff, v_seed * 5.1);
 
-  // Slow Lissajous flow through the FBM domain.  Boils over minutes.
+  // Slow Lissajous flow through the FBM domain. Boils over minutes.
   vec3 flow = vec3(sin(u_time * 0.01 + v_seed),
                    cos(u_time * 0.02 + v_seed * 1.3),
                    sin(u_time * 0.03 + v_seed * 2.1)) * 2.0;
   float fbmScale = 0.55;
 
   // ── Palette dispatch ──────────────────────────────────────────
+  // Each palette is a different physical species — not just a hue
+  // rotation — so shell brightness profile, central source character,
+  // and dust-scatter properties all vary by palette.
   vec3  shell0Col, shell1Col, shell2Col, shell3Col, shell4Col;
   vec3  paletteGlow, paletteCore;
   float w0, w1, w2, w3, w4;
   float pulsarFalloff, pulsarPulseRate, pulsarBrightness;
+  // Per-palette dust-scatter: 0 disables the halo entirely
+  // (synchrotron is direct emission, not scattered light); phaseG
+  // is the Henyey-Greenstein asymmetry parameter, larger = more
+  // forward-peaked, typical of bigger grains.
+  float scatterMul, phaseG;
   if (PALETTE_IDX == 0) {
     shell0Col = vec3(0.55, 0.83, 0.75);
     shell1Col = vec3(0.92, 0.95, 0.32);
@@ -242,6 +258,8 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
     pulsarFalloff = 280.0;
     pulsarPulseRate = 8.00;
     pulsarBrightness = 1.70;
+    scatterMul = 0.0;
+    phaseG = 0.0;
   } else if (PALETTE_IDX == 1) {
     shell0Col = vec3(0.40, 0.90, 0.55);
     shell1Col = vec3(0.50, 0.95, 0.85);
@@ -250,10 +268,14 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
     shell4Col = vec3(0.78, 0.30, 0.30);
     paletteGlow = vec3(0.55, 0.95, 0.85);
     paletteCore = vec3(0.75, 1.00, 0.85);
-    w0 = 0.30; w1 = 0.25; w2 = 0.18; w3 = 0.12; w4 = 0.08;
+    // Bimodal radial structure — inner OIII peak (shells 0-1) and
+    // outer Hα peak (shells 3-4) with a faint mid-shell trough.
+    w0 = 0.30; w1 = 0.25; w2 = 0.10; w3 = 0.20; w4 = 0.15;
     pulsarFalloff = 150.0;
     pulsarPulseRate = 4.50;
     pulsarBrightness = 1.30;
+    scatterMul = 0.4;
+    phaseG = 0.3;
   } else if (PALETTE_IDX == 2) {
     shell0Col = vec3(0.45, 0.65, 1.00);
     shell1Col = vec3(0.55, 0.95, 1.00);
@@ -266,6 +288,8 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
     pulsarFalloff = 200.0;
     pulsarPulseRate = 6.00;
     pulsarBrightness = 1.50;
+    scatterMul = 0.7;
+    phaseG = 0.4;
   } else {
     shell0Col = vec3(0.85, 0.65, 0.35);
     shell1Col = vec3(0.95, 0.50, 0.20);
@@ -278,6 +302,8 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
     pulsarFalloff = 100.0;
     pulsarPulseRate = 0.00;
     pulsarBrightness = 0.80;
+    scatterMul = 1.0;
+    phaseG = 0.5;
   }
   w0 *= DENSITY_MULT; w1 *= DENSITY_MULT; w2 *= DENSITY_MULT;
   w3 *= DENSITY_MULT; w4 *= DENSITY_MULT;
@@ -285,15 +311,12 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
   float pulsarMul    = (CENTRAL_FLAVOUR == 1) ? 0.0 : 1.0;
   float innerHaloMul = FILL_MULT;
   float midGlowMul   = FILL_MULT;
-
-  vec2 pulsarOffset = (CENTRAL_FLAVOUR == 2) ? PULSAR_OFFSET : vec2(0.0);
+  vec2  pulsarOffset = (CENTRAL_FLAVOUR == 2) ? PULSAR_OFFSET : vec2(0.0);
 
   // ── Ellipse setup ─────────────────────────────────────────────
-  float ecc = ECC;
-  float ang = ANG;
-  float cosA = cos(ang), sinA = sin(ang);
-  float majA = 1.0 + ecc;
-  float minA = 1.0 - ecc;
+  float cosA = cos(ANG), sinA = sin(ANG);
+  float majA = 1.0 + ECC;
+  float minA = 1.0 - ECC;
   vec2 rotLocN = vec2(loc.x * cosA + loc.y * sinA,
                      -loc.x * sinA + loc.y * cosA)
                / max(v_baseR, 1.0);
@@ -301,22 +324,40 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
   float yN = rotLocN.y / minA;
   float xy_term = xN * xN + yN * yN;
 
-  // ── Bipolar setup (3D pole axis + screen-anchored jitter) ────
-  // poleDir is 3D so it rotates with the world-space sample point.
-  // waistJitter / lobeFBM stay screen-anchored — applied per-step
-  // as additive contributions to the rotated biPolarBase.
+  // ── Bipolar setup ─────────────────────────────────────────────
+  // 2D pole axis, derived from seed. dot/inversesqrt instead of
+  // length+divide; max() floor folds the > 0.001 guard.
   float poleAng = v_seed * 1.7 + 0.3;
-  vec3  poleDir = vec3(cos(poleAng), sin(poleAng), 0.0);
-  float waistJitter = 0.18 * snoiseN(loc * (0.7 / max(v_baseR, 1.0))
+  vec2 poleDir = vec2(cos(poleAng), sin(poleAng));
+  float rotLen2 = dot(rotLocN, rotLocN);
+  float invRotLen = inversesqrt(max(rotLen2, 1e-6));
+  float dirAlongPole = dot(rotLocN, poleDir) * invRotLen;
+  float cosSq = dirAlongPole * dirAlongPole;
+  float biPolarBase = -BIPOLAR_AMP * (cosSq - 0.40);
+  float waistJitter = 0.18 * snoiseN(puv * 0.7
                                       + seedOff + flow.xy);
   float lobeFBM = fbm3DN(vec3(rotLocN * 0.45 + seedOff
                                 + vec2(57.0, 73.0), v_seed * 11.0));
+  float lobeAsym = LOBE_ASYM_AMP * lobeFBM
+                 * step(0.0, dirAlongPole);
+
+  // Butterfly equatorial pinch — cot²θ peaks at the equator and
+  // falls off Gaussian-sharply toward the poles, carving a thin
+  // waist that the smooth cos²θ bipolar bias can't reach. Smooth
+  // gate on BIPOLAR_AMP keeps spheroidal nebulae from picking up
+  // an awkward notched waist.
+  float butterflyNeck = IS_BUTTERFLY
+    ? BUTTERFLY_NECK_AMP * smoothstep(0.50, 0.80, BIPOLAR_AMP)
+    : 0.0;
+  float cotSq = cosSq / max(1.0 - cosSq, 1e-3);
+  float neck = butterflyNeck * exp(-cotSq * BUTTERFLY_SHARPNESS);
+
+  float biPolar = biPolarBase + waistJitter + lobeAsym + neck;
 
   // High-freq warp — adds wisps-inside-wisps detail.
-  vec2 hiWarp = vec2(
-    snoiseN(rotLocN * 5.0 + seedOff),
-    snoiseN(rotLocN * 5.0 + seedOff + vec2(11.0, 7.0))
-  ) * 0.07;
+  vec2 hiBase = rotLocN * 5.0 + seedOff;
+  vec2 hiWarp = vec2(snoiseN(hiBase),
+                     snoiseN(hiBase + vec2(11.0, 7.0))) * 0.07;
 
   // ── Filament Bezier setup (only used when IS_FILAMENT) ───────
   vec3 filamentP0 = vec3(0.0);
@@ -346,12 +387,89 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
   // softness + STRAT_OFFSET, applied per-shell inside the loop.
   float fibreFreq = mix(2.5, 8.0, smoothstep(0.0, 2.0, r))
                   * FIBRE_FREQ_MULT;
-  float ridgedSample = ridgedFBMN(loc * fibreFreq / v_baseR
-                                   + seedOff * 0.7);
+  float ridgedSample = ridgedFBMN(puv * fibreFreq + seedOff * 0.7);
   float ridgedEdge = pow(clamp(ridgedSample, 0.0, 1.0), FIBRE_POW);
-  float smoothSample = vnoiseN(loc * (fibreFreq * 0.55) / v_baseR
+  float smoothSample = vnoiseN(puv * (fibreFreq * 0.55)
                                 + seedOff * 0.7 + vec2(13.7, 7.3));
   float smoothEdge = smoothstep(0.25, 0.75, smoothSample);
+
+  // ── Z-independent per-shell precomputes ──────────────────────
+  // Hoisted from the integration loop — none of these depend on
+  // zStep, so re-computing them per step was pure waste.
+
+  // Shock mask gates ridged FBM to compressed regions; multiplies
+  // shell brightness, not hue. Threshold 0.55 keeps the bulk at
+  // base colour.
+  float shockMask = ridgedFBMN(rotLocN * 2.5
+                                + seedOff + flow.xy * 0.5);
+  shockMask = pow(clamp(shockMask, 0.0, 1.0), 1.6);
+  float shockBrighten = 1.0
+                      + 0.55 * smoothstep(0.55, 0.85, shockMask);
+
+  // Per-shell field-threshold jitter — angular FBM bumps that
+  // break the radially-even shell spacing.
+  vec2 jitBase = rotLocN * 0.8 + seedOff;
+  float jit0 = 0.10 * snoiseN(jitBase);
+  float jit1 = 0.10 * snoiseN(jitBase + vec2(7.3, 11.0));
+  float jit2 = 0.10 * snoiseN(jitBase + vec2(13.0, 5.7));
+  float jit3 = 0.10 * snoiseN(jitBase + vec2(23.0, 17.0));
+  float jit4 = 0.10 * snoiseN(jitBase + vec2(31.0, 41.0));
+
+  // Per-shell edge softness in [0,1] — intrinsic radial role
+  // (0 = inner crisp, 1 = outer diffuse) plus per-nebula
+  // STRAT_OFFSET shift.
+  float es0 = clamp(0.00 + STRAT_OFFSET, 0.0, 1.0);
+  float es1 = clamp(0.25 + STRAT_OFFSET, 0.0, 1.0);
+  float es2 = clamp(0.50 + STRAT_OFFSET, 0.0, 1.0);
+  float es3 = clamp(0.75 + STRAT_OFFSET, 0.0, 1.0);
+  float es4 = clamp(1.00 + STRAT_OFFSET, 0.0, 1.0);
+  float edge0 = mix(ridgedEdge, smoothEdge, es0);
+  float edge1 = mix(ridgedEdge, smoothEdge, es1);
+  float edge2 = mix(ridgedEdge, smoothEdge, es2);
+  float edge3 = mix(ridgedEdge, smoothEdge, es3);
+  float edge4 = mix(ridgedEdge, smoothEdge, es4);
+  float fl0 = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es0);
+  float fl1 = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es1);
+  float fl2 = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es2);
+  float fl3 = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es3);
+  float fl4 = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es4);
+  float gnFull = FIBRE_GAIN * AESTHETIC_FIBRE_GAIN;
+  float gnSoft = gnFull * 0.5;
+  float gn0 = mix(gnFull, gnSoft, es0);
+  float gn1 = mix(gnFull, gnSoft, es1);
+  float gn2 = mix(gnFull, gnSoft, es2);
+  float gn3 = mix(gnFull, gnSoft, es3);
+  float gn4 = mix(gnFull, gnSoft, es4);
+
+  // Per-shell base colours and lumas (pre satF desaturation).
+  // satF still varies per z-step inside the loop; only the
+  // shockBrighten-multiplied base + its luma are z-independent.
+  vec3 baseShell0 = shell0Col * shockBrighten;
+  vec3 baseShell1 = shell1Col * shockBrighten;
+  vec3 baseShell2 = shell2Col * shockBrighten;
+  vec3 baseShell3 = shell3Col * shockBrighten;
+  vec3 baseShell4 = shell4Col * shockBrighten;
+  float luma0 = dot(baseShell0, vec3(0.299, 0.587, 0.114));
+  float luma1 = dot(baseShell1, vec3(0.299, 0.587, 0.114));
+  float luma2 = dot(baseShell2, vec3(0.299, 0.587, 0.114));
+  float luma3 = dot(baseShell3, vec3(0.299, 0.587, 0.114));
+  float luma4 = dot(baseShell4, vec3(0.299, 0.587, 0.114));
+
+  // Drop a per-step divide in the ellipsoidal r3D.
+  float invMinASq = 1.0 / (minA * minA);
+
+  // Henyey-Greenstein phase function precomputes for the per-step
+  // scatter integral. (1-g²) and g² are palette-derived and
+  // z-independent.
+  float phaseG2 = phaseG * phaseG;
+  float oneMinusG2 = 1.0 - phaseG2;
+  float scatterCoeff = scatterMul * pulsarBrightness;
+
+  // Factor the loop-invariant parts of the FBM sample-point
+  // construction. The xy and z-constant components don't depend
+  // on zStep, so the in-loop work collapses to a single fma in z.
+  vec2  p3xyConst = (puv + hiWarp) * fbmScale + seedOff3.xy + flow.xy;
+  float p3zConst  = seedOff3.z + flow.z;
 
   // ── Volumetric integration ───────────────────────────────────
   const int   N_STEPS = 7;
@@ -364,34 +482,15 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
     float t = (float(i) + 0.5) / float(N_STEPS);
     // Front to back so trans attenuates back shells.
     float zStep = ZMAX - 2.0 * ZMAX * t;
-    // 3D camera-space sample point, then rotated into world space
-    // by the mouse-driven rotation matrix. Subsequent operations
-    // (FBM sample, ellipsoid r3D, bipolar projection) all use the
-    // rotated world position.
-    vec3 pCam   = vec3(puv + hiWarp, zStep);
-    vec3 pWorld = rotMat * pCam;
-    vec3 p3 = pWorld * fbmScale + seedOff3 + flow;
+    vec3 p3 = vec3(p3xyConst, zStep * fbmScale + p3zConst);
     float fbm = fbm3DN(p3);
-
-    // Per-step bipolar: project the rotated world position onto a
-    // 3D pole axis, then apply the cigar-shape bias. The pole
-    // direction stays in world frame, so as the user rotates with
-    // the mouse, the bipolar pinch axis stays anchored to the
-    // nebula's structure (rotates visibly).
-    float pLen = length(pWorld);
-    float dirAlongPole = pLen > 0.001
-      ? dot(pWorld, poleDir) / pLen : 0.0;
-    float biPolarBase = -BIPOLAR_AMP * (dirAlongPole * dirAlongPole - 0.40);
-    float lobeAsymThis = LOBE_ASYM_AMP * lobeFBM * step(0.0, dirAlongPole);
-    float biPolar = biPolarBase + waistJitter + lobeAsymThis;
 
     float r3D;
     float field;
     if (IS_FILAMENT) {
+      vec3 pos3 = vec3(puv, zStep);
       // Closest point on quadratic Bezier — 12 samples + 2 Newton
-      // iterations. Searches in WORLD space so the filament
-      // rotates with the mouse.
-      vec3 pos3 = pWorld;
+      // iterations.
       float bestT  = 0.5;
       float bestD2 = 1e9;
       for (int j = 0; j < 12; j++) {
@@ -430,130 +529,121 @@ vec4 renderNebula(vec2 loc, float u_time, mat3 rotMat) {
       r3D = distToCurve / max(thickness, 0.05);
       field = r3D + 0.75 * fbm;
     } else {
-      // Ellipsoidal r3D in WORLD frame. Apply the ellipse's local
-      // 2D rotation (ANG) and per-axis scaling to pWorld.xy / .z.
-      vec2 rotXY = vec2(pWorld.x * cosA + pWorld.y * sinA,
-                       -pWorld.x * sinA + pWorld.y * cosA);
-      float xN = rotXY.x / majA;
-      float yN = rotXY.y / minA;
-      float zScaled = pWorld.z / minA;
-      r3D = sqrt(xN * xN + yN * yN + zScaled * zScaled);
-      // Bipolar bias faded to zero inside the cavity.
+      // invMinASq hoisted pre-loop drops a per-step divide.
+      r3D = sqrt(xy_term + zStep * zStep * invMinASq);
       float bpFade = smoothstep(0.6, 1.3, r3D);
       field = r3D + 0.75 * fbm + biPolar * bpFade;
     }
 
-    // Per-step shock mask + radial saturation curve.
-    float shockMask = ridgedFBMN(rotLocN * 2.5
-                                  + seedOff + flow.xy * 0.5);
-    shockMask = pow(clamp(shockMask, 0.0, 1.0), 1.6);
-    float shockBrighten = 1.0 + 0.55 * smoothstep(0.55, 0.85, shockMask);
-    float satF = mix(1.25, 0.80, smoothstep(0.5, 2.5, r3D));
-
     float rhoStep = 0.0;
     vec3  colStep = vec3(0.0);
 
-    // Shell 0 — innermost, intrinsic softness 0.0
+    // Radial saturation curve — saturated near the source, muted
+    // at the outer dust. Depends on r3D so stays in the loop.
+    float satF = mix(1.25, 0.80, smoothstep(0.5, 2.5, r3D));
+
+    // Shell 0 — innermost (sigma 0.06). Edge style: crisp ridged
+    // filaments (intrinsic softness 0.0). 3σ skip: outside |dF| <
+    // 3σ the Gaussian is < exp(-9) ≈ 1e-4 — well below the
+    // perceptual floor after compositing.
     {
-      float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                  + vec2(0.0, 0.0));
-      float dF = field - (1.50 * CAVITY_SIZE + jit);
-      float m = exp(-dF * dF / 0.0036);
-      if (dF > 0.0) m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
-      float es = clamp(0.0 + STRAT_OFFSET, 0.0, 1.0);
-      float edge = mix(ridgedEdge, smoothEdge, es);
-      float fl = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es);
-      float gn = mix(FIBRE_GAIN * AESTHETIC_FIBRE_GAIN,
-                     FIBRE_GAIN * AESTHETIC_FIBRE_GAIN * 0.5, es);
-      m *= fl + gn * edge;
-      vec3 shellC = shell0Col * shockBrighten;
-      float satFShell0 = min(satF, 1.05);
-      float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-      shellC = mix(vec3(luma), shellC, satFShell0);
-      rhoStep += m * w0;
-      colStep += shellC * m * w0;
+      float dF = field - (1.50 * CAVITY_SIZE + jit0);
+      float dFsq = dF * dF;
+      if (dFsq < 0.0324) {
+        float m = exp(-dFsq / 0.0036);
+        m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
+        m *= fl0 + gn0 * edge0;
+        // Cap radial saturation boost on shell 0 (inner band) so
+        // saturated palettes don't go neon.
+        float satFShell0 = min(satF, 1.05);
+        vec3 shellC = mix(vec3(luma0), baseShell0, satFShell0);
+        rhoStep += m * w0;
+        colStep += shellC * m * w0;
+      }
     }
-    // Shell 1 — softness 0.25
+    // Shell 1 (sigma 0.07). Intrinsic softness 0.25.
     {
-      float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                  + vec2(7.3, 11.0));
-      float dF = field - (1.77 * CAVITY_SIZE + jit);
-      float m = exp(-dF * dF / 0.0049);
-      if (dF > 0.0) m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
-      float es = clamp(0.25 + STRAT_OFFSET, 0.0, 1.0);
-      float edge = mix(ridgedEdge, smoothEdge, es);
-      float fl = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es);
-      float gn = mix(FIBRE_GAIN * AESTHETIC_FIBRE_GAIN,
-                     FIBRE_GAIN * AESTHETIC_FIBRE_GAIN * 0.5, es);
-      m *= fl + gn * edge;
-      vec3 shellC = shell1Col * shockBrighten;
-      float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-      shellC = mix(vec3(luma), shellC, satF);
-      rhoStep += m * w1;
-      colStep += shellC * m * w1;
+      float dF = field - (1.77 * CAVITY_SIZE + jit1);
+      float dFsq = dF * dF;
+      if (dFsq < 0.0441) {
+        float m = exp(-dFsq / 0.0049);
+        m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
+        m *= fl1 + gn1 * edge1;
+        vec3 shellC = mix(vec3(luma1), baseShell1, satF);
+        rhoStep += m * w1;
+        colStep += shellC * m * w1;
+      }
     }
-    // Shell 2 — softness 0.50
+    // Shell 2 (sigma 0.08). Intrinsic softness 0.50.
     {
-      float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                  + vec2(13.0, 5.7));
-      float dF = field - (1.97 * CAVITY_SIZE + jit);
-      float m = exp(-dF * dF / 0.0064);
-      if (dF > 0.0) m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
-      float es = clamp(0.50 + STRAT_OFFSET, 0.0, 1.0);
-      float edge = mix(ridgedEdge, smoothEdge, es);
-      float fl = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es);
-      float gn = mix(FIBRE_GAIN * AESTHETIC_FIBRE_GAIN,
-                     FIBRE_GAIN * AESTHETIC_FIBRE_GAIN * 0.5, es);
-      m *= fl + gn * edge;
-      vec3 shellC = shell2Col * shockBrighten;
-      float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-      shellC = mix(vec3(luma), shellC, satF);
-      rhoStep += m * w2;
-      colStep += shellC * m * w2;
+      float dF = field - (1.97 * CAVITY_SIZE + jit2);
+      float dFsq = dF * dF;
+      if (dFsq < 0.0576) {
+        float m = exp(-dFsq / 0.0064);
+        m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
+        m *= fl2 + gn2 * edge2;
+        vec3 shellC = mix(vec3(luma2), baseShell2, satF);
+        rhoStep += m * w2;
+        colStep += shellC * m * w2;
+      }
     }
-    // Shell 3 — softness 0.75
+    // Shell 3 (sigma 0.10). Intrinsic softness 0.75.
     {
-      float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                  + vec2(23.0, 17.0));
-      float dF = field - (2.29 * CAVITY_SIZE + jit);
-      float m = exp(-dF * dF / 0.0100);
-      if (dF > 0.0) m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
-      float es = clamp(0.75 + STRAT_OFFSET, 0.0, 1.0);
-      float edge = mix(ridgedEdge, smoothEdge, es);
-      float fl = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es);
-      float gn = mix(FIBRE_GAIN * AESTHETIC_FIBRE_GAIN,
-                     FIBRE_GAIN * AESTHETIC_FIBRE_GAIN * 0.5, es);
-      m *= fl + gn * edge;
-      vec3 shellC = shell3Col * shockBrighten;
-      float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-      shellC = mix(vec3(luma), shellC, satF);
-      rhoStep += m * w3;
-      colStep += shellC * m * w3;
+      float dF = field - (2.29 * CAVITY_SIZE + jit3);
+      float dFsq = dF * dF;
+      if (dFsq < 0.0900) {
+        float m = exp(-dFsq / 0.0100);
+        m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
+        m *= fl3 + gn3 * edge3;
+        vec3 shellC = mix(vec3(luma3), baseShell3, satF);
+        rhoStep += m * w3;
+        colStep += shellC * m * w3;
+      }
     }
-    // Shell 4 — softness 1.0 (fully soft)
+    // Shell 4 (sigma 0.13). Intrinsic softness 1.0 (fully soft).
+    // dustM exports shell 4's m as the dust-density proxy used by
+    // the scatter integral below. Stays 0 outside the 3σ window
+    // so scatter only kicks in where dust is present.
+    float dustM = 0.0;
     {
-      float jit = 0.10 * snoiseN(rotLocN * 0.8 + seedOff
-                                  + vec2(31.0, 41.0));
-      float dF = field - (2.59 * CAVITY_SIZE + jit);
-      float m = exp(-dF * dF / 0.0169);
-      if (dF > 0.0) m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
-      float es = clamp(1.0 + STRAT_OFFSET, 0.0, 1.0);
-      float edge = mix(ridgedEdge, smoothEdge, es);
-      float fl = mix(FIBRE_FLOOR, FIBRE_FLOOR + 0.30, es);
-      float gn = mix(FIBRE_GAIN * AESTHETIC_FIBRE_GAIN,
-                     FIBRE_GAIN * AESTHETIC_FIBRE_GAIN * 0.5, es);
-      m *= fl + gn * edge;
-      vec3 shellC = shell4Col * shockBrighten;
-      float luma = dot(shellC, vec3(0.299, 0.587, 0.114));
-      shellC = mix(vec3(luma), shellC, satF);
-      rhoStep += m * w4;
-      colStep += shellC * m * w4;
+      float dF = field - (2.59 * CAVITY_SIZE + jit4);
+      float dFsq = dF * dF;
+      if (dFsq < 0.1521) {
+        float m = exp(-dFsq / 0.0169);
+        m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
+        m *= fl4 + gn4 * edge4;
+        vec3 shellC = mix(vec3(luma4), baseShell4, satF);
+        rhoStep += m * w4;
+        colStep += shellC * m * w4;
+        dustM = m;
+      }
     }
 
-    // Beer-Lambert front-to-back composite.
+    // Tier-1 single-scatter halo — palette-aware dust glow around
+    // the central source. Optically-thin: no source-to-sample or
+    // sample-to-camera opacity integrals. The trans factor still
+    // attenuates the back-side scatter via the existing composite.
+    if (scatterMul > 0.0 && dustM > 0.0) {
+      vec3 fromSource = vec3(puv, zStep) - vec3(pulsarOffset, 0.0);
+      // Plummer-style soft core (0.5 v_baseR-unit radius) so 1/r²
+      // doesn't spike at samples adjacent to the source.
+      float rcs2 = dot(fromSource, fromSource) + 0.25;
+      float invR = inversesqrt(rcs2);
+      float cosScat = fromSource.z * invR;
+      // Phase-function softening: ε=0.05 caps the HG forward
+      // peak. pow(x, 1.5) spelled as x*sqrt(x).
+      float dInner = 1.0 + phaseG2 - 2.0 * phaseG * cosScat + 0.05;
+      float denom = dInner * sqrt(dInner);
+      float phase = oneMinusG2 / denom;
+      colStep += paletteCore * (dustM * phase * scatterCoeff / rcs2);
+    }
+
+    // Beer-Lambert front-to-back composite + early-out once the
+    // back of the volume can no longer contribute meaningfully.
     shellMask     += rhoStep * trans;
     shellColAccum += colStep * trans;
     trans *= exp(-rhoStep * 1.5);
+    if (trans < 0.005) break;
   }
 
   if (shellMask > 0.001) shellColAccum /= shellMask;
@@ -598,26 +688,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   // Centre the nebula on screen.
   vec2 loc = fragCoord - res * 0.5;
 
-  // 3D mouse rotation. Drag horizontally → yaw around Y axis;
-  // drag vertically → pitch around X axis. iMouse defaults to
-  // (0, 0) before the first click so the initial view is unrotated
-  // (rotMat = identity).
-  float yaw = 0.0;
-  float pitch = 0.0;
-  if (iMouse.x > 0.0 || iMouse.y > 0.0) {
-    yaw   = (iMouse.x / res.x - 0.5) * TAU;
-    pitch = (iMouse.y / res.y - 0.5) * PI;
-  }
-  float cy = cos(yaw),   sy = sin(yaw);
-  float cp = cos(pitch), sp = sin(pitch);
-  // R = Rx(pitch) * Ry(yaw). Columns of R for GLSL mat3 ctor:
-  mat3 rotMat = mat3(
-    vec3(cy,    sp * sy,   -cp * sy),  // col 0
-    vec3(0.0,   cp,         sp),       // col 1
-    vec3(sy,    -sp * cy,   cp * cy)   // col 2
-  );
-
-  vec4 nebula = renderNebula(loc, iTime, rotMat);
+  vec4 nebula = renderNebula(loc, iTime);
   // Composite the premultiplied output over black background.
   fragColor = vec4(nebula.rgb, 1.0);
 }
