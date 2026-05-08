@@ -1,9 +1,25 @@
-// 3x3 random Nebula inspector. No background, no labels,
-// no input — just a static grid of nine differently-seeded
-// Nebulae for visual review of the procedural shader.
+// Variant inspector. Renders a deterministic grid of one star
+// type with per-cell variations for visual review of the
+// procedural shader. URL params:
+//
+//   ?type=<name>       which variant to render. Default: nebula.
+//                      Recognised: plain, binary, bh, bhBinary,
+//                      monolith, ringworld, pulsar, nebula, teapot.
+//   ?seed=<float>      base seed for the whole grid. Each cell
+//                      derives its own seed by stride. Page writes
+//                      its random pick back to the URL on first
+//                      load so the bar always shows the seed.
+//   ?grid=N or ?grid=CxR  grid size; clamped to [1, 20] per axis.
+//                      Default: 3x3.
+//
+// Backward compatibility: with no `type=`, behaves identically
+// to the previous nebula-only inspector.
 
 import { createRenderer } from "./renderer.js";
-import { PALETTE_LEN } from "./star-rendering.js";
+import {
+  PALETTE_LEN, assignBinary, binaryPositions,
+} from "./star-rendering.js";
+import { starGM } from "./physics.js";
 
 const canvas = document.getElementById("c");
 let W = 0, H = 0, DPR = 1;
@@ -30,35 +46,42 @@ if (!renderer) {
 }
 renderer.setViewport(W, H, DPR);
 
-function makeNebula(x, y, r, colorIdx, seed) {
-  return {
-    x, y, r,
-    colorIdx,
-    seed,
-    caught: false,
-    pulse: 0,
-    hasRays: false,
-    nGran: 6,
-    isBlackHole: false,
-    isBinary: false,
-    binary: null,
-    isMonolith: false,
-    isPulsar: false,
-    isRingworld: false,
-    ringPlateCount: 0,
-    isNebula: true,
-  };
-}
-
-// URL param ?seed=<float> drives the base seed for the whole grid.
-// If absent, we pick a random seed and write it back to the URL via
-// history.replaceState so the bar always shows the current seed.
-// Each cell derives its own per-nebula seed from base + cellIndex *
-// stride; the renderer then feeds that into v_seed and every per-
-// nebula categorical/continuous axis (palette, bipolar amp, cavity
-// size, fibre params, central flavour, pulsar offset, morphCat...)
-// reads from that single number. Same seed → identical nebula grid.
 const urlParams = new URLSearchParams(window.location.search);
+
+// ─── Type registry ────────────────────────────────────────
+// Each entry mutates a base star to express the variant.
+// `apply(s, seed)` runs after the star is constructed; it can
+// flip flags, attach a `binary`, set `ringPlateCount`, etc.
+// `seed` is the per-cell seed (handy for any deterministic
+// internal variation we want to drive — e.g. ringPlateCount).
+function hash01(s) {
+  return ((Math.sin(s * 12.9898) * 43758.5453) % 1 + 1) % 1;
+}
+// rMin / rMax bracket the per-cell size range. Heavy variants
+// (pulsar, nebula, teapot) use higher floors because the
+// gameplay's minR rules make their visuals depend on adequate
+// size; smaller floors here would just produce illegible cells.
+const TYPE_REGISTRY = {
+  plain:     { apply: () => {},                                rMin: 22, rMax: 52 },
+  binary:    { apply: (s) => assignBinary(s),                  rMin: 28, rMax: 56 },
+  bh:        { apply: (s) => { s.isBlackHole = true; },        rMin: 24, rMax: 52 },
+  bhBinary:  { apply: (s) => { s.isBlackHole = true; assignBinary(s); }, rMin: 28, rMax: 56 },
+  monolith:  { apply: (s) => { s.isMonolith = true; },         rMin: 22, rMax: 50 },
+  ringworld: { apply: (s, seed) => {
+                 s.isRingworld = true;
+                 s.ringPlateCount = Math.floor(hash01(seed * 17.3) * 8);
+               },                                              rMin: 24, rMax: 50 },
+  pulsar:    { apply: (s) => { s.isPulsar = true; },           rMin: 30, rMax: 54 },
+  nebula:    { apply: (s) => { s.isNebula = true; },           rMin: 30, rMax: 56 },
+  teapot:    { apply: (s) => { s.isTeapot = true; },           rMin: 40, rMax: 64 },
+};
+const TYPE = (urlParams.get("type") || "nebula").toLowerCase();
+const cfg = TYPE_REGISTRY[TYPE] || TYPE_REGISTRY.nebula;
+const RESOLVED_TYPE = TYPE_REGISTRY[TYPE] ? TYPE : "nebula";
+document.title = `ASTROCATCH — ${RESOLVED_TYPE} inspector`;
+
+// Base seed: random if absent, written back to the URL bar so
+// reloading without changing the URL keeps the same grid.
 const seedParam = urlParams.get("seed");
 const baseSeed = seedParam !== null && !Number.isNaN(parseFloat(seedParam))
   ? parseFloat(seedParam)
@@ -68,16 +91,8 @@ if (seedParam === null) {
   url.searchParams.set("seed", baseSeed.toFixed(4));
   window.history.replaceState(null, "", url.toString());
 }
-function hash01(s) {
-  // sin-based hash → [0, 1). Stable per integer input given fixed
-  // float math; only used to derive deterministic per-cell colour
-  // index from the base seed.
-  return ((Math.sin(s * 12.9898) * 43758.5453) % 1 + 1) % 1;
-}
 
-// URL param ?grid=N (square N×N) or ?grid=CxR (cols × rows).
-// Defaults to 3×3. Clamped to [1, 20] per axis to avoid pathological
-// canvases of 1000+ nebulae.
+// Grid size: ?grid=N (square) or ?grid=CxR. Clamped to [1, 20].
 const gridParam = urlParams.get("grid");
 let gridCols = 3, gridRows = 3;
 if (gridParam) {
@@ -94,19 +109,51 @@ if (gridParam) {
 
 const SPACING_X = 380;
 const SPACING_Y = 380;
-const CELL_R = 36;
+function makeStar(x, y, r, colorIdx, seed) {
+  const s = {
+    x, y, r,
+    gm: starGM(r),
+    colorIdx,
+    seed,
+    caught: false,
+    pulse: 0,
+    hasRays: true,
+    nGran: 6,
+    planets: null,
+    comets: null,
+    isBlackHole: false,
+    isBinary: false,
+    binary: null,
+    isMonolith: false,
+    isPulsar: false,
+    isRingworld: false,
+    ringPlateCount: 0,
+    isNebula: false,
+    isTeapot: false,
+  };
+  cfg.apply(s, seed);
+  // Nebula doesn't want diffraction rays from the central
+  // pinpoint; teapot/monolith/ringworld replace the body
+  // entirely so rays are irrelevant.
+  if (s.isNebula || s.isMonolith || s.isRingworld || s.isTeapot) {
+    s.hasRays = false;
+  }
+  return s;
+}
+
 stars = [];
 let cellIdx = 0;
 for (let row = 0; row < gridRows; row++) {
   for (let col = 0; col < gridCols; col++) {
     const x = col * SPACING_X;
     const y = row * SPACING_Y;
-    // Per-cell seed striding so cells get distinctly different
-    // categorical bins. 7.13 stride was picked so adjacent cells
-    // routinely pick different palettes / morph cats.
     const cellSeed = baseSeed + cellIdx * 7.13;
     const colorIdx = Math.floor(hash01(cellSeed * 31.0) * PALETTE_LEN);
-    stars.push(makeNebula(x, y, CELL_R, colorIdx, cellSeed));
+    // Independent hash for size so colour and size vary
+    // independently rather than co-correlating with the seed.
+    const tR = hash01(cellSeed * 5.7);
+    const r = cfg.rMin + (cfg.rMax - cfg.rMin) * tR;
+    stars.push(makeStar(x, y, r, colorIdx, cellSeed));
     cellIdx++;
   }
 }
@@ -202,6 +249,7 @@ window.addEventListener("keydown", (e) => {
 });
 
 const TIME_WRAP = Math.PI * 2 * 10000;
+let frame = 0;
 function loop(t) {
   const tSec = (t / 1000) % TIME_WRAP;
 
@@ -212,25 +260,49 @@ function loop(t) {
 
   const starBatch = [];
   for (const s of stars) {
-    starBatch.push({
-      x: s.x, y: s.y, r: s.r,
-      colorIdx: s.colorIdx,
-      seed: s.seed,
-      pulse: 0,
-      wobble: 0, wobbleAngle: 0,
-      hasRays: false, nGran: 6,
-      isCurrent: false, isNext: false, isPast: false,
-      isBlackHole: false,
-      isMonolith: false,
-      isRingworld: false,
-      ringPlateCount: 0,
-      isPulsar: false,
-      isNebula: true,
-    });
+    if (s.isBinary && s.binary) {
+      const subs = binaryPositions(s, frame);
+      const b = s.binary;
+      const orbAngle = frame * b.omega + b.phase;
+      for (let j = 0; j < 2; j++) {
+        const subBH = j === 1 && b.accretorIsBH;
+        const tidalSeed = (orbAngle + j * Math.PI - tSec) % TIME_WRAP;
+        starBatch.push({
+          x: subs[j].x, y: subs[j].y,
+          r: subBH ? subs[j].r * 0.5 : subs[j].r,
+          colorIdx: j === 0 ? b.colorIdx1 : b.colorIdx2,
+          seed: tidalSeed,
+          pulse: 0,
+          wobble: 0, wobbleAngle: 0,
+          hasRays: s.hasRays, nGran: s.nGran,
+          isCurrent: false, isNext: false, isPast: false,
+          isBlackHole: subBH,
+        });
+      }
+    } else {
+      starBatch.push({
+        x: s.x, y: s.y,
+        r: s.isBlackHole ? s.r * 0.5 : s.r,
+        colorIdx: s.colorIdx,
+        seed: s.seed,
+        pulse: 0,
+        wobble: 0, wobbleAngle: 0,
+        hasRays: s.hasRays, nGran: s.nGran,
+        isCurrent: false, isNext: false, isPast: false,
+        isBlackHole: s.isBlackHole,
+        isMonolith: s.isMonolith,
+        isRingworld: s.isRingworld,
+        ringPlateCount: s.ringPlateCount | 0,
+        isPulsar: s.isPulsar,
+        isNebula: s.isNebula,
+        isTeapot: s.isTeapot,
+      });
+    }
   }
   renderer.drawStarBatch(starBatch, cam);
   renderer.finalizeFrame([]);
 
+  frame++;
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);
