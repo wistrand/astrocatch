@@ -1430,43 +1430,69 @@ function computeLaunchWindow() {
   }
   const dt = 1;
   const maxSteps = 2000;
-  for (let step = 0; step < maxSteps; step++) {
-    // Velocity-Verlet step with gravity from cs only.
-    const dx = cs.x - x, dy = cs.y - y;
-    const r2 = dx * dx + dy * dy;
-    const r = Math.sqrt(r2);
-    const a = GM / r2;
-    const ax = a * dx / r, ay = a * dy / r;
-    const nx = x + vx * dt + 0.5 * ax * dt * dt;
-    const ny = y + vy * dt + 0.5 * ay * dt * dt;
-    const dx2 = cs.x - nx, dy2 = cs.y - ny;
-    const r22 = dx2 * dx2 + dy2 * dy2;
-    const r_ = Math.sqrt(r22);
-    const a2 = GM / r22;
-    const ax2 = a2 * dx2 / r_, ay2 = a2 * dy2 / r_;
-    vx += 0.5 * (ax + ax2) * dt;
-    vy += 0.5 * (ay + ay2) * dt;
-    x = nx; y = ny;
-    const curSlot = slotForTheta(Math.atan2(y - cs.y, x - cs.x));
-    const s = _lwSamples[curSlot];
-    if (!s.used) {
-      s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
-      filled++;
-      if (filled >= LAUNCH_WINDOW_SAMPLES) break;
+  // Adaptive sub-stepping: ω = L / r² spikes near perihelion on
+  // eccentric orbits, and a single dt=1 step can sweep more than
+  // one slot's angular width — permanently leaving those slots
+  // unfilled since each slot only records on first visit. Each
+  // outer iteration estimates angular travel per step and splits
+  // into N substeps so each substep crosses at most ~half a slot.
+  const HALF_SLOT = _LW_STEP * 0.5;
+  const MAX_SUBSTEPS = 32;
+  outer: for (let step = 0; step < maxSteps; step++) {
+    const rx = x - cs.x, ry = y - cs.y;
+    const r2_pre = rx * rx + ry * ry;
+    const omega = (rx * vy - ry * vx) / r2_pre;
+    const angPerStep = Math.abs(omega) * dt;
+    const subSteps = angPerStep > HALF_SLOT
+      ? Math.min(MAX_SUBSTEPS, Math.ceil(angPerStep / HALF_SLOT))
+      : 1;
+    const subDt = dt / subSteps;
+    for (let sub = 0; sub < subSteps; sub++) {
+      // Velocity-Verlet step with gravity from cs only.
+      const dx = cs.x - x, dy = cs.y - y;
+      const r2 = dx * dx + dy * dy;
+      const r = Math.sqrt(r2);
+      const a = GM / r2;
+      const ax = a * dx / r, ay = a * dy / r;
+      const nx = x + vx * subDt + 0.5 * ax * subDt * subDt;
+      const ny = y + vy * subDt + 0.5 * ay * subDt * subDt;
+      const dx2 = cs.x - nx, dy2 = cs.y - ny;
+      const r22 = dx2 * dx2 + dy2 * dy2;
+      const r_ = Math.sqrt(r22);
+      const a2 = GM / r22;
+      const ax2 = a2 * dx2 / r_, ay2 = a2 * dy2 / r_;
+      vx += 0.5 * (ax + ax2) * subDt;
+      vy += 0.5 * (ay + ay2) * subDt;
+      x = nx; y = ny;
+      const curSlot = slotForTheta(Math.atan2(y - cs.y, x - cs.x));
+      const s = _lwSamples[curSlot];
+      if (!s.used) {
+        s.x = x; s.y = y; s.vx = vx; s.vy = vy; s.used = true;
+        filled++;
+        if (filled >= LAUNCH_WINDOW_SAMPLES) break outer;
+      }
     }
   }
   if (filled < 4) return;
 
-  // Test each sample with predictCapture at a few boost factors.
-  const factors = [0.30, 0.55, 0.85, 1.30, 2.00, 2.80];
+  // Test each sample with predictCapture across the same boost
+  // factor grid that applyBoostAndArm uses (linear from
+  // BOOST_SEARCH_MIN to BOOST_SEARCH_MAX in BOOST_SEARCH_STEPS
+  // points). A coarser grid would miss narrow valid windows and
+  // produce visible gaps where the game would actually succeed.
+  const minF = AC.BOOST_SEARCH_MIN;
+  const maxF = AC.BOOST_SEARCH_MAX;
+  const fSteps = AC.BOOST_SEARCH_STEPS;
+  const fSpan = maxF - minF;
   const startFrame = ball.frame || 0;
   for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
     const s = _lwSamples[i];
     const w = _lwWindow[i];
     if (!s.used) { w.used = false; continue; }
     let success = false;
-    for (let k = 0; k < factors.length; k++) {
-      const f = factors[k];
+    for (let k = 0; k < fSteps; k++) {
+      const t = k / (fSteps - 1);
+      const f = minF + fSpan * t;
       const pred = AC.predictCapture(stars, ball.currentStar,
         s.x, s.y, s.vx * (1 + f), s.vy * (1 + f),
         startFrame, _lwPredictOut);
