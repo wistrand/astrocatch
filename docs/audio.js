@@ -136,6 +136,17 @@ const MUSIC_SCHEDULE_INTERVAL = 108;       // ms
 const MUSIC_SAFETY_MARGIN = 0.03;          // seconds
 const MUSIC_MAX_STEPS_PER_TICK = 32;       // clamp if tab stalled
 
+// Small lead applied to every SFX schedule time. Without this,
+// `setValueAtTime(v, c.currentTime)` lands at "now" — by the
+// time the audio thread reads it the value is already in the
+// past, which mobile WebAudio implementations report as a click
+// at that automation point. The music scheduler avoids this by
+// always committing events at least `c.currentTime + 0.01` into
+// the future; SFX needs the same treatment. 10 ms is below the
+// typical audio-visual perception threshold (~30 ms) so games
+// won't feel input-lagged.
+const SFX_LEAD = 0.01;                     // seconds
+
 // Chord-root frequencies for the bass (low octave). Index is
 // looked up through `MUSIC_PROGRESSIONS[tier][bar]` at runtime,
 // so adding a new chord means extending all three parallel
@@ -451,7 +462,7 @@ export function createAudio() {
   function boost() {
     const c = ensure();
     if (!c || muted) return;
-    const t = c.currentTime;
+    const t = c.currentTime + SFX_LEAD;
     const dur = 0.23;
 
     // Open lowpass — bright through the attack, gently darkens
@@ -466,6 +477,11 @@ export function createAudio() {
     outGain.gain.setValueAtTime(0.0001, t);
     outGain.gain.exponentialRampToValueAtTime(0.42, t + 0.012);
     outGain.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    // Final linear ramp to actual 0 — exponentialRamp can't
+    // reach 0, so without this the gain holds at 0.0001 and the
+    // oscillator's stop event terminates a non-zero waveform.
+    // Some mobile DACs click on that abrupt end even at -80 dB.
+    outGain.gain.linearRampToValueAtTime(0, t + dur + 0.005);
 
     // Rising perfect fifth: A5 → E6. Pitch reaches the top
     // slightly before the envelope tails so the ear locks onto
@@ -488,8 +504,11 @@ export function createAudio() {
     hi.connect(filter);
     hi.start(t);
     hi.stop(t + dur + 0.05);
+    hi.onended = () => { hi.disconnect(); };
 
-    // Lower voice — octave down for body.
+    // Lower voice — octave down for body. Owns the shared
+    // filter+outGain cleanup; both oscs stop at the same time so
+    // either could; lo is arbitrary.
     const lo = c.createOscillator();
     lo.type = "sine";
     lo.detune.value = detuneCents;
@@ -498,6 +517,11 @@ export function createAudio() {
     lo.connect(filter);
     lo.start(t);
     lo.stop(t + dur + 0.05);
+    lo.onended = () => {
+      lo.disconnect();
+      filter.disconnect();
+      outGain.disconnect();
+    };
 
     filter.connect(outGain).connect(master);
   }
@@ -511,10 +535,12 @@ export function createAudio() {
     const c = ensure();
     if (!c || muted) return;
     // Optional positive delay for pre-scheduling captures ahead
-    // of time (compensates for Bluetooth output latency). A
-    // negative delay is clamped to 0 — Web Audio can't schedule
-    // in the past.
-    const t = c.currentTime + Math.max(delaySeconds || 0, 0);
+    // of time (compensates for Bluetooth output latency). The
+    // floor is SFX_LEAD (not 0) so even a "schedule immediately"
+    // call places automation events safely in the future — Web
+    // Audio can't schedule in the past, and "right now" is past
+    // by the time the audio thread reads it.
+    const t = c.currentTime + Math.max(delaySeconds || 0, SFX_LEAD);
 
     // A-major triad pitches (Hz). Third and fifth live a major
     // third and perfect fifth ABOVE the root — not below — so
@@ -548,9 +574,11 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.32, start + 0.006);
       g.gain.exponentialRampToValueAtTime(0.0001, start + noteDur);
+      g.gain.linearRampToValueAtTime(0, start + noteDur + 0.005);
       osc.connect(g).connect(master);
       osc.start(start);
       osc.stop(start + noteDur + 0.05);
+      osc.onended = () => { osc.disconnect(); g.disconnect(); };
 
       // Slightly inharmonic overtone for bell character.
       const osc2 = c.createOscillator();
@@ -561,9 +589,11 @@ export function createAudio() {
       g2.gain.setValueAtTime(0.0001, start);
       g2.gain.exponentialRampToValueAtTime(0.09, start + 0.006);
       g2.gain.exponentialRampToValueAtTime(0.0001, start + noteDur * 0.7);
+      g2.gain.linearRampToValueAtTime(0, start + noteDur * 0.7 + 0.005);
       osc2.connect(g2).connect(master);
       osc2.start(start);
       osc2.stop(start + noteDur);
+      osc2.onended = () => { osc2.disconnect(); g2.disconnect(); };
     });
 
     if (streak && streak >= 2) {
@@ -582,9 +612,11 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.18, start + 0.006);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.35);
+      g.gain.linearRampToValueAtTime(0, start + 0.355);
       osc.connect(g).connect(master);
       osc.start(start);
       osc.stop(start + 0.4);
+      osc.onended = () => { osc.disconnect(); g.disconnect(); };
     }
   }
 
@@ -595,7 +627,7 @@ export function createAudio() {
   function comet() {
     const c = ensure();
     if (!c || muted) return;
-    const t = c.currentTime;
+    const t = c.currentTime + SFX_LEAD;
     const notes = [1318.51, 1661.22, 2093.00]; // E6, G#6, C7
     for (let i = 0; i < notes.length; i++) {
       const start = t + i * 0.055;
@@ -624,6 +656,8 @@ export function createAudio() {
       osc.stop(start + 0.3);
       osc2.start(start);
       osc2.stop(start + 0.22);
+      osc.onended  = () => { osc.disconnect();  g.disconnect();  };
+      osc2.onended = () => { osc2.disconnect(); g2.disconnect(); };
     }
   }
 
@@ -632,13 +666,19 @@ export function createAudio() {
   function death() {
     const c = ensure();
     if (!c || muted) return;
-    const t = c.currentTime;
+    const t = c.currentTime + SFX_LEAD;
 
     const filter = c.createBiquadFilter();
     filter.type = "lowpass";
     filter.Q.value = 1.8;
     filter.frequency.setValueAtTime(1400, t);
     filter.frequency.exponentialRampToValueAtTime(180, t + 0.8);
+    // Slam cutoff below audibility before disconnect — Q=1.8 lets
+    // the filter ring after the gain gate closes; ramping cutoff
+    // to 20 Hz silences the residue. Last note's gain is already
+    // < -80 dB by t+0.8, so the slam doesn't muffle anything
+    // audible.
+    filter.frequency.linearRampToValueAtTime(20, t + 0.9);
 
     const mix = c.createGain();
     mix.gain.value = 1.0;
@@ -656,9 +696,21 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, start);
       g.gain.exponentialRampToValueAtTime(0.32, start + 0.01);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.55);
+      g.gain.linearRampToValueAtTime(0, start + 0.555);
       osc.connect(g).connect(filter);
       osc.start(start);
       osc.stop(start + 0.6);
+      // Last osc cleans up the shared filter+mix chain.
+      if (i === notes.length - 1) {
+        osc.onended = () => {
+          osc.disconnect();
+          g.disconnect();
+          filter.disconnect();
+          mix.disconnect();
+        };
+      } else {
+        osc.onended = () => { osc.disconnect(); g.disconnect(); };
+      }
     });
   }
 
@@ -668,13 +720,18 @@ export function createAudio() {
   function deathCrash() {
     const c = ensure();
     if (!c || muted) return;
-    const t = c.currentTime;
+    const t = c.currentTime + SFX_LEAD;
 
     const filter = c.createBiquadFilter();
     filter.type = "lowpass";
     filter.Q.value = 3.0;
     filter.frequency.setValueAtTime(2400, t);
     filter.frequency.exponentialRampToValueAtTime(400, t + 0.9);
+    // Slam cutoff below audibility before disconnect — Q=3 rings
+    // hard after the gain gate closes. Filter sweep ends at t+0.9;
+    // the last osc.stop is delayed below to t+0.98 to give the
+    // slam room. No note is audible after t+0.74 (last gain → 0).
+    filter.frequency.linearRampToValueAtTime(20, t + 0.96);
 
     const mix = c.createGain();
     mix.gain.value = 1.0;
@@ -692,9 +749,23 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, start);
       g.gain.linearRampToValueAtTime(0.25, start + 0.008);
       g.gain.exponentialRampToValueAtTime(0.0001, start + 0.45);
+      g.gain.linearRampToValueAtTime(0, start + 0.455);
       osc.connect(g).connect(filter);
       osc.start(start);
-      osc.stop(start + 0.5);
+      // Last osc lingers 200 ms past gain-end so the filter slam
+      // (above) has time to drop to 20 Hz before disconnect.
+      osc.stop(start + (i === 2 ? 0.7 : 0.5));
+      // Last osc cleans up the shared filter+mix chain.
+      if (i === notes.length - 1) {
+        osc.onended = () => {
+          osc.disconnect();
+          g.disconnect();
+          filter.disconnect();
+          mix.disconnect();
+        };
+      } else {
+        osc.onended = () => { osc.disconnect(); g.disconnect(); };
+      }
     });
   }
 
@@ -848,11 +919,21 @@ export function createAudio() {
       osc.connect(filter);
       osc.start(time);
       osc.stop(time + dur + 0.03);
-      osc.onended = () => { osc.disconnect(); };
+      // Last osc cleans up the shared filter+gain after its own
+      // disconnect. Audio-clock-driven via onended so the cleanup
+      // tracks AudioContext state correctly even when the context
+      // suspends (background tab); a wall-clock setTimeout would
+      // drift and could disconnect during the still-playing tail.
+      if (i === chord.length - 1) {
+        osc.onended = () => {
+          osc.disconnect();
+          filter.disconnect();
+          g.disconnect();
+        };
+      } else {
+        osc.onended = () => { osc.disconnect(); };
+      }
     }
-    // Last osc cleans up shared filter+gain chain.
-    setTimeout(() => { filter.disconnect(); g.disconnect(); },
-      (time + dur + 0.05 - ctx.currentTime) * 1000);
   }
 
   function musicArp(freq, time) {
