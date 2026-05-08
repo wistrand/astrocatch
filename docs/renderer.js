@@ -1577,57 +1577,74 @@ void main() {
 
       // Shell 0 — innermost (sigma 0.06). Edge style: crisp
       // ridged filaments (intrinsic softness 0.0).
+      // 3σ skip: outside |dF| < 3σ the Gaussian is < exp(-9) ≈
+      // 1e-4 — well below the perceptual floor after compositing.
       {
         float dF = field - (1.50 * cavitySize + jit0);
-        float m = exp(-dF * dF / 0.0036);
-        m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
-        m *= fl0 + gn0 * edge0;
-        // Cap radial saturation boost on shell 0 (inner band) so
-        // saturated palettes don't go neon.
-        float satFShell0 = min(satF, 1.05);
-        vec3 shellC = mix(vec3(luma0), baseShell0, satFShell0);
-        rhoStep += m * w0;
-        colStep += shellC * m * w0;
+        float dFsq = dF * dF;
+        if (dFsq < 0.0324) {
+          float m = exp(-dFsq / 0.0036);
+          m *= mix(1.0, 0.18, smoothstep(0.0, 0.06, dF));
+          m *= fl0 + gn0 * edge0;
+          // Cap radial saturation boost on shell 0 (inner band)
+          // so saturated palettes don't go neon.
+          float satFShell0 = min(satF, 1.05);
+          vec3 shellC = mix(vec3(luma0), baseShell0, satFShell0);
+          rhoStep += m * w0;
+          colStep += shellC * m * w0;
+        }
       }
       // Shell 1 (sigma 0.07). Intrinsic softness 0.25.
       {
         float dF = field - (1.77 * cavitySize + jit1);
-        float m = exp(-dF * dF / 0.0049);
-        m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
-        m *= fl1 + gn1 * edge1;
-        vec3 shellC = mix(vec3(luma1), baseShell1, satF);
-        rhoStep += m * w1;
-        colStep += shellC * m * w1;
+        float dFsq = dF * dF;
+        if (dFsq < 0.0441) {
+          float m = exp(-dFsq / 0.0049);
+          m *= mix(1.0, 0.22, smoothstep(0.0, 0.07, dF));
+          m *= fl1 + gn1 * edge1;
+          vec3 shellC = mix(vec3(luma1), baseShell1, satF);
+          rhoStep += m * w1;
+          colStep += shellC * m * w1;
+        }
       }
       // Shell 2 (sigma 0.08). Intrinsic softness 0.50.
       {
         float dF = field - (1.97 * cavitySize + jit2);
-        float m = exp(-dF * dF / 0.0064);
-        m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
-        m *= fl2 + gn2 * edge2;
-        vec3 shellC = mix(vec3(luma2), baseShell2, satF);
-        rhoStep += m * w2;
-        colStep += shellC * m * w2;
+        float dFsq = dF * dF;
+        if (dFsq < 0.0576) {
+          float m = exp(-dFsq / 0.0064);
+          m *= mix(1.0, 0.26, smoothstep(0.0, 0.08, dF));
+          m *= fl2 + gn2 * edge2;
+          vec3 shellC = mix(vec3(luma2), baseShell2, satF);
+          rhoStep += m * w2;
+          colStep += shellC * m * w2;
+        }
       }
       // Shell 3 (sigma 0.10). Intrinsic softness 0.75.
       {
         float dF = field - (2.29 * cavitySize + jit3);
-        float m = exp(-dF * dF / 0.0100);
-        m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
-        m *= fl3 + gn3 * edge3;
-        vec3 shellC = mix(vec3(luma3), baseShell3, satF);
-        rhoStep += m * w3;
-        colStep += shellC * m * w3;
+        float dFsq = dF * dF;
+        if (dFsq < 0.0900) {
+          float m = exp(-dFsq / 0.0100);
+          m *= mix(1.0, 0.32, smoothstep(0.0, 0.10, dF));
+          m *= fl3 + gn3 * edge3;
+          vec3 shellC = mix(vec3(luma3), baseShell3, satF);
+          rhoStep += m * w3;
+          colStep += shellC * m * w3;
+        }
       }
       // Shell 4 (sigma 0.13). Intrinsic softness 1.0 (fully soft).
       {
         float dF = field - (2.59 * cavitySize + jit4);
-        float m = exp(-dF * dF / 0.0169);
-        m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
-        m *= fl4 + gn4 * edge4;
-        vec3 shellC = mix(vec3(luma4), baseShell4, satF);
-        rhoStep += m * w4;
-        colStep += shellC * m * w4;
+        float dFsq = dF * dF;
+        if (dFsq < 0.1521) {
+          float m = exp(-dFsq / 0.0169);
+          m *= mix(1.0, 0.40, smoothstep(0.0, 0.13, dF));
+          m *= fl4 + gn4 * edge4;
+          vec3 shellC = mix(vec3(luma4), baseShell4, satF);
+          rhoStep += m * w4;
+          colStep += shellC * m * w4;
+        }
       }
 
       // Composite this step with running transmittance, then
@@ -1638,6 +1655,10 @@ void main() {
       shellMask    += rhoStep * trans;
       shellColAccum += colStep * trans;
       trans *= exp(-rhoStep * 1.5);
+      // Early-out once the back of the volume can no longer
+      // contribute meaningfully — saves the trailing z-steps
+      // for fragments inside dense bright cores.
+      if (trans < 0.005) break;
     }
 
     if (shellMask > 0.001) shellColAccum /= shellMask;
