@@ -68,12 +68,12 @@ the harness changes:
 ## Performance notes
 
 - `nebula.glsl` is the heaviest port: 7-step volumetric ray-march,
-  ~250 ALU/step from the 3D FBM alone plus 5 shell evaluations
-  (each shell skips when |dF| > 3σ; transmittance early-out for
-  dense fragments). ~3000 ALU/fragment ellipsoidal Crab,
-  ~3850 ALU filamentary dust-reddened. Resize the canvas down on
-  integrated GPUs. The dust-scatter halo and butterfly pinch are
-  optional knobs at the top.
+  3 native 3D simplex calls per FBM evaluation plus 5 shell
+  evaluations (each shell skips when |dF| > 3σ; transmittance
+  early-out for dense fragments). ~2500 ALU/fragment ellipsoidal
+  Crab, ~3200 ALU filamentary dust-reddened. Resize the canvas
+  down on integrated GPUs. The dust-scatter halo and butterfly
+  pinch are optional knobs at the top.
 - `ringworld.glsl` is moderate: ray-cylinder × 2 (ring + plates)
   + hex tiling on the outside face + multi-octave clouds /
   city-lights on the inside. ~200 ALU/fragment.

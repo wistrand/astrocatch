@@ -296,9 +296,12 @@ marched along the line of sight z.
 field = r3D + 0.75 * fbm3DN(p · 0.55) + biPolar
 ```
 
-`fbm3DN` averages 2D simplex FBM on three orthogonal
-projections (xy / xz / yz) — cheap "fake 3D" simplex without a
-true 3D simplex implementation.
+`fbm3DN` is 3 octaves of native 3D simplex (Stefan Gustavson's
+tetrahedral implementation). Earlier versions averaged 2D
+simplex on three orthogonal projections (xy / xz / yz); native
+3D is ~30% cheaper per FBM evaluation and gives smoother z-
+evolution because consecutive z-steps decorrelate via the
+gradient instead of sharing the xy-projection sample.
 
 Five shells at field thresholds `1.50 · cavitySize`, `1.77 ·
 cavitySize`, `1.97 · cavitySize`, `2.29 · cavitySize`, `2.59 ·
@@ -389,17 +392,20 @@ palette (Crab: 280 / 8.00 Hz; Helix: 150 / 4.50; blue: 200 / 6.00;
 dust: 100 / 0.00 — no pulse).
 
 *Cost:* the most expensive shader path. Per-fragment ALU is
-~3000 (ellipsoidal) to ~4500 (filamentary). 7 z-steps × ~9
-simplex calls (fbm3DN) + 5 ridged-FBM hashes per shell
-(ridged + smooth edge masks) + per-step shock-mask + 5 shell
-Gaussian evaluations + per-shell asymmetry + edge-mix +
-per-step composite. Roughly **9–14× a plain star** per
+~2500 (ellipsoidal Crab) to ~3200 (filamentary dust). Was
+~3000-4500 before the optimization pass: pre-loop hoists for
+shockMask / per-shell jit / edge masks / baseShell / luma,
+3σ shell skip, transmittance early-out, Plummer-softened
+single-scatter halo, native 3D simplex (replacing the old
+3-projection-averaged 2D simplex). 7 z-steps × 3 native 3D
+simplex calls (fbm3DN) + ridged + smooth edge masks (pre-
+loop) + 5 shell Gaussian evaluations (each 3σ-skipped) +
+per-step composite. Roughly **7–10× a plain star** per
 fragment. Quad is the standard 4.3× v_baseR + 8, so per-
-instance pixel count is the same as plain. Aggregate per
-visible nebula ≈ 10× plain star. Nebulae spawn at 5–10% rates
-(per `SPAWN_TABLE`) so typical scenes have 0–1 visible at a
-time; the inspector grid (`nebula.html`) is the worst case
-where many simultaneous nebulae stack.
+instance pixel count is the same as plain. Nebulae spawn at
+5–10% rates (per `SPAWN_TABLE`) so typical scenes have 0–1
+visible at a time; the inspector grid (`nebula.html`) is the
+worst case where many simultaneous nebulae stack.
 
 ## Crash wobble
 
@@ -441,15 +447,19 @@ basis. Nebula is dramatically heavier than every other variant.
 | Pulsar | ~150 | 0.4× (smaller body, big quad) |
 | Ringworld | ~200 | 0.6× |
 | Black hole | ~100 + ~80 fullscreen pass | varies |
-| **Nebula (ellipsoidal)** | **~3000** | **~9×** |
-| **Nebula (filamentary)** | **~4500** | **~13×** |
+| **Nebula (ellipsoidal)** | **~2500** | **~7×** |
+| **Nebula (filamentary)** | **~3200** | **~10×** |
 
 Nebula cost is dominated by the 7-step volumetric integration:
-each step does a 3-projection 3-octave simplex FBM (~9 simplex
-calls), evaluates 5 shell Gaussians with per-shell asymmetric
-darkening and edge-mask mixing, and composites with running
-transmittance. Filamentary Nebulae add a Bezier closest-point
-search (12 samples + 2 Newton iterations) per z-step.
+each step does a 3-octave native 3D simplex FBM (3 simplex
+calls — replaced the old 9-call projection-averaged version),
+evaluates 5 shell Gaussians with per-shell asymmetric darkening
+and edge-mask mixing (each shell skips when |dF| > 3σ), composites
+with running transmittance, and breaks once `trans < 0.005`.
+Optional palette-aware single-scatter halo adds ~25 ALU/step on
+non-Crab palettes when shell 4 contributes. Filamentary nebulae
+add a Bezier closest-point search (12 samples + 2 Newton
+iterations) per z-step.
 
 Back-of-envelope totals:
 - **Plain scene** (no BH, no nebula): ~1× the fullscreen pass.
@@ -463,14 +473,16 @@ Back-of-envelope totals:
   of the lensing composite. Still 60 fps on desktop; mobile
   integrated GPUs may dip to 45–55 fps depending on FBO size.
 - **Inspector grid (`nebula.html?grid=8`)**: 64 simultaneous
-  nebulae. Total nebula cost ≈ 13 GFLOP/frame ALU. Desktop fine;
+  nebulae. Total nebula cost ≈ 9 GFLOP/frame ALU. Desktop fine;
   mobile expects frame drops at large grid sizes.
 
 If Nebula becomes a bottleneck, the cheap levers in priority:
 - Reduce `N_STEPS` from 7 to 5 (~30% cheaper).
-- Drop `fbm3octN` to 2 octaves instead of 3 (~25% cheaper).
+- Drop `fbm3DN` to 2 octaves instead of 3 (~25% cheaper).
 - Skip filamentary Newton refinement — use only 12-sample
   estimate.
+- Disable the dust-scatter halo (set per-palette `scatterMul`
+  to 0) — saves ~5-10% on Helix / NGC / dust palettes.
 
 Scaling inputs to watch:
 - **Viewport pixel count** (`W * H * DPR²`) — linear multiplier
