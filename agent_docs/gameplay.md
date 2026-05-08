@@ -9,7 +9,9 @@
 ## Input
 
 - **Click / Space** — boost (left-click / touch; right-click and
-  middle-click ignored).
+  middle-click ignored). A tap fired *during transit* (after a
+  previous boost, before capture) queues the boost instead of
+  applying it — see [Queued in-transit boost](#queued-in-transit-boost).
 - **P** — pause / resume.
 - **Arrow keys** — nudge orbital velocity ±2% while in orbit
   (unclamped — extreme nudging can crash or escape). Emits an
@@ -57,6 +59,28 @@ Breaks on a slow capture or death. Score earned =
 
 Close pass within `COMET_SCORE_RADIUS` awards `COMET_BONUS`
 points, sparkle burst, twinkly sound, comet removed.
+
+## Queued in-transit boost
+
+A tap during transit (`ball.pendingCapture >= 0`) sets
+`ball.queuedBoost = true` and emits a small radial particle
+ring at the ship in the *target* star's primary colour as a
+confirmation cue — no audio, no scoring, no exhaust. At the
+end of `captureStar()`, after the new orbit is established and
+the launch window is recomputed, the flag is replayed by
+calling `boost()` from a clean state. Because `framesInOrbit`
+is 0 at that moment, the quick-launch bonus auto-tiers to
+Blazing (×3).
+
+The mechanic lets the player gamble: pre-tap during transit
+hoping the orbital position the ship enters at capture will be
+a valid launch position toward the *next* star. If it is, the
+chain proceeds with maximum bonus; if not, the boost commits a
+bad-direction burn and the ship usually flies free.
+
+Multiple in-transit taps each emit a fresh particle cue (so
+the player gets re-confirmation), but the queue itself is
+idempotent — only one boost fires at capture.
 
 ## Spawn table
 
@@ -317,6 +341,26 @@ actual orbit at angles from which a tap would produce a clean
 capture. Sampled at fixed star-frame angles (0°, 10°, … 350°)
 via a forward-simulation of the ship's current trajectory, so
 ticks stay anchored in space as the ship orbits through them.
+
+Two correctness details keep the indicator from showing
+spurious gaps:
+
+- **Boost-factor grid matches `applyBoostAndArm` exactly.** The
+  indicator probes the same 48-step linear grid from
+  `BOOST_SEARCH_MIN` to `BOOST_SEARCH_MAX` that the live boost
+  search uses (constants are exported from `physics.js`). A
+  coarser grid (the original was 6 hand-picked factors) would
+  miss narrow valid windows and produce visible gaps where the
+  game would actually succeed. Break-on-first-success keeps
+  the typical-case cost cheap.
+- **Adaptive sub-stepping prevents slot skipping.** ω = L / r²
+  spikes near perihelion on eccentric orbits; a fixed-dt
+  forward step could sweep more than one slot's angular width
+  and leave the skipped slots unfilled (each slot only records
+  on first visit). Each outer step estimates ω from current
+  state and splits into N substeps so each substep crosses at
+  most ~half a slot. Capped at 32 substeps to defend against
+  r → 0 pathology.
 
 Recomputed on capture, on arrow-key nudge (orbit reshape), and
 every `LAUNCH_WINDOW_RECOMPUTE_FRAMES` (12 physics frames ≈

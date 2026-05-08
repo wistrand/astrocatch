@@ -22,6 +22,13 @@ pulls you in and you orbit that one too.
   a default burn and you fly free, usually off into the void.
 - **Release within one rotation for bonus points.** Half a rotation
   pays ×3 (Blazing), less than one full rotation pays ×2 (Quick).
+- **Pre-tap during transit for a Blazing chain.** While the ship
+  is mid-flight between stars, tap to queue a boost. If the
+  capture lands cleanly, the queued tap fires immediately on
+  the new orbit — auto-tiering to ×3. Risky: the orbital
+  position at the moment of capture may not be a valid launch
+  position, in which case the boost commits a bad-direction
+  burn and the ship usually flies free.
 - **Chain fast launches for a streak multiplier.** Consecutive
   Quick or Blazing captures build a streak that multiplies the
   bonus on each capture — starts at ×1, grows half a step per

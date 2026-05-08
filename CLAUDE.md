@@ -139,8 +139,14 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   radius (`r ≥ 30`); teapots get the biggest (`r ≥ 40`) because
   the Easter-egg moment wants every detail of the porcelain
   readable when one shows up. Crash wobble. Pause, arrow-key
-  velocity nudge, launch-window indicator. Help overlay. Replay
-  with dynamic follow-cam. Focus-click suppression.
+  velocity nudge, launch-window indicator (probes the same
+  48-step boost-factor grid as `applyBoostAndArm` so ticks
+  match what the game would auto-tune; adaptive sub-stepping
+  in the forward sim prevents slot skipping near perihelion).
+  In-transit taps queue an immediate-on-capture boost
+  (Blazing-tier auto-applied) with a target-coloured particle
+  ring as confirmation. Help overlay. Replay with dynamic
+  follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences

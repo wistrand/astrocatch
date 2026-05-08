@@ -25,6 +25,12 @@ single allocation. Its crash-check loop starts at
 trajectory, and skipping them roughly halves crash-check cost at
 late-game star counts.
 
+`BOOST_SEARCH_MIN`, `BOOST_SEARCH_MAX`, and `BOOST_SEARCH_STEPS`
+are exported alongside the helpers so the launch-window hint
+in `gameplay.js` searches the exact same boost-factor grid as
+`applyBoostAndArm` — single source of truth keeps the indicator
+in lockstep with the live search.
+
 ## Planets
 
 Orthogonal to the variant roll. Probability ramps from 0% to

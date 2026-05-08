@@ -1347,6 +1347,12 @@ function captureStar(idx) {
 
   // Recompute the launch-window indicator for the new orbit.
   computeLaunchWindow();
+
+  // Replay a queued in-transit tap immediately on the new orbit.
+  if (ball.queuedBoost) {
+    ball.queuedBoost = false;
+    boost();
+  }
 }
 
 // Hidden by default; toggle by clicking the score display.
@@ -1578,7 +1584,33 @@ function showCometFlash() {
 // ─────────────────────────────────────────────────────────────
 function boost() {
   if (!ball || !ball.alive) return;
-  if (ball.pendingCapture >= 0) return;
+  if (ball.pendingCapture >= 0) {
+    // In-transit tap: queue the boost intent. If a clean capture
+    // lands, captureStar replays it immediately on the new orbit
+    // — letting the player gamble that the arrival angle around
+    // the target star is a valid launch position. Quick-launch
+    // bonus auto-tiers to Blazing (framesInOrbit = 0 at replay).
+    ball.queuedBoost = true;
+    // Subtle visual cue — small symmetric ring in the target
+    // star's colour so the player can tell their tap registered
+    // and what they're primed for. Distinct from a normal
+    // boost's directional exhaust trail.
+    const target = stars[ball.pendingCapture];
+    if (target) {
+      const tc = c1Of(target.colorIdx);
+      for (let i = 0; i < 10; i++) {
+        const a = (i / 10) * Math.PI * 2;
+        particles.push({
+          x: ball.x, y: ball.y,
+          vx: Math.cos(a) * 2.4, vy: Math.sin(a) * 2.4,
+          life: 1.0, decay: 0.035,
+          r: tc[0], g: tc[1], b: tc[2],
+          size: 3.5,
+        });
+      }
+    }
+    return;
+  }
 
   audio.boost();
 
@@ -2873,9 +2905,13 @@ document.getElementById("resume-btn").addEventListener("click", (e) => {
 // Expose the RESUME button on the menu if a saved run exists.
 // Runs once at module load — subsequent save state changes happen
 // after the menu is already dismissed, so no re-check needed.
+// The button's slot is reserved in HTML via `visibility:hidden`
+// so a load with a save and a load without one have the same
+// layout — flipping visibility doesn't shift the description /
+// link block beneath it.
 (function initResumeButton() {
   if (loadGame()) {
     const btn = document.getElementById("resume-btn");
-    if (btn) btn.style.display = "";
+    if (btn) btn.style.visibility = "visible";
   }
 })();

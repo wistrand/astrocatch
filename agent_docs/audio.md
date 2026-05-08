@@ -32,6 +32,34 @@ Both buses muted in parallel via `setMuted`.
 
 All SFX use per-call detune jitter (see constant in each function).
 
+### Click prevention (mobile)
+
+Three layered fixes for SFX clicks some mobile DACs produced
+on node teardown:
+
+- **Linear ramp to true 0 after every exponential decay.** SFX
+  gain envelopes use `exponentialRampToValueAtTime` to fade,
+  but exp ramps mathematically can't reach 0 — they bottom at
+  0.0001, and `osc.stop()` then terminates a non-zero waveform.
+  Each envelope appends a 5-ms `linearRampToValueAtTime(0, X)`
+  so the waveform is silent (true zero) when the node ends.
+- **Filter cutoff slam before disconnect on resonant filters.**
+  `death` (Q=1.8) and `deathCrash` (Q=3.0) ring after the gain
+  gate closes; abrupt `filter.disconnect()` with non-zero
+  filter state clicks. Each appends a final
+  `linearRampToValueAtTime(20, ...)` event that drops cutoff
+  below audibility before the cleanup `disconnect()` fires.
+  `deathCrash` lengthens its last `osc.stop` to give the slam
+  time to complete.
+- **Synchronous `gain.value = 0` + linear attack on `boost`.**
+  GainNode.gain defaults to 1.0; on a janky main-thread frame
+  a `setValueAtTime(0, t)` call could land in the past and
+  snap from 1.0 to 0 instantly. The `outGain` is initialised
+  synchronously to 0 at construction. The attack itself is now
+  a 20 ms linear ramp (was 12 ms exponential, ~290/s slope at
+  the endpoint where the ramp suddenly stops) — gentler kink,
+  same perceived punch.
+
 ## Generative music
 
 Loop at `MUSIC_BPM` in A minor. 8-chord harmonic pool (Am, F, C,
