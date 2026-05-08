@@ -1167,9 +1167,9 @@ void main() {
     //
     //   0 — Crab synchrotron: cyan/yellow/orange/red/red,
     //       roughly even shell weights, sharp hot pinpoint.
-    //   1 — Helix OIII: green/cyan/pale/soft red/dim,
-    //       front-loaded weights (inner OIII bright), softer
-    //       cooler pulse.
+    //   1 — Helix OIII: green/cyan/pale/soft red/dim, bimodal
+    //       weights — OIII core (shells 0-1) + Hα halo (shells
+    //       3-4), faint mid-shell trough. Softer cooler pulse.
     //   2 — NGC 7027 hot blue: blue/cyan/pale orange/pink/muted,
     //       moderate weights, blue-cored hot star.
     //   3 — Dust-reddened: amber/orange/red/deep/brown,
@@ -1199,7 +1199,12 @@ void main() {
       shell4Col = vec3(0.78, 0.30, 0.30);
       paletteGlow = vec3(0.55, 0.95, 0.85);
       paletteCore = vec3(0.75, 1.00, 0.85);
-      w0 = 0.30; w1 = 0.25; w2 = 0.18; w3 = 0.12; w4 = 0.08;
+      // Bimodal radial structure — inner OIII peak (shells 0-1)
+      // and outer Hα peak (shells 3-4) with a faint mid-shell
+      // trough. The shell colours already split cyan/red across
+      // 0-1 vs 3-4, so reweighting alone produces the two-zone
+      // appearance characteristic of bipolar planetary nebulae.
+      w0 = 0.30; w1 = 0.25; w2 = 0.10; w3 = 0.20; w4 = 0.15;
       pulsarFalloff = 150.0;
       pulsarPulseRate = 4.50;
       pulsarBrightness = 1.30;
