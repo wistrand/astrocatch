@@ -55,7 +55,9 @@ pulls you in and you orbit that one too.
   for a pop-up cheat sheet (also pauses the game). **P**
   pauses / resumes. **W** or tapping the score toggles a
   launch-window hint that marks orbital angles where a tap
-  would land a clean capture.
+  would land a clean capture. **Z** or long-pressing the score
+  cycles a cinematic ship-following camera through two zoom
+  levels and back.
 - **Watch your replay.** A cinematic follow-camera plays back
   your run with simplex-driven zoom behind the AGAIN button.
 - **Mute anytime** via the speaker button in the top-right

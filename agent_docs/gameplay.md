@@ -18,6 +18,8 @@
   exhaust puff as visual feedback.
 - **M** — toggle mute.
 - **W** or tap the score display — toggle the launch-window hint.
+- **Z** or long-press (≥ 500 ms) the score display — cycle the
+  cinematic camera mode. See [Cinematic mode](#cinematic-mode).
 - **H** or click the **?** button — toggle the help overlay
   (pauses the game while open).
 - **Esc** — close help.
@@ -325,6 +327,46 @@ nudge logic is `r * 1.7` (the SDF bounding sphere).
 **Save/resume.** Round-trips `isTeapot` alongside the other
 variant flags. Captured teapots persist through saves.
 
+## Cinematic mode
+
+Toggled by `Z` (or long-press the score display on touch). Cycles
+through four levels: `0` (regular gameplay camera), `1` (cinematic
+near), `2` (cinematic far), `3` (cinematic near again). Cycle is
+palindromic — four consecutive presses return to normal:
+
+```
+0 → 1 → 2 → 1 → 0 → 1 → 2 → ...
+```
+
+Levels 1–3 use a `replayMat`-style ship-following camera with the
+same simplex-driven zoom breath as `drawReplayGhost`, applied to
+the live game. Implementation:
+
+- Camera position lerps toward the ship every frame at
+  `CINEMATIC_FOLLOW_W` (0.025 — much slower than the regular
+  cam so the framing reads as cinematic glide rather than rigid
+  follow).
+- Both the regular and cinematic camera targets are computed
+  each frame in replayMat (`scale`, `ox`, `oy`) form. The
+  rendered triple lerps toward the target at `CINEMATIC_LERP_W`
+  (0.06) so mode entry, level switching, and exit all glide.
+  `draw()` builds a single `replayMat` from the lerped params
+  with no branch.
+- BH lensing FBO radius reads the lerped scale (`drawZoom`)
+  rather than base `ZOOM`, so the lens disk size matches the
+  on-screen size in either mode and during transitions.
+- Off-screen death check still uses world-frame `ZOOM` and
+  `camY` — cinematic is purely a render-time visual.
+- Touch zooms are lower than desktop (`1.0` / `1.4` vs `1.7` /
+  `2.6`) because mobile screens make even moderate zoom feel
+  excessive.
+
+Long-press on the score display fires on the threshold (not on
+release) so the camera transition starts immediately. The same
+pointer stroke can't double-fire as both tap-toggle-W and
+hold-cycle-Z because the tap path checks
+`_scoreHoldFired` on `pointerup`.
+
 ## Crash wobble
 
 When the ship crashes, the star gets a decaying elliptical
@@ -342,17 +384,17 @@ capture. Sampled at fixed star-frame angles (0°, 10°, … 350°)
 via a forward-simulation of the ship's current trajectory, so
 ticks stay anchored in space as the ship orbits through them.
 
-Two correctness details keep the indicator from showing
-spurious gaps:
+Three correctness / performance details:
 
-- **Boost-factor grid matches `applyBoostAndArm` exactly.** The
-  indicator probes the same 48-step linear grid from
-  `BOOST_SEARCH_MIN` to `BOOST_SEARCH_MAX` that the live boost
-  search uses (constants are exported from `physics.js`). A
-  coarser grid (the original was 6 hand-picked factors) would
-  miss narrow valid windows and produce visible gaps where the
-  game would actually succeed. Break-on-first-success keeps
-  the typical-case cost cheap.
+- **Boost-factor grid covers narrow valid windows.** The indicator
+  probes a 24-step linear grid (`LAUNCH_WINDOW_BOOST_STEPS`) from
+  `BOOST_SEARCH_MIN` to `BOOST_SEARCH_MAX` — half the live
+  `applyBoostAndArm` resolution. Coarser grids (the original 6
+  hand-picked factors) miss narrow valid windows and produce
+  visible gaps where the game would actually succeed; finer is
+  unnecessary because the indicator only needs to know *whether*
+  a clean capture exists, not the smallest viable Δv.
+  Break-on-first-success keeps the typical-case cost cheap.
 - **Adaptive sub-stepping prevents slot skipping.** ω = L / r²
   spikes near perihelion on eccentric orbits; a fixed-dt
   forward step could sweep more than one slot's angular width
@@ -361,12 +403,34 @@ spurious gaps:
   state and splits into N substeps so each substep crosses at
   most ~half a slot. Capped at 32 substeps to defend against
   r → 0 pathology.
+- **Time-sliced builds with ping-pong buffers.** A full 36-slot
+  build takes ~5–20 ms — well over a frame budget — and on
+  perturbed orbits the throttled recompute fires every ~6 render
+  frames, so each fire was visibly stuttering. The build is now
+  split into:
+  - `runLaunchWindowPhase1` (forward sim → samples, ~1–2 ms,
+    runs synchronously when the build starts), and
+  - `runLaunchWindowPhase2Slot` (one slot's predict-sweep — the
+    dominant cost on failing slots).
+  `tickLaunchWindowBuild()` advances `LW_SLOTS_PER_FRAME` (6)
+  slots per render frame. A full build completes in ~6 frames
+  with no single-frame spike. Two buffer pairs (`A`/`B`)
+  ping-pong: `ball.launchWindow` keeps pointing at the
+  previously-completed front buffer while the back fills, so
+  there's no flicker. New triggers (capture, nudge, throttled
+  fire) abort any in-progress build and start fresh; builds
+  also abort if `pendingCapture` rises or `currentStar`
+  rotates so we don't commit results computed against stale
+  state. The projected window uses the same pattern with its
+  own pair.
 
 Recomputed on capture, on arrow-key nudge (orbit reshape), and
 every `LAUNCH_WINDOW_RECOMPUTE_FRAMES` (12 physics frames ≈
 0.1 s) while the current star has planets or is a binary — so
 slow perturbations keep the hint in sync without burning CPU.
-Static orbits don't trigger re-recompute.
+Static orbits don't trigger re-recompute. The throttle gate
+also requires `_lwBuildSlot < 0` so builds don't pile up on top
+of each other.
 
 All per-recompute state is pooled: sample + result arrays are
 module-level scratch objects, and `predictCapture` takes an

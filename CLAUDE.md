@@ -139,14 +139,19 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   radius (`r ≥ 30`); teapots get the biggest (`r ≥ 40`) because
   the Easter-egg moment wants every detail of the porcelain
   readable when one shows up. Crash wobble. Pause, arrow-key
-  velocity nudge, launch-window indicator (probes the same
-  48-step boost-factor grid as `applyBoostAndArm` so ticks
-  match what the game would auto-tune; adaptive sub-stepping
-  in the forward sim prevents slot skipping near perihelion).
+  velocity nudge, launch-window indicator (24-step boost-factor
+  grid, adaptive sub-stepping prevents slot skipping near
+  perihelion, builds time-sliced across 6 frames with ping-pong
+  buffers so perturbed-orbit recomputes don't stutter).
   In-transit taps queue an immediate-on-capture boost
   (Blazing-tier auto-applied) with a target-coloured particle
-  ring as confirmation. Help overlay. Replay with dynamic
-  follow-cam. Focus-click suppression.
+  ring as confirmation; a projected launch window draws around
+  the target star while the queue is pending. Cinematic camera
+  mode (`Z` or long-press the score) cycles through near/far
+  ship-following zooms with simplex breath, palindromic 4-step
+  cycle (normal → near → far → near → normal), smooth lerped
+  transitions. Help overlay. Replay with dynamic follow-cam.
+  Focus-click suppression.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences
