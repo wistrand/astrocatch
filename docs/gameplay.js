@@ -53,6 +53,7 @@ function zoomTargetFor(star) {
   if (star.isRingworld) return IS_TOUCH ? 1.5 : 1.7;
   if (star.isNebula)    return IS_TOUCH ? 1.4 : 1.6;
   if (star.isTeapot)    return IS_TOUCH ? 1.4 : 1.6;
+  if (star.isAzazel)    return IS_TOUCH ? 1.8 : 3.5;
   return 1.0;
 }
 // World-space horizontal camera pan. Normally 0; nudged when
@@ -404,6 +405,7 @@ function serializeStar(s, full) {
   stub.isPulsar = !!s.isPulsar;
   stub.isNebula = !!s.isNebula;
   stub.isTeapot = !!s.isTeapot;
+  stub.isAzazel = !!s.isAzazel;
   if (s.planets) stub.planets = s.planets;
   if (s.comets) stub.comets = s.comets;
   if (s.binary) {
@@ -509,18 +511,18 @@ let hasBoosted = false; // for the hint
 // remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
-  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
-  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 5, pulsar: 1, nebula: 5, teapot: 15 },
+  { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
+  { at: 1, plain: 1, binary: 1, bh: 1, bhBinary: 1, monolith: 1, ringworld: 5, pulsar: 1, nebula: 5, teapot: 15, azazel: 15 },
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula  teapot
-  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
-  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0 },
-  { at: 10,   plain:  83, binary:  3, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0 },
-  { at: 20,   plain:  67, binary:  8, bh:  5, bhBinary: 3, monolith: 1, ringworld: 0, pulsar: 4, nebula: 2, teapot: 0 },
-  { at: 50,   plain:  52, binary: 10, bh:  8, bhBinary: 4, monolith: 2, ringworld: 2, pulsar: 6, nebula: 3, teapot: 1 },
-  { at: 80,   plain:  41, binary: 10, bh: 10, bhBinary: 5, monolith: 3, ringworld: 4, pulsar: 8, nebula: 4, teapot: 1 },
+  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula  teapot  azazel
+  { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
+  { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
+  { at: 10,   plain:  83, binary:  3, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0, azazel: 0 },
+  { at: 20,   plain:  67, binary:  8, bh:  5, bhBinary: 3, monolith: 1, ringworld: 0, pulsar: 4, nebula: 2, teapot: 0, azazel: 0 },
+  { at: 50,   plain:  52, binary: 10, bh:  8, bhBinary: 4, monolith: 2, ringworld: 2, pulsar: 6, nebula: 3, teapot: 1, azazel: 1 },
+  { at: 80,   plain:  39, binary: 10, bh: 10, bhBinary: 5, monolith: 3, ringworld: 4, pulsar: 8, nebula: 4, teapot: 1, azazel: 2 },
 ];
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
@@ -624,6 +626,10 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     // Same physics as a normal star. Rare Easter-egg variant
     // gated to deep runs (star index >= ~50).
     isTeapot: false,
+    // Azazel flag — demon manifesting through a rip in space.
+    // Body silhouette + radial spikes + 3 face tiers. Same
+    // physics as a normal star. Rare deep-run variant.
+    isAzazel: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
     // If addNextStar already rolled the variant (so it could
@@ -652,12 +658,15 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
       s.isNebula = true;
     } else if (variant === "teapot") {
       s.isTeapot = true;
+    } else if (variant === "azazel") {
+      s.isAzazel = true;
     }
     // Planets: orthogonal roll, allowed on plain and bh variants
     // only. Ramps up with star index. Skipped on variants whose
     // visual or physical setup already occupies the orbit volume.
     if (!s.isBinary && !s.isMonolith && !s.isRingworld
-        && !s.isPulsar && !s.isNebula && !s.isTeapot) {
+        && !s.isPulsar && !s.isNebula && !s.isTeapot
+        && !s.isAzazel) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
       if (Math.random() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
@@ -668,7 +677,8 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     // gag reads cleanest with the teapot solo on screen). Pulsars
     // and nebulae are fine — comets weaving through filaments /
     // past a pulsar reads naturally.
-    if (!s.isMonolith && !s.isTeapot && starIdx >= COMET_MIN_STAR
+    if (!s.isMonolith && !s.isTeapot && !s.isAzazel
+        && starIdx >= COMET_MIN_STAR
         && Math.random() < COMET_PROB) {
       assignComets(s, starIdx);
     }
@@ -861,12 +871,16 @@ function addNextStar() {
   // handle + lid all legible. At r=40 the bounding sphere is
   // ~70 px and the spout tip (0.05 × r ≈ 2 px) reads cleanly.
   const minR =
-    (variant === "teapot")                          ? 40 :
+    (variant === "azazel")                         ? 56 :
+    (variant === "teapot")                         ? 40 :
     (variant === "pulsar" || variant === "nebula") ? 30 :
     18;
 
-  // Pick candidate radius first so we can compute the hard minimum.
-  const r = Math.max(minR, (34 + Math.random() * 24) - difficulty * 14);
+  // Pick candidate radius. Azazel multiplies up so its body
+  // (eyes, mouths, spikes) reads at the size the design needs;
+  // smaller demons just lose their face detail.
+  const sizeMul = variant === "azazel" ? 1.5 : 1.0;
+  const r = Math.max(minR, ((34 + Math.random() * 24) - difficulty * 14) * sizeMul);
 
   // Base distance range. As difficulty grows we push the next star
   // further away (harder to reach) AND widen the angle cone (harder
@@ -978,6 +992,7 @@ function init() {
   camY = 0;
   camTargetY = 0;
   hasBoosted = false;
+  audio.setDemonMode(false);
 
   // First star: intentionally larger than later stars so the
   // player's starting orbit has a longer period (period scales
@@ -1063,6 +1078,10 @@ function continueRun() {
   fastStreak = 0;
   trackedSpeed = 0;
   audio.setStreak(0);
+  // Re-establish demon mode based on the anchor star — `die()`
+  // cleared it but if we're respawning around an Azazel the
+  // dark progression should resume.
+  audio.setDemonMode(!!stars[anchorIdx].isAzazel);
   hasBoosted = false;
   // Make sure there's enough runway of stars ahead; init() seeds
   // 6, replicate that buffer past the anchor if trimmed.
@@ -1144,6 +1163,7 @@ function resumeFromSave(data) {
     isPulsar: !!raw.isPulsar,
     isNebula: !!raw.isNebula,
     isTeapot: !!raw.isTeapot,
+    isAzazel: !!raw.isAzazel,
   }));
   // Re-orbit the ball around the saved anchor star with a fresh
   // circular orbit — same math as continueRun. The saved x/y/vx/
@@ -1195,6 +1215,7 @@ function resumeFromSave(data) {
   camY = -(anchor.y - H * CAM_FOCUS_Y);
   camTargetY = camY;
   audio.setStreak(fastStreak);
+  audio.setDemonMode(!!anchor.isAzazel);
   // Clear all transient buffers (trail/particles/shockwaves/
   // replay) that we don't save.
   trail = [];
@@ -1341,6 +1362,7 @@ function captureStar(idx) {
     stars[leavingIdx].isPulsar = false;
     stars[leavingIdx].isNebula = false;
     stars[leavingIdx].isTeapot = false;
+    stars[leavingIdx].isAzazel = false;
     // Mark the leaving star as caught so it renders as a dim
     // past ember. Normally already true (captureStar set it
     // when we arrived), but not for star 0, which was never
@@ -1380,6 +1402,11 @@ function captureStar(idx) {
   if (!ball.capturePreScheduled) audio.capture(bonus, fastStreak);
   ball.capturePreScheduled = false;
   audio.setStreak(fastStreak);
+  // Demon mode music while orbiting an Azazel — Phrygian-ish
+  // chord progression overrides the regular tier-based one.
+  // The audio scheduler applies the swap at the next bar
+  // boundary so the transition lands musically.
+  audio.setDemonMode(!!s.isAzazel);
   updateScoreUI(true, bonus, fastStreak);
 
   // Visuals. Colors go into particle / shockwave storage as RGB
@@ -2022,9 +2049,12 @@ function die(crash) {
   // Music keeps playing through DYING → DEAD → next PLAY.
   // The retry's startMusic() is idempotent, so the loop
   // stitches across runs without a chord jump or seam.
-  // Any live fast-launch streak ends with the run.
+  // Any live fast-launch streak ends with the run, and demon
+  // mode resets so a death on an Azazel doesn't carry into the
+  // next run's music.
   fastStreak = 0;
   audio.setStreak(0);
+  audio.setDemonMode(false);
   updateSub();
   // Death burst — magenta (#fa6db0).
   const dR = 0xfa / 255, dG = 0x6d / 255, dB = 0xb0 / 255;
@@ -2246,6 +2276,7 @@ function renderTick() {
   const visualR = cs0.isRingworld ? cs0.r * 3.6
                 : cs0.isNebula      ? cs0.r * 2.7
                 : cs0.isTeapot      ? cs0.r * 1.7
+                : cs0.isAzazel      ? cs0.r * 2.4
                                   : cs0.r * 2.5;
   const screenXNoPan = W / 2 + (cs0.x - W / 2) * effZoom;
   const visualRpx = visualR * effZoom;
@@ -2764,6 +2795,7 @@ function draw() {
         isPulsar: s.isPulsar,
         isNebula: s.isNebula,
         isTeapot: s.isTeapot,
+        isAzazel: s.isAzazel,
       });
     }
   }

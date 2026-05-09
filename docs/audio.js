@@ -234,6 +234,16 @@ const MUSIC_PROGRESSIONS = [
 // tier 2 to be reachable when the player is actively boosting.
 const MUSIC_INTENSITY_THRESHOLDS = [0.20, 0.45];
 
+// Demon-mode progressions (Azazel orbit). Phrygian-ish
+// descending lines built on the i / bII / iv / V skeleton —
+// the bII (Bb) is the demonic flavour, the V (E) keeps the
+// pull back toward i. Two progressions for section-to-section
+// variety, same as the regular tiers.
+const MUSIC_DEMON_PROGRESSIONS = [
+  [0, 7, 4, 5],  // Am Bb Dm E
+  [6, 7, 4, 5],  // Em Bb Dm E
+];
+
 // Lead rhythm pattern bank — each entry is a list of step
 // positions within a bar where a lead note fires. Spans from
 // sparsest (1 note on the downbeat) to busiest (4 notes with
@@ -324,6 +334,12 @@ export function createAudio() {
   let currentTier = 0;
   let activeProgression = MUSIC_PROGRESSIONS[0];
   let sectionCount = 0;
+  // Demon mode — overrides the tier-based progression with the
+  // dedicated MUSIC_DEMON_PROGRESSIONS while the ship orbits an
+  // Azazel. Toggled by gameplay.captureStar(). Switch takes
+  // effect at the next section boundary so chord changes always
+  // land on a downbeat.
+  let demonMode = false;
   // Streak-driven tempo. Base is MUSIC_BPM; each streak level
   // adds a small BPM bump, capped so the music doesn't become
   // frantic. Updated at section boundaries so tempo never
@@ -1028,7 +1044,9 @@ export function createAudio() {
     if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[1]) tier = 2;
     else if (currentIntensity >= MUSIC_INTENSITY_THRESHOLDS[0]) tier = 1;
     currentTier = tier;
-    activeProgression = MUSIC_PROGRESSIONS[tier * 2 + (sectionCount & 1)];
+    activeProgression = demonMode
+      ? MUSIC_DEMON_PROGRESSIONS[sectionCount & 1]
+      : MUSIC_PROGRESSIONS[tier * 2 + (sectionCount & 1)];
     sectionCount++;
     // Streak-driven tempo ramp. Each streak level adds 4 BPM up
     // to the cap. Resets to base when streak is 0 (broken or
@@ -1149,6 +1167,13 @@ export function createAudio() {
   function setIntensity(v) {
     if (typeof v !== "number" || !isFinite(v)) return;
     currentIntensity = v < 0 ? 0 : (v > 1 ? 1 : v);
+  }
+
+  // Toggle demon mode — swaps the active chord progression at
+  // the next section boundary so the chord change lands on a
+  // downbeat. No-op if `on` matches the current state.
+  function setDemonMode(on) {
+    demonMode = !!on;
   }
 
   function setStreak(n) {
@@ -1300,7 +1325,7 @@ export function createAudio() {
   return {
     boost, capture, death, deathCrash, comet,
     startMusic, stopMusic, setMusicPaused,
-    setIntensity, setStreak,
+    setIntensity, setStreak, setDemonMode,
     setMuted, isMuted, getOutputLatency,
   };
 }

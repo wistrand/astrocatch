@@ -74,6 +74,7 @@ const TYPE_REGISTRY = {
   pulsar:    { apply: (s) => { s.isPulsar = true; },           rMin: 30, rMax: 54 },
   nebula:    { apply: (s) => { s.isNebula = true; },           rMin: 30, rMax: 56 },
   teapot:    { apply: (s) => { s.isTeapot = true; },           rMin: 40, rMax: 64 },
+  azazel:    { apply: (s) => { s.isAzazel = true; },           rMin: 40, rMax: 64 },
 };
 const TYPE = (urlParams.get("type") || "nebula").toLowerCase();
 const cfg = TYPE_REGISTRY[TYPE] || TYPE_REGISTRY.nebula;
@@ -130,12 +131,14 @@ function makeStar(x, y, r, colorIdx, seed) {
     ringPlateCount: 0,
     isNebula: false,
     isTeapot: false,
+    isAzazel: false,
   };
   cfg.apply(s, seed);
   // Nebula doesn't want diffraction rays from the central
-  // pinpoint; teapot/monolith/ringworld replace the body
+  // pinpoint; teapot/monolith/ringworld/azazel replace the body
   // entirely so rays are irrelevant.
-  if (s.isNebula || s.isMonolith || s.isRingworld || s.isTeapot) {
+  if (s.isNebula || s.isMonolith || s.isRingworld
+      || s.isTeapot || s.isAzazel) {
     s.hasRays = false;
   }
   return s;
@@ -296,6 +299,7 @@ function loop(t) {
         isPulsar: s.isPulsar,
         isNebula: s.isNebula,
         isTeapot: s.isTeapot,
+        isAzazel: s.isAzazel,
       });
     }
   }

@@ -183,6 +183,16 @@ stars = [
     s.isTeapot = true;
     s.colorIdx = 6; // teal — cool specular tint
   }),
+
+  cell(0, 7, "azazel", (s) => { s.isAzazel = true; }),
+  cell(1, 7, "azazel (alt)", (s) => {
+    s.isAzazel = true;
+    s.colorIdx = 5;
+  }),
+  cell(2, 7, "azazel (alt2)", (s) => {
+    s.isAzazel = true;
+    s.colorIdx = 6;
+  }),
 ];
 
 // ─── Labels (DOM overlay positioned via world→screen each frame) ──
@@ -381,6 +391,7 @@ function loop(t) {
         isPulsar: s.isPulsar,
         isNebula: s.isNebula,
         isTeapot: s.isTeapot,
+        isAzazel: s.isAzazel,
       });
     }
   }

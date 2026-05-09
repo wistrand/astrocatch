@@ -507,7 +507,10 @@ void main() {
   // 8.0 gives the flare room; the FS does a circular alpha fade
   // inside this so the rectangle edge never appears.
   int flagsV = int(a_params.w);
-  float extentMul = ((flagsV & 32) != 0) ? 5.0 : 4.3;
+  // Pulsar (32) and Azazel (8192) need a wider quad than other
+  // variants — pulsar's lens-flare reaches 3.5× v_baseR and
+  // Azazel's spikes reach ~2× v_baseR plus a halftone fringe.
+  float extentMul = ((flagsV & 32) != 0 || (flagsV & 8192) != 0) ? 5.0 : 4.3;
   float extent = baseR * extentMul + 8.0;
   vec2 local = a_vertex * extent;
   vec2 worldPos = a_center + local;
@@ -857,6 +860,255 @@ float fbm3DN(vec3 p) {
 }
 #endif
 
+// ─── Azazel SDF helpers ─────────────────────────────────────────
+// Demon manifesting through a rip in space. Body silhouette
+// (rotated elongated ellipse + dirNoise edge perturbation +
+// ~14 radial spikes + sub-blobs, all under a slow breath
+// scale), 3 stacked face tiers (paired triangular eyes above a
+// two-row rhombus grin), halftone fringe, inner orange glow.
+// Constants are fixed in-game; their tuning lives in
+// shadertoy/azazel.glsl.
+const float AZ_ASPECT_X = 0.55;
+const float AZ_ASPECT_Y = 1.45;
+const float AZ_TILT_ANGLE = 0.30;
+const float AZ_BOUNDARY_AMP = 0.16;
+const int   AZ_N_SPIKES = 14;
+const float AZ_SPIKE_LEN_MIN = 0.20;
+const float AZ_SPIKE_LEN_MAX = 0.85;
+const float AZ_SPIKE_BASE_W = 0.06;
+const float AZ_SPIKE_PULSE_RATE = 0.40;
+const float AZ_SPIKE_ANGLE_STRETCH = 2.6;
+const float AZ_SPIKE_TEETH = 8.0;
+const float AZ_SPIKE_TEETH_AMP = 0.45;
+const float AZ_BREATHE_RATE = 0.40;
+const float AZ_BREATHE_AMP = 0.32;
+const float AZ_WRITHE_RATE_1 = 0.30;
+const float AZ_WRITHE_RATE_2 = 0.50;
+const float AZ_WRITHE_RATE_3 = 0.80;
+const float AZ_WRITHE_RATE_4 = 1.25;
+const float AZ_SMIN_K = 0.18;
+const float AZ_BLOB1_R = 0.30;
+const float AZ_BLOB2_R = 0.26;
+const vec3  AZ_INK_BLACK = vec3(0.01, 0.01, 0.02);
+const vec3  AZ_INNER_GLOW = vec3(0.20, 0.05, 0.05);
+const float AZ_INNER_GLOW_FALLOFF = 5.0;
+const float AZ_INNER_GLOW_AMP = 1.10;
+const vec3  AZ_EYE_IRIS_RED = vec3(0.95, 0.10, 0.05);
+const float AZ_EYE_IRIS_PROB = 0.30;
+const float AZ_EYE_IRIS_R = 0.022;
+const vec3  AZ_TOOTH_WHITE = vec3(0.93, 0.88, 0.74);
+const int   AZ_N_FACES = 3;
+const float AZ_FACE_SPREAD_X = 0.78;
+const float AZ_FACE_SPREAD_Y = 1.75;
+const float AZ_TIER_SPACING = AZ_FACE_SPREAD_Y / float(AZ_N_FACES);
+const float AZ_FACE_TILT_RANGE = 0.55;
+const float AZ_FACE_MOTION_AMP = 0.10;
+const float AZ_FACE_MOTION_RATE = 0.20;
+const float AZ_FACE_SCALE_AMP = 0.15;
+const float AZ_FACE_SCALE_RATE = 0.20;
+const float AZ_EYE_INNER_X = 0.022;
+const float AZ_EYE_OUTER_X = 0.115;
+const float AZ_EYE_HEIGHT = 0.024;
+const float AZ_EYE_Y_OFFSET = -0.115;
+const float AZ_EYE_BLINK_RATE = 0.30;
+const float AZ_EYE_GLOW_FALLOFF = 35.0;
+const float AZ_EYE_INNER_TILT = 0.42;
+const float AZ_EYE_BOW = 0.88;
+const float AZ_MOUTH_HALFW = 0.13;
+const float AZ_MOUTH_HALFH = 0.110;
+const float AZ_MOUTH_Y_OFFSET = 0.085;
+const float AZ_MOUTH_GAP_MIN = -0.14;
+const float AZ_MOUTH_GAP_MAX = 0.008;
+const float AZ_LOWER_W_RATIO = 0.78;
+const float AZ_TEETH_PER_MOUTH = 6.0;
+const float AZ_MOUTH_OPEN_RATE = 0.40;
+const float AZ_JAW_BEND_RANGE = 0.020;
+
+float az_hash11(float x) {
+  return fract(sin(x * 12.9898) * 43758.5453);
+}
+vec2 az_hash21(float x) {
+  return vec2(
+    fract(sin(x * 12.9898) * 43758.5453),
+    fract(sin(x * 78.233 + 1.7) * 43758.5453)
+  );
+}
+
+float az_triWave(float x) {
+  return abs(fract(x / TAU + 0.25) * 4.0 - 2.0) - 1.0;
+}
+
+float az_dirNoise(vec2 p, float seed, float t) {
+  vec2 d1 = vec2( 0.71,  0.71);
+  vec2 d2 = vec2( 0.83, -0.56);
+  vec2 d3 = vec2( 0.50,  0.87);
+  vec2 d4 = vec2(-0.95,  0.31);
+  float p1 = az_hash11(seed * 1.0) * TAU + t * AZ_WRITHE_RATE_1;
+  float p2 = az_hash11(seed * 2.0) * TAU + t * AZ_WRITHE_RATE_2;
+  float p3 = az_hash11(seed * 3.0) * TAU + t * AZ_WRITHE_RATE_3;
+  float p4 = az_hash11(seed * 4.0) * TAU + t * AZ_WRITHE_RATE_4;
+  return 0.40 * az_triWave(dot(p, d1) * 18.0 + p1)
+       + 0.30 * az_triWave(dot(p, d2) * 28.0 + p2)
+       + 0.20 * (abs(sin(dot(p, d3) * 45.0 + p3)) * 2.0 - 1.0)
+       + 0.15 * sin(dot(p, d4) * 70.0 + p4);
+}
+
+float az_sdBlob(vec2 p, vec2 c, float r) {
+  return length(p - c) - r;
+}
+
+float az_sdTaperedSpike(vec2 p, vec2 base, vec2 tip, float wBase, float sawPhase) {
+  vec2 ba = tip - base;
+  vec2 pa = p - base;
+  float L = max(dot(ba, ba), 1e-6);
+  float h = clamp(dot(pa, ba) / L, 0.0, 1.0);
+  vec2 q = pa - ba * h;
+  float baseTaper = wBase * (1.0 - h);
+  float saw = abs(fract(h * AZ_SPIKE_TEETH + sawPhase) * 2.0 - 1.0);
+  float w = baseTaper * (1.0 - AZ_SPIKE_TEETH_AMP * (1.0 - saw));
+  return length(q) - w;
+}
+
+float az_sdSpikes(vec2 p, float seed, float t) {
+  float d = 1e6;
+  for (int i = 0; i < AZ_N_SPIKES; i++) {
+    float fi = float(i);
+    float u = (fi / float(AZ_N_SPIKES)) * TAU
+            + (az_hash11(seed * 13.7 + fi) - 0.5) * 0.7;
+    float ang = atan(sin(u), cos(u) * AZ_SPIKE_ANGLE_STRETCH);
+    vec2 dir = vec2(cos(ang), sin(ang));
+    vec2 basePt = dir * vec2(AZ_ASPECT_X, AZ_ASPECT_Y);
+    float lenR = az_hash11(seed * 23.1 + fi);
+    float len = mix(AZ_SPIKE_LEN_MIN, AZ_SPIKE_LEN_MAX, lenR);
+    len *= 0.78 + 0.22 * sin(t * AZ_SPIKE_PULSE_RATE + fi * 2.71);
+    float tipJitter = (az_hash11(seed * 31.7 + fi) - 0.5) * 0.50;
+    vec2 tipDir = vec2(cos(ang + tipJitter), sin(ang + tipJitter));
+    vec2 tipPt = basePt + tipDir * len;
+    float baseW = AZ_SPIKE_BASE_W * (0.6 + 0.8 * az_hash11(seed * 41.3 + fi));
+    float sawPhase = az_hash11(seed * 51.7 + fi);
+    d = min(d, az_sdTaperedSpike(p, basePt, tipPt, baseW, sawPhase));
+  }
+  return d;
+}
+
+float az_sdRip(vec2 p, float seed, float t) {
+  float breath = 1.0 + sin(t * AZ_BREATHE_RATE) * AZ_BREATHE_AMP;
+  p /= breath;
+  // Per-instance tilt — random angle in [-TILT_ANGLE, +TILT_ANGLE]
+  // so different rips lean different ways.
+  float tilt = (az_hash11(seed * 5.31) - 0.5) * 2.0 * AZ_TILT_ANGLE;
+  float c = cos(tilt), s = sin(tilt);
+  vec2 pr = mat2(c, -s, s, c) * p;
+  vec2 q = pr / vec2(AZ_ASPECT_X, AZ_ASPECT_Y);
+  float base = length(q) - 1.0;
+  base *= min(AZ_ASPECT_X, AZ_ASPECT_Y);
+  // Edge noise is masked to |base| < 0.20 (smoothstep zeroes
+  // it past that), so for deep-interior fragments dirNoise is
+  // multiplied by 0 — skip outright.
+  if (abs(base) < 0.20) {
+    float edgeMask = 1.0 - smoothstep(0.0, 0.20, abs(base));
+    base += AZ_BOUNDARY_AMP * az_dirNoise(p, seed, t) * edgeMask;
+  }
+  // Spikes start at the ellipse boundary and extend outward;
+  // the deepest a spike body reaches inward is its half-width
+  // (~0.06). For fragments well inside the body (base < -0.20,
+  // and unperturbed by dirNoise per the gate above), no spike
+  // can improve min(base, spikes) — skip the 14-spike loop.
+  if (base >= -0.20) {
+    float spikes = az_sdSpikes(pr, seed, t);
+    base = min(base, spikes);
+  }
+  vec2 b1Off = (az_hash21(seed * 11.7) - 0.5) * vec2(0.5, 1.4);
+  vec2 b2Off = (az_hash21(seed * 23.1) - 0.5) * vec2(0.5, 1.4);
+  float blob1 = az_sdBlob(p, b1Off, AZ_BLOB1_R);
+  float blob2 = az_sdBlob(p, b2Off, AZ_BLOB2_R);
+  base = smin(base, blob1, AZ_SMIN_K);
+  base = smin(base, blob2, AZ_SMIN_K);
+  return base * breath;
+}
+
+float az_sdTriangleIq(vec2 p, vec2 a, vec2 b, vec2 c) {
+  vec2 e0 = b - a, e1 = c - b, e2 = a - c;
+  vec2 v0 = p - a, v1 = p - b, v2 = p - c;
+  vec2 pq0 = v0 - e0 * clamp(dot(v0, e0) / dot(e0, e0), 0.0, 1.0);
+  vec2 pq1 = v1 - e1 * clamp(dot(v1, e1) / dot(e1, e1), 0.0, 1.0);
+  vec2 pq2 = v2 - e2 * clamp(dot(v2, e2) / dot(e2, e2), 0.0, 1.0);
+  float s = sign(e0.x * e2.y - e0.y * e2.x);
+  vec2 d = min(min(
+    vec2(dot(pq0, pq0), s * (v0.x * e0.y - v0.y * e0.x)),
+    vec2(dot(pq1, pq1), s * (v1.x * e1.y - v1.y * e1.x))),
+    vec2(dot(pq2, pq2), s * (v2.x * e2.y - v2.y * e2.x)));
+  return -sqrt(d.x) * sign(d.y);
+}
+
+float az_sdEyeWedge(vec2 p, float apexX, float baseX, float h, float tilt) {
+  vec2 eyeC = vec2((apexX + baseX) * 0.5, 0.0);
+  float c = cos(tilt), s = sin(tilt);
+  vec2 lp = mat2(c, -s, s, c) * (p - eyeC) + eyeC;
+  float w = baseX - apexX;
+  float axisFrac = clamp((lp.x - apexX) / w, 0.0, 1.0);
+  lp.y *= 1.0 + AZ_EYE_BOW * sin(axisFrac * PI);
+  return az_sdTriangleIq(
+    lp, vec2(apexX, 0.0), vec2(baseX, h), vec2(baseX, -h)
+  );
+}
+
+float az_sdRhombusTooth(vec2 p, float topFlat, float wHalf,
+                        float lenMid, float lenTotal) {
+  if (p.y < 0.0) return -p.y;
+  if (p.y > lenTotal) return p.y - lenTotal;
+  float w;
+  if (p.y < lenMid) {
+    float t = p.y / lenMid;
+    w = mix(topFlat, wHalf, t);
+  } else {
+    float t = (p.y - lenMid) / max(lenTotal - lenMid, 1e-4);
+    w = mix(wHalf, 0.0, t);
+  }
+  return abs(p.x) - w;
+}
+
+float az_sdToothRow(vec2 p, float halfW, float jawH,
+                    float nTeeth, float seed, float bend) {
+  float d = 1e6;
+  float cellW = 2.0 * halfW / nTeeth;
+  float wHalfBase = cellW * 0.60;
+  for (int i = 0; i < 12; i++) {
+    float fi = float(i);
+    if (fi >= nTeeth) break;
+    float xc = -halfW + (fi + 0.5) * cellW;
+    float xRel = xc / halfW;
+    float jawOffset = bend * (1.0 - xRel * xRel);
+    float symIdx = min(fi, nTeeth - 1.0 - fi);
+    float sizeScale = 0.55 + 0.45 * az_hash11(seed + symIdx * 7.31);
+    float toothLen = jawH * sizeScale;
+    float toothMid = toothLen * 0.50;
+    float wHalf = wHalfBase * sqrt(sizeScale);
+    float topFlat = wHalf * 0.40;
+    vec2 lp = p - vec2(xc, jawOffset);
+    d = min(d, az_sdRhombusTooth(lp, topFlat, wHalf, toothMid, toothLen));
+  }
+  return d;
+}
+
+float az_sdMouthRows(vec2 p, float halfW, float halfH,
+                     float halfGap, float nTeeth, float seed) {
+  vec2 bbox = abs(p) - vec2(halfW, halfH);
+  if (max(bbox.x, bbox.y) > 0.0) return max(bbox.x, bbox.y);
+  float yAbs = abs(p.y);
+  if (yAbs < halfGap) return halfGap - yAbs;
+  float jawH = halfH - halfGap;
+  float upperBend = (az_hash11(seed * 17.7) - 0.5) * 2.0 * AZ_JAW_BEND_RANGE;
+  float lowerBend = (az_hash11(seed * 23.1) - 0.5) * 2.0 * AZ_JAW_BEND_RANGE;
+  if (p.y < 0.0) {
+    return az_sdToothRow(vec2(p.x, p.y + halfH),
+                         halfW, jawH, nTeeth, seed, upperBend);
+  }
+  return az_sdToothRow(vec2(p.x, halfH - p.y),
+                       halfW * AZ_LOWER_W_RATIO, jawH,
+                       nTeeth, seed, lowerBend);
+}
+
 void main() {
   // Wobble deformation — squeeze the star into an ellipse along
   // the impact axis. The component of v_local parallel to the
@@ -894,6 +1146,11 @@ void main() {
   // because its raymarch peak (~10 reg) doesn't push the program
   // worse than ringworld+plates already does.
   bool isTeapot = (flags & 4096) != 0;
+  // Azazel — demon manifesting through a rip in space. Body
+  // silhouette with radial spikes, plus 3 faces (paired
+  // triangular eyes above a two-row rhombus grin). Heavy ALU
+  // budget, lives in the common star program.
+  bool isAzazel = (flags & 8192) != 0;
 
   if (isPast) {
     // Dim ember: small inner glow + a white pinpoint at the core.
@@ -1081,6 +1338,92 @@ void main() {
     float rim = pow(1.0 - max(dot(normal, viewDir), 0.0), 3.0);
     col += rim * vec3(0.55, 0.65, 0.85) * 0.35;
     outColor = vec4(col, 1.0);
+    return;
+  }
+
+  // Azazel — a demon manifesting through a rip in space. Body
+  // silhouette + radial spikes + 3 face tiers (paired triangular
+  // eyes above a two-row rhombus grin). Outside the silhouette
+  // and outside the halftone fringe the quad writes alpha 0 so
+  // the real procedural background shows through. All scratch
+  // computations live in the az_ helper namespace defined above.
+  if (isAzazel) {
+    // Pixel position relative to star centre, in v_baseR units.
+    // World coords use +Y down (screenMat flips to clip), and
+    // the Azazel SDF was authored with +y down — no negation.
+    vec2 azP = loc / max(v_baseR, 1.0);
+    float d = az_sdRip(azP, v_seed, u_time);
+    if (d < 0.0) {
+      // Silhouette interior — solid black with an inner orange
+      // glow hugging the boundary, then eyes / iris / teeth on
+      // top.
+      vec3 col = AZ_INK_BLACK;
+      float innerDepth = -d;
+      float innerGlow = exp(-innerDepth * AZ_INNER_GLOW_FALLOFF)
+                      * AZ_INNER_GLOW_AMP;
+      col += AZ_INNER_GLOW * innerGlow;
+      for (int i = 0; i < AZ_N_FACES; i++) {
+        float fi = float(i);
+        float tierY = (fi - float(AZ_N_FACES - 1) * 0.5) * AZ_TIER_SPACING;
+        vec2 facePos = vec2(
+          (az_hash11(v_seed * 53.0 + fi * 23.7) - 0.5) * AZ_FACE_SPREAD_X,
+          tierY + (az_hash11(v_seed * 91.3 + fi * 47.1) - 0.5) * 0.04
+        );
+        float blinkPhase = sin(u_time * AZ_EYE_BLINK_RATE + fi * 1.7);
+        float openPhase  = sin(u_time * AZ_MOUTH_OPEN_RATE + fi * 2.3);
+        float faceAng = (az_hash11(v_seed * 87.3 + fi) - 0.5) * AZ_FACE_TILT_RANGE;
+        float fc = cos(faceAng), fs = sin(faceAng);
+        mat2 faceRot = mat2(fc, -fs, fs, fc);
+        float mxPhase = az_hash11(v_seed * 71.3 + fi) * TAU;
+        float myPhase = az_hash11(v_seed * 79.7 + fi) * TAU;
+        float sPhase  = az_hash11(v_seed * 83.1 + fi) * TAU;
+        vec2 motion = vec2(
+          sin(u_time * AZ_FACE_MOTION_RATE       + mxPhase),
+          sin(u_time * AZ_FACE_MOTION_RATE * 0.8 + myPhase)
+        ) * AZ_FACE_MOTION_AMP;
+        float faceScale = 1.0 + AZ_FACE_SCALE_AMP
+                              * sin(u_time * AZ_FACE_SCALE_RATE + sPhase);
+        vec2 effectivePos = facePos + motion;
+        vec2 fp = faceRot * (azP - effectivePos) / faceScale;
+        // Eyes — gated on blink > 0.02 so the triangle never
+        // collapses to a degenerate line (the IQ triangle SDF
+        // divides by dot(e1,e1)=0 there → NaN flicker).
+        float blink = 1.0 - pow(max(0.0, blinkPhase), 12.0);
+        if (blink > 0.02) {
+          float h = AZ_EYE_HEIGHT * blink;
+          vec2 eyeP = fp - vec2(0.0, AZ_EYE_Y_OFFSET);
+          float lEyeD = az_sdEyeWedge(eyeP, -AZ_EYE_INNER_X, -AZ_EYE_OUTER_X, h, +AZ_EYE_INNER_TILT);
+          float rEyeD = az_sdEyeWedge(eyeP, +AZ_EYE_INNER_X, +AZ_EYE_OUTER_X, h, -AZ_EYE_INNER_TILT);
+          float eD = min(lEyeD, rEyeD);
+          float glow = exp(-max(eD, 0.0) * AZ_EYE_GLOW_FALLOFF) * 0.35;
+          col += v_c1 * 0.78 * glow;
+          if (eD < 0.0) col = v_c1;
+          if (az_hash11(v_seed * 211.7 + fi) < AZ_EYE_IRIS_PROB) {
+            vec2 lEyeC = vec2((-AZ_EYE_INNER_X + -AZ_EYE_OUTER_X) * 0.5, 0.0);
+            vec2 rEyeC = vec2((+AZ_EYE_INNER_X + +AZ_EYE_OUTER_X) * 0.5, 0.0);
+            float lIrisD = length(eyeP - lEyeC) - AZ_EYE_IRIS_R;
+            float rIrisD = length(eyeP - rEyeC) - AZ_EYE_IRIS_R;
+            if ((lIrisD < 0.0 && lEyeD < 0.0)
+             || (rIrisD < 0.0 && rEyeD < 0.0)) col = AZ_EYE_IRIS_RED;
+          }
+        }
+        // Mouth
+        vec2 mp = fp - vec2(0.0, AZ_MOUTH_Y_OFFSET);
+        float gapBase = mix(AZ_MOUTH_GAP_MIN, AZ_MOUTH_GAP_MAX,
+                            az_hash11(v_seed * 167.0 + fi));
+        float halfGap = gapBase * (0.6 + 0.4 * (0.5 + 0.5 * openPhase));
+        float mSeed = v_seed * 200.0 + fi * 13.0;
+        float mD = az_sdMouthRows(mp, AZ_MOUTH_HALFW, AZ_MOUTH_HALFH,
+                                  halfGap, AZ_TEETH_PER_MOUTH, mSeed);
+        if (mD < 0.0) col = AZ_TOOTH_WHITE;
+      }
+      outColor = vec4(col, 1.0);
+      return;
+    }
+    // Outside the silhouette — fully transparent. (Halftone
+    // fringe removed; the inner orange glow on the negative-SDF
+    // side already provides the edge softening.)
+    outColor = vec4(0.0);
     return;
   }
 
@@ -3318,6 +3661,7 @@ export function createRenderer(canvas) {
       if (s.isRingworld) flags |= 64;
       if (s.isNebula) flags |= 2048;
       if (s.isTeapot) flags |= 4096;
+      if (s.isAzazel) flags |= 8192;
       // Ring plate count packed in flag bits 8-10 (0-7). 0 means
       // the ringworld has no shadow plates — shader skips all
       // plate/shadow/city-light work in that case.
