@@ -323,9 +323,20 @@ let cinematicLevelIdx = 0;
 let cinematicCamX = 0;
 let cinematicCamY = 0;
 let cinematicTime = 0;
-const CINEMATIC_ZOOM_AMP = 0.30;
-const CINEMATIC_FOLLOW_W = 0.025;
-const CINEMATIC_LERP_W = 0.06; // smoothing weight for transitions
+// Simplex zoom breath disabled — the oscillation read as motion
+// jaggedness on objects away from screen-center at high zoom.
+// Set > 0 to re-enable.
+const CINEMATIC_ZOOM_AMP = 0;
+// Time constants (ms) for the cam-follow and cam-param lerps.
+// Time-aware weighting: w = 1 - exp(-dt / tau). With per-render-
+// frame fixed weights, RAF jitter (14 ms vs 18 ms vs 16.67 ms)
+// shifted the effective time constant each frame, producing a
+// micro-jitter visible on objects at high zoom. Computing the
+// weight from real elapsed wall time eliminates that.
+//   FOLLOW_TAU 660 ms ≈ the old fixed weight 0.025/frame at 60 fps
+//   LERP_TAU   270 ms ≈ the old 0.06/frame at 60 fps
+const CINEMATIC_FOLLOW_TAU_MS = 660;
+const CINEMATIC_LERP_TAU_MS = 270;
 // Current rendered camera params in replayMat (scale, ox, oy)
 // form. Both regular and cinematic targets are expressed in this
 // form and the rendered triple lerps toward them.
@@ -333,6 +344,11 @@ let camRenderScale = ZOOM;
 let camRenderOx = 0;
 let camRenderOy = 0;
 let camRenderInited = false;
+// Previous values for velocity estimation in the exact 1st-order
+// integrator (eliminates dt-jitter steady-state error).
+let _prevFollowX = 0, _prevFollowY = 0;
+let _prevTargetScale = ZOOM, _prevTargetOx = 0, _prevTargetOy = 0;
+let _camIntegratorInited = false;
 
 let score = 0;
 let starsVisited = 0;
@@ -2256,13 +2272,40 @@ function renderTick() {
     if (sy > H + m || sy < -m * 2 || ball.x < -m || ball.x > W + m) die();
   }
 
-  // Cinematic camera state: keep cinematicCamX/Y always tracking
-  // the ship so a Z press snaps cleanly to a current position.
-  // Advance the noise clock only while cinematic is active so
-  // toggling on doesn't replay an old phase of the breath curve.
+  // Cinematic camera follow. Uses the *exact* 1st-order
+  // integrator for the lag y = target - cam:
+  //   dy/dt = v_target - y / tau
+  //   y_{n+1} = y_n * e + v_target * tau * (1 - e)
+  // where v_target is estimated from the change in target since
+  // the last frame. Plain `cam += (target - cam) * (1-e)` has a
+  // dt-dependent steady-state error proportional to v*dt — small
+  // per frame, but with RAF jitter the error oscillates
+  // frame-to-frame and (at zoom 2+) reads as visible ship/star
+  // micro-jitter. The exact form makes lag = v*tau under any dt.
   if (ball) {
-    cinematicCamX += (ball.x - cinematicCamX) * CINEMATIC_FOLLOW_W;
-    cinematicCamY += (ball.y - cinematicCamY) * CINEMATIC_FOLLOW_W;
+    if (!_camIntegratorInited) {
+      _prevFollowX = ballRenderX;
+      _prevFollowY = ballRenderY;
+      cinematicCamX = ballRenderX;
+      cinematicCamY = ballRenderY;
+    }
+    const dt = renderFrameDt;
+    const vx = dt > 0 ? (ballRenderX - _prevFollowX) / dt : 0;
+    const vy = dt > 0 ? (ballRenderY - _prevFollowY) / dt : 0;
+    const e = Math.exp(-dt / CINEMATIC_FOLLOW_TAU_MS);
+    const oneMinusE = 1 - e;
+    // y_n is lag at the START of the [t_n, t_n+dt] interval:
+    // target_n - cam_n = _prevFollowX - cinematicCamX.
+    // Using ballRenderX (= target_{n+1}) here would mix time
+    // indices and roughly double the steady-state lag.
+    const yx = _prevFollowX - cinematicCamX;
+    const yy = _prevFollowY - cinematicCamY;
+    const yxNew = yx * e + vx * CINEMATIC_FOLLOW_TAU_MS * oneMinusE;
+    const yyNew = yy * e + vy * CINEMATIC_FOLLOW_TAU_MS * oneMinusE;
+    cinematicCamX = ballRenderX - yxNew;
+    cinematicCamY = ballRenderY - yyNew;
+    _prevFollowX = ballRenderX;
+    _prevFollowY = ballRenderY;
   }
   if (cinematicLevelIdx > 0) cinematicTime++;
 
@@ -2293,12 +2336,32 @@ function renderTick() {
     camRenderScale = targetScale;
     camRenderOx = targetOx;
     camRenderOy = targetOy;
+    _prevTargetScale = targetScale;
+    _prevTargetOx = targetOx;
+    _prevTargetOy = targetOy;
     camRenderInited = true;
   } else {
-    camRenderScale += (targetScale - camRenderScale) * CINEMATIC_LERP_W;
-    camRenderOx    += (targetOx - camRenderOx)       * CINEMATIC_LERP_W;
-    camRenderOy    += (targetOy - camRenderOy)       * CINEMATIC_LERP_W;
+    // Same exact 1st-order integrator as the follow lerp. y_n
+    // uses the *previous* target (_prevTarget*) so we don't mix
+    // time indices and double the steady-state lag.
+    const dt = renderFrameDt;
+    const vS = dt > 0 ? (targetScale - _prevTargetScale) / dt : 0;
+    const vOx = dt > 0 ? (targetOx - _prevTargetOx) / dt : 0;
+    const vOy = dt > 0 ? (targetOy - _prevTargetOy) / dt : 0;
+    const e = Math.exp(-dt / CINEMATIC_LERP_TAU_MS);
+    const oneMinusE = 1 - e;
+    const tau = CINEMATIC_LERP_TAU_MS;
+    const lagS  = (_prevTargetScale - camRenderScale) * e + vS  * tau * oneMinusE;
+    const lagOx = (_prevTargetOx    - camRenderOx)    * e + vOx * tau * oneMinusE;
+    const lagOy = (_prevTargetOy    - camRenderOy)    * e + vOy * tau * oneMinusE;
+    camRenderScale = targetScale - lagS;
+    camRenderOx    = targetOx    - lagOx;
+    camRenderOy    = targetOy    - lagOy;
   }
+  _prevTargetScale = targetScale;
+  _prevTargetOx = targetOx;
+  _prevTargetOy = targetOy;
+  _camIntegratorInited = true;
 
   // Feed peak-held ball speed to the music layer so it can
   // escalate the chord progression at high velocity. Decay-
@@ -3060,6 +3123,11 @@ if (pausedEl) {
 // between the state before the most recent tick and the current
 // state. draw() and renderTick() use these for anything visual.
 let ballRenderX = 0, ballRenderY = 0;
+// Real wall-clock elapsed since the last render frame (ms).
+// Updated by the main loop and read by renderTick's time-aware
+// camera lerps so frame-to-frame RAF jitter doesn't translate
+// into cam-velocity jitter.
+let renderFrameDt = 16.67;
 
 function loop(rafTime) {
   if (paused) {
@@ -3072,6 +3140,7 @@ function loop(rafTime) {
   if (elapsed > MAX_FRAME_GAP_MS) elapsed = MAX_FRAME_GAP_MS;
   if (elapsed < 0) elapsed = 0;
   lastFrameTime = rafTime;
+  renderFrameDt = elapsed;
   physicsAccumulator += elapsed;
 
   // Track the ball's pre-tick position so we can interpolate

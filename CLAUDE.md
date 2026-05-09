@@ -148,10 +148,12 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   ring as confirmation; a projected launch window draws around
   the target star while the queue is pending. Cinematic camera
   mode (`Z` or long-press the score) cycles through near/far
-  ship-following zooms with simplex breath, palindromic 4-step
-  cycle (normal → near → far → near → normal), smooth lerped
-  transitions. Help overlay. Replay with dynamic follow-cam.
-  Focus-click suppression.
+  ship-following zooms via a palindromic 4-step cycle (normal →
+  near → far → near → normal). Follow uses an exact 1st-order
+  integrator (`y_{n+1} = y_n·e + v·tau·(1−e)`) on `ballRenderX/Y`
+  with `renderFrameDt`-driven weights, so RAF jitter doesn't
+  translate into ship/star screen-position wobble at zoom. Help
+  overlay. Replay with dynamic follow-cam. Focus-click suppression.
   → [Details](agent_docs/gameplay.md)
 
 ## User preferences

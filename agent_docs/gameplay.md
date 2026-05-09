@@ -338,34 +338,58 @@ palindromic — four consecutive presses return to normal:
 0 → 1 → 2 → 1 → 0 → 1 → 2 → ...
 ```
 
-Levels 1–3 use a `replayMat`-style ship-following camera with the
-same simplex-driven zoom breath as `drawReplayGhost`, applied to
-the live game. Implementation:
+Levels 1–3 use a `replayMat`-style ship-following camera applied
+to the live game. (Optional simplex zoom breath is in the code
+but disabled — `CINEMATIC_ZOOM_AMP = 0` — because the oscillation
+read as visible jaggedness on objects away from screen-center at
+high zoom.)
 
-- Camera position lerps toward the ship every frame at
-  `CINEMATIC_FOLLOW_W` (0.025 — much slower than the regular
-  cam so the framing reads as cinematic glide rather than rigid
-  follow).
-- Both the regular and cinematic camera targets are computed
-  each frame in replayMat (`scale`, `ox`, `oy`) form. The
-  rendered triple lerps toward the target at `CINEMATIC_LERP_W`
-  (0.06) so mode entry, level switching, and exit all glide.
-  `draw()` builds a single `replayMat` from the lerped params
-  with no branch.
-- BH lensing FBO radius reads the lerped scale (`drawZoom`)
-  rather than base `ZOOM`, so the lens disk size matches the
-  on-screen size in either mode and during transitions.
-- Off-screen death check still uses world-frame `ZOOM` and
+Implementation details:
+
+- **Follow target.** Camera follows `ballRenderX/Y` (the
+  per-render-frame interpolated ship position) — *not* `ball.x/y`
+  (the raw physics state, which is stair-stepped at 120 Hz).
+  Mismatch between those two creates visible motion jaggedness
+  at high cinematic zooms.
+- **Time-aware integrator.** Both the follow lerp and the cam-
+  param lerp use the exact 1st-order solver
+  `y_{n+1} = y_n · e + v · tau · (1 − e)` (where `y = target − cam`
+  is the lag, `e = exp(−dt / tau)`, and `v` is the target
+  velocity estimated from `(target − prevTarget) / dt`). Both `y_n`
+  and `v` use the *previous-frame* target value so we don't mix
+  start-of-interval cam state with end-of-interval target state
+  (mixing the indices roughly doubles the steady-state lag). The
+  exact form gives lag = `v · tau` independent of `dt`, so RAF
+  jitter doesn't translate into ship/star screen-position jitter.
+  `dt` is read from a module-level `renderFrameDt` updated each
+  frame by the main loop.
+- **Time constants.**
+  - `CINEMATIC_FOLLOW_TAU_MS = 660` for the camera-follows-ship
+    lerp (≈ the old fixed weight 0.025/frame at 60 fps).
+  - `CINEMATIC_LERP_TAU_MS = 270` for the cam-param transition
+    lerp (≈ the old 0.06/frame at 60 fps).
+- **Both cams expressed in replayMat form.** Regular and cinematic
+  camera targets are computed each frame as `(scale, ox, oy)`
+  using the algebraic equivalence `ox = camX·z + W/2·(1−z)` (and
+  same for `oy`). The rendered triple lerps toward whichever
+  target the current level demands, so mode entry, level
+  switching, and exit all glide through the same code path.
+  `draw()` builds a single `replayMat` from the lerped params —
+  no branch.
+- **BH lensing.** The FBO disk radius reads the lerped scale
+  (`drawZoom`) rather than base `ZOOM`, so the lens size matches
+  the on-screen size in either mode and during transitions.
+- **Off-screen death check** still uses world-frame `ZOOM` and
   `camY` — cinematic is purely a render-time visual.
-- Touch zooms are lower than desktop (`1.0` / `1.4` vs `1.7` /
+- **Touch zooms** are lower than desktop (`1.0` / `1.4` vs `1.7` /
   `2.6`) because mobile screens make even moderate zoom feel
   excessive.
 
 Long-press on the score display fires on the threshold (not on
 release) so the camera transition starts immediately. The same
 pointer stroke can't double-fire as both tap-toggle-W and
-hold-cycle-Z because the tap path checks
-`_scoreHoldFired` on `pointerup`.
+hold-cycle-Z because the tap path checks `_scoreHoldFired` on
+`pointerup`.
 
 ## Crash wobble
 
@@ -511,3 +535,13 @@ tunables near the top of `gameplay.js`: `ZOOM`, `CAM_FOCUS_Y`,
 `DYING_FRAMES_MS`, `COMET_SCORE_RADIUS`, `COMET_BONUS`,
 `FAST_STREAK_CAP`, `BH_VISUAL_SCALE`, `EJECTA_MAX`,
 `EJECTA_GM_MULT`.
+
+Cinematic camera knobs: `CINEMATIC_ZOOM_NEAR`,
+`CINEMATIC_ZOOM_FAR` (per-platform via `IS_TOUCH`),
+`CINEMATIC_LEVELS`, `CINEMATIC_FOLLOW_TAU_MS` (660 ms),
+`CINEMATIC_LERP_TAU_MS` (270 ms), `CINEMATIC_ZOOM_AMP` (0;
+re-enable simplex breath by setting > 0). Launch-window knobs:
+`LAUNCH_WINDOW_SAMPLES` (36), `LAUNCH_WINDOW_BOOST_STEPS` (24
+— half the live `applyBoostAndArm` grid),
+`LAUNCH_WINDOW_RECOMPUTE_FRAMES` (12), `LW_SLOTS_PER_FRAME` (6,
+slots advanced per frame in the time-sliced build).
