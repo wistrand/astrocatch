@@ -303,6 +303,37 @@ let replayCamY = 0;
 // 2 = 2× fast.
 const REPLAY_SPEED = 1.75;
 
+// Cinematic mode — Z cycles 0 → 1 → 2 → 3 → 0. Level 0 is the
+// regular camera; 1–3 are ship-following replayMat-style cams
+// with a simplex zoom breath, mirroring drawReplayGhost. Levels
+// 1 and 3 share the same zoom so the cycle reads as a palindrome:
+// normal → near → far → near → normal. Camera params are lerped
+// toward target each frame so transitions in either direction
+// (entering cinematic, switching levels, exiting) glide instead
+// of snapping.
+const CINEMATIC_ZOOM_NEAR = IS_TOUCH ? 1.0 : 1.7;
+const CINEMATIC_ZOOM_FAR  = IS_TOUCH ? 1.4 : 2.6;
+const CINEMATIC_LEVELS = [
+  0,                      // 0: regular cam
+  CINEMATIC_ZOOM_NEAR,    // 1: zoom 1
+  CINEMATIC_ZOOM_FAR,     // 2: zoom 2
+  CINEMATIC_ZOOM_NEAR,    // 3: zoom 1 (cycle reverses)
+];
+let cinematicLevelIdx = 0;
+let cinematicCamX = 0;
+let cinematicCamY = 0;
+let cinematicTime = 0;
+const CINEMATIC_ZOOM_AMP = 0.30;
+const CINEMATIC_FOLLOW_W = 0.025;
+const CINEMATIC_LERP_W = 0.06; // smoothing weight for transitions
+// Current rendered camera params in replayMat (scale, ox, oy)
+// form. Both regular and cinematic targets are expressed in this
+// form and the rendered triple lerps toward them.
+let camRenderScale = ZOOM;
+let camRenderOx = 0;
+let camRenderOy = 0;
+let camRenderInited = false;
+
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
@@ -1372,8 +1403,18 @@ function captureStar(idx) {
   }
 }
 
-// Hidden by default; toggle by clicking the score display.
+// Score display has two gestures (pairs with the W and Z keys
+// for keyboard users):
+//   - Tap (short press) → toggle launch window (W).
+//   - Long press (≥ 500 ms) → cycle cinematic zoom level (Z).
+// Long-press fires on the threshold so the player gets immediate
+// camera feedback rather than waiting for release; the tap path
+// is gated on no-long-press-having-fired so the same pointer
+// stroke can't trigger both.
 let showLaunchWindow = false;
+const SCORE_LONG_PRESS_MS = 500;
+let _scoreHoldTimer = null;
+let _scoreHoldFired = false;
 const scoreToggleEl = document.getElementById("score-display");
 if (scoreToggleEl) {
   scoreToggleEl.style.cursor = "pointer";
@@ -1381,7 +1422,37 @@ if (scoreToggleEl) {
   scoreToggleEl.addEventListener("pointerdown", (e) => {
     e.preventDefault();
     e.stopPropagation();
-    showLaunchWindow = !showLaunchWindow;
+    _scoreHoldFired = false;
+    _scoreHoldTimer = setTimeout(() => {
+      _scoreHoldFired = true;
+      _scoreHoldTimer = null;
+      cinematicLevelIdx = (cinematicLevelIdx + 1) % CINEMATIC_LEVELS.length;
+    }, SCORE_LONG_PRESS_MS);
+  });
+  scoreToggleEl.addEventListener("pointerup", (e) => {
+    if (_scoreHoldTimer !== null) {
+      clearTimeout(_scoreHoldTimer);
+      _scoreHoldTimer = null;
+    }
+    if (!_scoreHoldFired) {
+      e.preventDefault();
+      e.stopPropagation();
+      showLaunchWindow = !showLaunchWindow;
+    }
+    _scoreHoldFired = false;
+  });
+  scoreToggleEl.addEventListener("pointercancel", () => {
+    if (_scoreHoldTimer !== null) {
+      clearTimeout(_scoreHoldTimer);
+      _scoreHoldTimer = null;
+    }
+    _scoreHoldFired = false;
+  });
+  scoreToggleEl.addEventListener("pointerleave", () => {
+    if (_scoreHoldTimer !== null) {
+      clearTimeout(_scoreHoldTimer);
+      _scoreHoldTimer = null;
+    }
   });
 }
 
@@ -1392,6 +1463,15 @@ if (scoreToggleEl) {
 // then test each sample with predictCapture. Each sample
 // carries its world position + tangent direction.
 const LAUNCH_WINDOW_SAMPLES = 36;
+// Indicator boost-factor grid resolution. Half the live
+// applyBoostAndArm grid (48 steps) — the indicator only needs
+// to know *whether* a clean capture exists at each slot, not
+// the smallest viable Δv, so we can afford a coarser sweep.
+// Halves the worst-case predictCapture call count per
+// recompute (was ~1700, now ~860) which removes the visible
+// stutter when the indicator is on while the game is also
+// recomputing the projected window during transit.
+const LAUNCH_WINDOW_BOOST_STEPS = 24;
 // Throttle state for periodic recompute under planet/binary
 // perturbation. Updated inside computeLaunchWindow().
 const LAUNCH_WINDOW_RECOMPUTE_FRAMES = 12; // ~0.1 s at 120 Hz
@@ -1400,18 +1480,51 @@ let lastProjectedLaunchWindowFrame = -1;
 // Pre-allocated scratch for sample states + result entries.
 // Reused across recomputes to avoid GC churn on long sessions.
 // The `used` flag replaces the null-slot pattern.
-const _lwSamples = new Array(LAUNCH_WINDOW_SAMPLES);
-const _lwWindow = new Array(LAUNCH_WINDOW_SAMPLES);
-// Second pool for the projected launch window drawn at the
-// target star while a queued in-transit boost is pending.
-const _lwProjSamples = new Array(LAUNCH_WINDOW_SAMPLES);
-const _lwProjWindow = new Array(LAUNCH_WINDOW_SAMPLES);
+// Two buffer pairs for the live indicator (ping-pong). The
+// time-sliced build writes into the back pair across multiple
+// frames; ball.launchWindow stays mounted on the previously-
+// completed front pair so old ticks keep drawing during the
+// build. On completion we swap.
+const _lwSamplesA = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwSamplesB = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwWindowA = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwWindowB = new Array(LAUNCH_WINDOW_SAMPLES);
+// Two-pair ping-pong for the projected window — same pattern
+// as the regular indicator so the build is also time-sliced
+// across multiple frames during transit.
+const _lwProjSamplesA = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwProjSamplesB = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwProjWindowA = new Array(LAUNCH_WINDOW_SAMPLES);
+const _lwProjWindowB = new Array(LAUNCH_WINDOW_SAMPLES);
 for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
-  _lwSamples[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
-  _lwWindow[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
-  _lwProjSamples[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
-  _lwProjWindow[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+  _lwSamplesA[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwSamplesB[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwWindowA[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+  _lwWindowB[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+  _lwProjSamplesA[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwProjSamplesB[i] = { x: 0, y: 0, vx: 0, vy: 0, used: false };
+  _lwProjWindowA[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
+  _lwProjWindowB[i] = { x: 0, y: 0, tx: 0, ty: 0, ok: false, used: false };
 }
+// Build state for the time-sliced projected window.
+let _lwProjBuildSamples = _lwProjSamplesA;
+let _lwProjBuildWindow = _lwProjWindowA;
+let _lwProjBuildSlot = -1;
+let _lwProjBuildTargetIdx = -1;
+let _lwProjBuildStartFrame = 0;
+// Build state for the time-sliced regular indicator.
+// _lwBuildSlot < 0 means no build in progress.
+let _lwBuildIdx = 0;       // 0 → A is back, 1 → B is back
+let _lwBuildSamples = _lwSamplesA;
+let _lwBuildWindow = _lwWindowA;
+let _lwBuildSlot = -1;
+let _lwBuildCsIdx = -1;
+let _lwBuildStartFrame = 0;
+// Phase 2 cost is dominated by failing slots (each pays a full
+// fSteps × predictCapture sweep). Splitting 36 slots across 6
+// frames keeps each tick's contribution to ~1/6 of a build's
+// total compute — well under a frame budget.
+const LW_SLOTS_PER_FRAME = 6;
 const _LW_STEP = (Math.PI * 2) / LAUNCH_WINDOW_SAMPLES;
 // Scratch object reused across all predictCapture calls from
 // the launch-window hotpath. Avoids ~100 small allocations per
@@ -1429,13 +1542,13 @@ function slotForTheta(theta) {
   return Math.floor(t / _LW_STEP);
 }
 
-// Inner forward-sim + slot-fill + predict loop for one launch
-// window. Returns the number of slots filled (caller decides if
-// it's enough). Accepts arbitrary input state so both the live
-// indicator and the projected (queued-boost) variant can share
-// the implementation.
-function runLaunchWindowSim(
-  x0, y0, vx0, vy0, csIdx, samplesArr, windowArr, startFrame
+// Phase 1: forward-sim around the star and fill `samplesArr`
+// with one state per angular slot. Returns the number of slots
+// filled (>=4 = enough to draw something useful). Synchronous,
+// runs once per build trigger. Cheap (~1-2ms) so doesn't need
+// time-slicing itself.
+function runLaunchWindowPhase1(
+  x0, y0, vx0, vy0, csIdx, samplesArr,
 ) {
   const cs = stars[csIdx];
   const next = stars[csIdx + 1];
@@ -1494,45 +1607,119 @@ function runLaunchWindowSim(
       }
     }
   }
-  if (filled < 4) return filled;
+  return filled;
+}
 
+// Phase 2: process ONE slot's predict-sweep. The dominant cost
+// in each launch-window build is here (failing slots run all
+// LAUNCH_WINDOW_BOOST_STEPS predictCapture calls). Splitting per
+// slot is what lets the regular indicator time-slice the build
+// across frames; projected calls all 36 in a row.
+function runLaunchWindowPhase2Slot(
+  slot, samplesArr, windowArr, csIdx, startFrame,
+) {
   const minF = AC.BOOST_SEARCH_MIN;
   const maxF = AC.BOOST_SEARCH_MAX;
-  const fSteps = AC.BOOST_SEARCH_STEPS;
+  const fSteps = LAUNCH_WINDOW_BOOST_STEPS;
   const fSpan = maxF - minF;
-  for (let i = 0; i < LAUNCH_WINDOW_SAMPLES; i++) {
-    const s = samplesArr[i];
-    const w = windowArr[i];
-    if (!s.used) { w.used = false; continue; }
-    let success = false;
-    for (let k = 0; k < fSteps; k++) {
-      const t = k / (fSteps - 1);
-      const f = minF + fSpan * t;
-      const pred = AC.predictCapture(stars, csIdx,
-        s.x, s.y, s.vx * (1 + f), s.vy * (1 + f),
-        startFrame, _lwPredictOut);
-      if (pred) { success = true; break; }
-    }
-    const sp = Math.hypot(s.vx, s.vy) || 1;
-    w.x = s.x; w.y = s.y;
-    w.tx = s.vx / sp; w.ty = s.vy / sp;
-    w.ok = success; w.used = true;
+  const s = samplesArr[slot];
+  const w = windowArr[slot];
+  if (!s.used) { w.used = false; return; }
+  let success = false;
+  for (let k = 0; k < fSteps; k++) {
+    const t = k / (fSteps - 1);
+    const f = minF + fSpan * t;
+    const pred = AC.predictCapture(stars, csIdx,
+      s.x, s.y, s.vx * (1 + f), s.vy * (1 + f),
+      startFrame, _lwPredictOut);
+    if (pred) { success = true; break; }
+  }
+  const sp = Math.hypot(s.vx, s.vy) || 1;
+  w.x = s.x; w.y = s.y;
+  w.tx = s.vx / sp; w.ty = s.vy / sp;
+  w.ok = success; w.used = true;
+}
+
+// Convenience wrapper: full synchronous build (phase 1 + all
+// slots in phase 2). Used by the projected window only — that
+// path fires rarely (once every 12 frames during transit with a
+// queued boost) and finishes in one frame so a partial result
+// would make the projection look worse than no result.
+function runLaunchWindowSim(
+  x0, y0, vx0, vy0, csIdx, samplesArr, windowArr, startFrame,
+) {
+  const filled = runLaunchWindowPhase1(
+    x0, y0, vx0, vy0, csIdx, samplesArr,
+  );
+  if (filled < 4) return filled;
+  for (let slot = 0; slot < LAUNCH_WINDOW_SAMPLES; slot++) {
+    runLaunchWindowPhase2Slot(
+      slot, samplesArr, windowArr, csIdx, startFrame,
+    );
   }
   return filled;
 }
 
+// Start a (possibly time-sliced) build of the regular launch
+// window. Phase 1 runs synchronously here; phase 2 is advanced
+// per render frame by tickLaunchWindowBuild(). On completion
+// the back buffer is swapped in. ball.launchWindow keeps
+// pointing to whatever was last completed during the build, so
+// the indicator never flickers off mid-update.
 function computeLaunchWindow() {
   if (!ball) return;
-  ball.launchWindow = null;
-  if (ball.pendingCapture >= 0) return;
-  const filled = runLaunchWindowSim(
+  if (ball.pendingCapture >= 0) {
+    ball.launchWindow = null;
+    _lwBuildSlot = -1;
+    return;
+  }
+  // Pick the back buffer (the one not currently mounted on
+  // ball.launchWindow). On the very first build both buffers
+  // are unused — the front pointer is null — so just take A.
+  const useB = ball.launchWindow === _lwWindowB;
+  _lwBuildIdx = useB ? 0 : 1;
+  _lwBuildSamples = useB ? _lwSamplesA : _lwSamplesB;
+  _lwBuildWindow  = useB ? _lwWindowA  : _lwWindowB;
+  _lwBuildCsIdx = ball.currentStar;
+  _lwBuildStartFrame = ball.frame || 0;
+  const filled = runLaunchWindowPhase1(
     ball.x, ball.y, ball.vx, ball.vy,
-    ball.currentStar, _lwSamples, _lwWindow, ball.frame || 0,
+    _lwBuildCsIdx, _lwBuildSamples,
   );
-  if (filled < 4) return;
-  ball.launchWindow = _lwWindow;
-  ball.launchWindowStarIdx = ball.currentStar;
-  lastLaunchWindowFrame = ball.frame || 0;
+  if (filled < 4) {
+    _lwBuildSlot = -1;
+  } else {
+    _lwBuildSlot = 0;
+  }
+  lastLaunchWindowFrame = _lwBuildStartFrame;
+}
+
+// Advance the in-progress build by LW_SLOTS_PER_FRAME slots.
+// Cost per call: ~1/6 of a full build at LW_SLOTS_PER_FRAME=6.
+// Aborts if game state changed (capture started, currentStar
+// rotated) so we don't commit results computed against stale
+// state.
+function tickLaunchWindowBuild() {
+  if (_lwBuildSlot < 0) return;
+  if (!ball || ball.pendingCapture >= 0
+      || ball.currentStar !== _lwBuildCsIdx) {
+    _lwBuildSlot = -1;
+    return;
+  }
+  const limit = Math.min(
+    LAUNCH_WINDOW_SAMPLES, _lwBuildSlot + LW_SLOTS_PER_FRAME,
+  );
+  for (; _lwBuildSlot < limit; _lwBuildSlot++) {
+    runLaunchWindowPhase2Slot(
+      _lwBuildSlot, _lwBuildSamples, _lwBuildWindow,
+      _lwBuildCsIdx, _lwBuildStartFrame,
+    );
+  }
+  if (_lwBuildSlot >= LAUNCH_WINDOW_SAMPLES) {
+    ball.launchWindow = _lwBuildWindow;
+    ball.launchWindowStarIdx = _lwBuildCsIdx;
+    _lwBuildSlot = -1;
+  }
 }
 
 // Projected launch window for a queued in-transit boost. Predicts
@@ -1541,16 +1728,24 @@ function computeLaunchWindow() {
 // runs the same launch-window sim from there toward the next-next
 // star. Lets the player see *before* capture whether their queued
 // tap will land on a valid launch position.
+// Start a (time-sliced) build of the projected launch window.
+// The expensive parts are: (a) one predictCapture from the ball
+// in transit to find the peri snapshot, then (b) phase 1 of the
+// launch-window sim around the target, then (c) per-slot phase
+// 2. (a) and (b) run synchronously here (~2-4 ms together);
+// (c) is sliced across frames by tickProjectedLaunchWindowBuild
+// so no single frame pays the full ~26 ms cost.
 function computeProjectedLaunchWindow() {
   if (!ball) return;
-  ball.projectedLaunchWindow = null;
-  if (ball.pendingCapture < 0) return;
+  if (ball.pendingCapture < 0) {
+    ball.projectedLaunchWindow = null;
+    _lwProjBuildSlot = -1;
+    return;
+  }
   const targetIdx = ball.pendingCapture;
   const target = stars[targetIdx];
   const afterTarget = stars[targetIdx + 1];
   if (!target || !afterTarget) return;
-  // Predict the peri snapshot around target from the ball's
-  // current in-transit state.
   const startFrame = ball.frame || 0;
   const pred = AC.predictCapture(
     stars, ball.currentStar,
@@ -1558,9 +1753,7 @@ function computeProjectedLaunchWindow() {
     startFrame, _lwPredictOut,
   );
   if (!pred) return;
-  // Burn clamp: |v| at peri must lie in [vCirc, vMax] where
-  // vMax is set by the target's Voronoi-cell apoMax. Mirrors
-  // `burnStep` in physics.js — keep the two in sync.
+  // Burn clamp: mirrors `burnStep` in physics.js.
   let nearestNeighbor = Infinity;
   for (let i = ball.currentStar; i < stars.length; i++) {
     if (i === targetIdx) continue;
@@ -1585,13 +1778,46 @@ function computeProjectedLaunchWindow() {
   const pvx = _lwPredictOut.periVx * k;
   const pvy = _lwPredictOut.periVy * k;
   const projStartFrame = startFrame + _lwPredictOut.periFrame;
-  const filled = runLaunchWindowSim(
-    px, py, pvx, pvy,
-    targetIdx, _lwProjSamples, _lwProjWindow, projStartFrame,
+  // Pick the back buffer (the one not currently mounted on
+  // ball.projectedLaunchWindow). On first build front is null
+  // → either pair is fine.
+  const useB = ball.projectedLaunchWindow === _lwProjWindowB;
+  _lwProjBuildSamples = useB ? _lwProjSamplesA : _lwProjSamplesB;
+  _lwProjBuildWindow  = useB ? _lwProjWindowA  : _lwProjWindowB;
+  _lwProjBuildTargetIdx = targetIdx;
+  _lwProjBuildStartFrame = projStartFrame;
+  const filled = runLaunchWindowPhase1(
+    px, py, pvx, pvy, targetIdx, _lwProjBuildSamples,
   );
-  if (filled < 4) return;
-  ball.projectedLaunchWindow = _lwProjWindow;
-  ball.projectedLaunchWindowStarIdx = targetIdx;
+  if (filled < 4) {
+    _lwProjBuildSlot = -1;
+  } else {
+    _lwProjBuildSlot = 0;
+  }
+}
+
+function tickProjectedLaunchWindowBuild() {
+  if (_lwProjBuildSlot < 0) return;
+  // Abort if the queue evaporated or transit ended.
+  if (!ball || !ball.queuedBoost
+      || ball.pendingCapture !== _lwProjBuildTargetIdx) {
+    _lwProjBuildSlot = -1;
+    return;
+  }
+  const limit = Math.min(
+    LAUNCH_WINDOW_SAMPLES, _lwProjBuildSlot + LW_SLOTS_PER_FRAME,
+  );
+  for (; _lwProjBuildSlot < limit; _lwProjBuildSlot++) {
+    runLaunchWindowPhase2Slot(
+      _lwProjBuildSlot, _lwProjBuildSamples, _lwProjBuildWindow,
+      _lwProjBuildTargetIdx, _lwProjBuildStartFrame,
+    );
+  }
+  if (_lwProjBuildSlot >= LAUNCH_WINDOW_SAMPLES) {
+    ball.projectedLaunchWindow = _lwProjBuildWindow;
+    ball.projectedLaunchWindowStarIdx = _lwProjBuildTargetIdx;
+    _lwProjBuildSlot = -1;
+  }
 }
 
 function updateScoreUI(bump, bonus, streak) {
@@ -1925,30 +2151,34 @@ function renderTick() {
 
   // Throttled launch-window recompute when under planet
   // perturbation. Only runs if the hint is currently visible
-  // so we don't burn CPU on invisible state.
+  // so we don't burn CPU on invisible state. The build itself
+  // is time-sliced (see tickLaunchWindowBuild below).
   if (showLaunchWindow && ball && ball.pendingCapture < 0) {
     const cs0 = stars[ball.currentStar];
     const perturbed = cs0 && (cs0.planets || cs0.isBinary);
     const frame = ball.frame || 0;
     if (perturbed && frame - lastLaunchWindowFrame
-        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES) {
+        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES && _lwBuildSlot < 0) {
       computeLaunchWindow();
-      lastLaunchWindowFrame = frame;
     }
   }
+  // Advance any in-progress launch-window build. Splits the
+  // per-slot predict sweep across multiple render frames so
+  // a single build can't blow the frame budget.
+  tickLaunchWindowBuild();
   // Throttled projected-launch-window recompute while a queued
-  // in-transit boost is pending. The peri prediction sharpens as
-  // transit progresses so the indicator gets more accurate the
-  // closer the ball gets to the target.
+  // in-transit boost is pending. Same gate as the regular path:
+  // don't start a new build while one is in progress.
   if (showLaunchWindow && ball && ball.queuedBoost
       && ball.pendingCapture >= 0) {
     const frame = ball.frame || 0;
     if (frame - lastProjectedLaunchWindowFrame
-        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES) {
+        >= LAUNCH_WINDOW_RECOMPUTE_FRAMES && _lwProjBuildSlot < 0) {
       computeProjectedLaunchWindow();
       lastProjectedLaunchWindowFrame = frame;
     }
   }
+  tickProjectedLaunchWindowBuild();
 
   const cs = stars[ball.currentStar];
   // Sample the trail at the interpolated render position so the
@@ -2017,11 +2247,57 @@ function renderTick() {
   const clipRight = (livePanScreenX + visualRpx) - (W - margin);
   if (clipLeft > 0 || clipRight > 0) camX = camXTarget;
 
-  // Off-screen death check — only while still PLAYing.
+  // Off-screen death check — only while still PLAYing. Uses the
+  // regular-camera frame even in cinematic mode, since cinematic
+  // is purely a render-time visual.
   if (state === STATE.PLAY) {
     const sy = ball.y + camY;
     const m = 260 / ZOOM;
     if (sy > H + m || sy < -m * 2 || ball.x < -m || ball.x > W + m) die();
+  }
+
+  // Cinematic camera state: keep cinematicCamX/Y always tracking
+  // the ship so a Z press snaps cleanly to a current position.
+  // Advance the noise clock only while cinematic is active so
+  // toggling on doesn't replay an old phase of the breath curve.
+  if (ball) {
+    cinematicCamX += (ball.x - cinematicCamX) * CINEMATIC_FOLLOW_W;
+    cinematicCamY += (ball.y - cinematicCamY) * CINEMATIC_FOLLOW_W;
+  }
+  if (cinematicLevelIdx > 0) cinematicTime++;
+
+  // Compute the *target* camera params for this frame (regular
+  // cam at level 0; cinematic ship-follow with simplex breath at
+  // 1-3) in replayMat (scale, ox, oy) form. Then lerp the
+  // rendered triple toward the target so mode entry / exit /
+  // level changes all glide instead of snap. Both forms agree:
+  //   regular cam → screen = (world + cam - focus) * zoom + focus
+  //   replayMat   → screen = world * scale + offset
+  // so ox = camX*zoom + W/2 * (1-zoom),
+  //    oy = camY*zoom + H*focusY * (1-zoom).
+  const levelZoom = CINEMATIC_LEVELS[cinematicLevelIdx];
+  let targetScale, targetOx, targetOy;
+  if (levelZoom === 0) {
+    const z = ZOOM * zoomMult;
+    targetScale = z;
+    targetOx = camX * z + (W / 2) * (1 - z);
+    targetOy = camY * z + (H * CAM_FOCUS_Y) * (1 - z);
+  } else {
+    const zoomNoise = simplex2(cinematicTime * 0.0004, 50.0);
+    const cinZoom = levelZoom + zoomNoise * CINEMATIC_ZOOM_AMP;
+    targetScale = cinZoom;
+    targetOx = -cinematicCamX * cinZoom + W / 2;
+    targetOy = -cinematicCamY * cinZoom + H / 2;
+  }
+  if (!camRenderInited) {
+    camRenderScale = targetScale;
+    camRenderOx = targetOx;
+    camRenderOy = targetOy;
+    camRenderInited = true;
+  } else {
+    camRenderScale += (targetScale - camRenderScale) * CINEMATIC_LERP_W;
+    camRenderOx    += (targetOx - camRenderOx)       * CINEMATIC_LERP_W;
+    camRenderOy    += (targetOy - camRenderOy)       * CINEMATIC_LERP_W;
   }
 
   // Feed peak-held ball speed to the music layer so it can
@@ -2256,8 +2532,12 @@ function draw() {
     return;
   }
 
-  // PLAY / DYING: gameplay world. Build the world-to-clip matrix.
-  const cam = renderer.cameraMat(camY, ZOOM * zoomMult, CAM_FOCUS_Y, camX);
+  // PLAY / DYING: world-to-clip matrix from the lerped camera
+  // params computed in renderTick. Routing the regular cam
+  // through replayMat too (rather than cameraMat) lets one set
+  // of values drive both modes and the transitions between.
+  const cam = renderer.replayMat(camRenderScale, camRenderOx, camRenderOy);
+  const drawZoom = camRenderScale;
 
   // Trail — single stroked polyline. Half-width 1.2 world units;
   // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.
@@ -2699,7 +2979,7 @@ function draw() {
       bhData.push({
         fbX: (clipX + 1) * 0.5 * fbW,
         fbY: (clipY + 1) * 0.5 * fbH,
-        fbR: s.r * BH_VISUAL_SCALE * ZOOM * DPR,
+        fbR: s.r * BH_VISUAL_SCALE * drawZoom * DPR,
       });
     } else if (s.isBinary && s.binary && s.binary.accretorIsBH) {
       // Binary with BH accretor — lens around the BH sub-star.
@@ -2711,7 +2991,7 @@ function draw() {
       bhData.push({
         fbX: (clipX + 1) * 0.5 * fbW,
         fbY: (clipY + 1) * 0.5 * fbH,
-        fbR: bh.r * BH_VISUAL_SCALE * ZOOM * DPR,
+        fbR: bh.r * BH_VISUAL_SCALE * drawZoom * DPR,
       });
     }
   }
@@ -2913,6 +3193,12 @@ document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     e.preventDefault();
     showLaunchWindow = !showLaunchWindow;
+    return;
+  }
+  if (e.key === "z" || e.key === "Z") {
+    if (e.repeat) return;
+    e.preventDefault();
+    cinematicLevelIdx = (cinematicLevelIdx + 1) % CINEMATIC_LEVELS.length;
     return;
   }
   if (e.key === "h" || e.key === "H") {
