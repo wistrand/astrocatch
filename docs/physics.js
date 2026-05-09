@@ -21,9 +21,15 @@ const PREDICT_MAX_FRAMES = 600;
 function starGM(visR) { return G * STAR_GM_PER_PX * visR; }
 function circularV(GM, r) { return Math.sqrt(GM / r); }
 
-function nearestStarIdx(stars, px, py) {
-  let best = 0, bestD2 = Infinity;
-  for (let i = 0; i < stars.length; i++) {
+// Nearest-star scan optionally restricted to indices >= fromIdx.
+// The live game sets fromIdx = ball.currentStar so past (already-
+// captured) stars don't become the gravitational primary if the
+// ship's trajectory swings back near them. Default 0 preserves
+// the API for any external caller.
+function nearestStarIdx(stars, px, py, fromIdx) {
+  if (fromIdx === undefined) fromIdx = 0;
+  let best = fromIdx, bestD2 = Infinity;
+  for (let i = fromIdx; i < stars.length; i++) {
     const s = stars[i];
     const dx = s.x - px, dy = s.y - py;
     const d2 = dx * dx + dy * dy;
@@ -32,8 +38,8 @@ function nearestStarIdx(stars, px, py) {
   return best;
 }
 
-function accelAt(stars, px, py) {
-  const s = stars[nearestStarIdx(stars, px, py)];
+function accelAt(stars, px, py, fromIdx) {
+  const s = stars[nearestStarIdx(stars, px, py, fromIdx)];
   const dx = s.x - px, dy = s.y - py;
   const r2 = dx * dx + dy * dy;
   if (r2 < 1) return [0, 0];
@@ -120,9 +126,10 @@ function accelFromStarWithPlanets(primary, planets, px, py) {
 // (≤ MAX_SPEED = 16 px) is far less than the > 100 px Voronoi
 // cell width guaranteed by SAFE_SEP, so a sub-step can't cross a
 // boundary.
-function nearestStarInfo(stars, px, py) {
-  let bestIdx = 0, bestD2 = Infinity;
-  for (let i = 0; i < stars.length; i++) {
+function nearestStarInfo(stars, px, py, fromIdx) {
+  if (fromIdx === undefined) fromIdx = 0;
+  let bestIdx = fromIdx, bestD2 = Infinity;
+  for (let i = fromIdx; i < stars.length; i++) {
     const s = stars[i];
     const dx = s.x - px, dy = s.y - py;
     const d2 = dx * dx + dy * dy;
@@ -133,8 +140,8 @@ function nearestStarInfo(stars, px, py) {
 
 // Kept for the public export (`AC.subStepCount`) — internal hot
 // path uses `nearestStarInfo` directly.
-function subStepCount(stars, px, py) {
-  const minR = nearestStarInfo(stars, px, py).minR;
+function subStepCount(stars, px, py, fromIdx) {
+  const minR = nearestStarInfo(stars, px, py, fromIdx).minR;
   return minR < 60 ? 4 : minR < 120 ? 2 : 1;
 }
 
@@ -147,7 +154,9 @@ function subStepCount(stars, px, py) {
 // trajectories are computed from the same time basis and
 // therefore match exactly.
 function physicsStep(stars, ball) {
-  const info = nearestStarInfo(stars, ball.x, ball.y);
+  // Restrict gravity scan to ball.currentStar onward — past
+  // stars shouldn't pull the ship back into a crash.
+  const info = nearestStarInfo(stars, ball.x, ball.y, ball.currentStar);
   const sub = info.minR < 60 ? 4 : info.minR < 120 ? 2 : 1;
   const dt = 1 / sub;
   const primary = stars[info.idx];
@@ -279,7 +288,10 @@ function predictCapture(stars, currentStarIdx, x0, y0, vx0, vy0, startFrame, out
     // physicsStep, so the two integrators agree exactly — as
     // long as we also feed it the same planet positions, which
     // is why we pass startFrame + f here.
-    const info = nearestStarInfo(stars, x, y);
+    // Same past-star skip as the live `physicsStep` so the
+    // predicted trajectory doesn't get pulled by a star the
+    // ship has already captured.
+    const info = nearestStarInfo(stars, x, y, currentStarIdx);
     const sub = info.minR < 60 ? 4 : info.minR < 120 ? 2 : 1;
     const dt = 1 / sub;
     const primary = stars[info.idx];

@@ -1280,8 +1280,12 @@ function checkCollisions() {
   // Crash into any star surface. Scoring no longer fires from
   // radius proximity — it fires from captureStar() at the end of
   // the retrograde burn, which prediction armed on the tap.
+  // Skip past stars (i < ball.currentStar) — the ship has already
+  // captured them and shouldn't crash into one if a perturbed
+  // trajectory swings back near it.
   const frame = ball ? ball.frame || 0 : 0;
-  for (let i = 0; i < stars.length; i++) {
+  const fromIdx = ball ? ball.currentStar : 0;
+  for (let i = fromIdx; i < stars.length; i++) {
     const s = stars[i];
     // Binary: check sub-stars instead of the COM point.
     if (s.isBinary) {
@@ -2074,8 +2078,11 @@ function willHitAnyStar() {
 
   // 1 ── bound-orbit test against the ball's gravitational primary
   // (which under nearest-star physics is the nearest star).
-  let nearestIdx = 0, nearestD2 = Infinity;
-  for (let i = 0; i < stars.length; i++) {
+  // Past stars are excluded — they no longer exert gravity in
+  // the live physics, so they shouldn't qualify as "primary" here.
+  const fromIdx = ball.currentStar;
+  let nearestIdx = fromIdx, nearestD2 = Infinity;
+  for (let i = fromIdx; i < stars.length; i++) {
     const s = stars[i];
     const dx = ball.x - s.x, dy = ball.y - s.y;
     const d2 = dx * dx + dy * dy;
@@ -2088,11 +2095,14 @@ function willHitAnyStar() {
   if (E < 0) return true; // bound → closed orbit → safe
 
   // 2 ── unbound trajectory: linear forward-ray miss check.
+  // Same past-star skip as above; a past star can never be ahead
+  // of a forward-going trajectory's velocity vector anyway, but
+  // the explicit start gates the projection check correctly.
   const v = Math.sqrt(v2);
   if (v < 0.5) return true;
   const ux = ball.vx / v;
   const uy = ball.vy / v;
-  for (let i = 0; i < stars.length; i++) {
+  for (let i = fromIdx; i < stars.length; i++) {
     const s = stars[i];
     const dx = s.x - ball.x;
     const dy = s.y - ball.y;
@@ -2119,9 +2129,12 @@ function physicsTick() {
 
   // During DYING, freeze the ball if it has drifted into a star's
   // crash radius so it doesn't bounce around inside the photosphere.
+  // Past stars no longer exert gravity in live physics, so they
+  // can't pull the dying ship in — also skip them here.
   if (state === STATE.DYING) {
     const frame = ball.frame || 0;
-    for (let i = 0; i < stars.length; i++) {
+    const fromIdx = ball.currentStar;
+    for (let i = fromIdx; i < stars.length; i++) {
       const s = stars[i];
       if (s.isBinary && s.binary) {
         const subs = binaryPositions(s, frame);
