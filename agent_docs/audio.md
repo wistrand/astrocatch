@@ -142,6 +142,20 @@ disconnect makes chains immediately GC-eligible.
 (`SPEED_DECAY` constant). Peaks latch briefly. Tier re-read at
 section boundaries only.
 
+### Demon-mode override
+
+`setDemonMode(true/false)` swaps the active progression bank
+to a Phrygian-mode demon set (`MUSIC_DEMON_PROGRESSIONS = [[Am,
+Bb, Dm, E], [Em, Bb, Dm, E]]`) used when the ship is captured
+around an Azazel star. Overrides the intensity-tier choice for
+as long as demon mode is on. Like the regular tier swap, the
+override fires in `applySectionStart` so the progression
+flips at the next 4-bar section boundary — the swap doesn't
+crunch mid-phrase. Reverts to the tier-driven progressions on
+`setDemonMode(false)`. Re-issued by gameplay on capture, init,
+continueRun, resumeFromSave, and on death; cleared on leaving
+the orbit.
+
 ## Mute
 
 HUD speaker button + M key, both calling `setMuted`. Persisted

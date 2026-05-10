@@ -95,12 +95,10 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   holes use a conditional full-screen FBO + lensing composite
   pass with procedural grid for visible distortion. Star shader
   supports crash wobble and tidal locking for binaries.
-  Background includes procedural spiral galaxies. Rare Russell-
-  teapot variant — sphere-traced SDF (body / lid / knob / Bezier
-  spout / elliptical-torus handle), procedural cobalt-on-porcelain
-  pattern, glossy ceramic shading with v_c1-tinted specular and
-  slowly-precessing key light. Tumble axis biased toward world up
-  so the lid stays roughly vertical; spawns near profile view.
+  Background includes procedural spiral galaxies. A couple of
+  rare endgame surprise variants are intentionally not detailed
+  here — see `agent_docs/rendering.md` (sections kept under
+  their own names) for shader breakdowns.
   No Canvas2D, no libraries.
   → [Details](agent_docs/rendering.md)
 
@@ -108,14 +106,16 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   compressor, generative music (5 layers, simplex-driven lead)
   direct to destination. 8-chord harmonic pool with 6
   intensity-tiered progressions (2 per tier, alternated).
-  Streak-driven tempo ramp.
+  Special-case progression overrides exist for one rare variant;
+  see `agent_docs/audio.md`. Streak-driven tempo ramp.
   → [Details](agent_docs/audio.md)
 
 - **Gameplay** (`gameplay.js`): state machine, input, scoring
   (quick-launch bonus + streak multiplier + comet bonus).
   `SPAWN_TABLE` of interpolated variant weights (plain / binary /
-  bh / bhBinary / monolith / ringworld / pulsar / nebula / teapot)
-  by star index; planets and comets are orthogonal rolls on top.
+  bh / bhBinary / monolith / ringworld / pulsar / nebula / teapot
+  / azazel) by star index; planets and comets are orthogonal
+  rolls on top.
   Binary stars (two sub-stars orbiting COM, tidally locked).
   Monoliths play as normal stars but render as rotating 3D slabs.
   Ringworlds are normal-physics stars with a tumbling earth-
@@ -129,20 +129,28 @@ Any change to `physics.js` MUST be re-verified with `npm test`.
   via volumetric ray-march, sampling per-nebula seed-driven
   axes for palette / morphology / central-source flavour /
   interior-fill density / lobe asymmetry / edge stratification.
-  Teapots are Russell-style Easter-egg variants — sphere-traced
-  SDF teapot with china pattern, ~1 % spawn rate from star ≥ 50.
-  Camera auto-zooms while the ship is captured around a
-  ringworld (1.7×), Nebula (1.6×), or teapot (1.6×). Save/resume
-  roundtrips preserve `ringPlateCount`, `isPulsar`, `isNebula`,
-  `isTeapot`. BH binaries get physics-driven ejecta from donor
-  to accretor. Pulsars and nebulae have a higher minimum spawn
-  radius (`r ≥ 30`); teapots get the biggest (`r ≥ 40`) because
-  the Easter-egg moment wants every detail of the porcelain
-  readable when one shows up. Crash wobble. Pause, arrow-key
-  velocity nudge, launch-window indicator (24-step boost-factor
-  grid, adaptive sub-stepping prevents slot skipping near
-  perihelion, builds time-sliced across 6 frames with ping-pong
-  buffers so perturbed-orbit recomputes don't stutter).
+  Two rare endgame variants exist (1-2% spawn from star ≥ 50);
+  intentionally not described here — see `agent_docs/gameplay.md`
+  for spawn rules, minR, and per-variant capture behaviour.
+  Camera auto-zooms while the ship is captured around special
+  variants (ringworld 1.7×, Nebula 1.6×, others detailed in
+  agent_docs). Save/resume roundtrips preserve every variant
+  flag (`ringPlateCount`, `isPulsar`, `isNebula`, plus the rare-
+  variant flags). BH binaries get physics-driven ejecta from
+  donor to accretor. Pulsars and nebulae have a higher minimum
+  spawn radius (`r ≥ 30`); rarer variants set their own. Crash
+  wobble. Pause, arrow-key velocity nudge, launch-window
+  indicator (24-step boost-factor grid, adaptive sub-stepping
+  prevents slot skipping near perihelion, builds time-sliced
+  across 6 frames with ping-pong buffers so perturbed-orbit
+  recomputes don't stutter; one rare variant forces it on
+  regardless of toggle).
+  Render-position uses forward extrapolation from post-tick
+  state (`ball.x + ball.vx * accFrac`) — interpolation between
+  consecutive states freezes on K=0 frames at high refresh rates,
+  causing visible stutter at zoom. Optional FPS counter via
+  `?fps=1` (rolling 3 s mean, top-left HUD, ticks only during
+  PLAY/DYING).
   In-transit taps queue an immediate-on-capture boost
   (Blazing-tier auto-applied) with a target-coloured particle
   ring as confirmation; a projected launch window draws around

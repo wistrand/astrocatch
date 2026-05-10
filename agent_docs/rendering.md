@@ -103,11 +103,17 @@ Flags layout (bit values):
   meaningful when `isRingworld` is set
 - `2048` — isNebula
 - `4096` — isTeapot
+- `8192` — isAzazel
 
-The vertex shader also reads bit `32` (isPulsar) to enlarge the
-star quad to `5.0 × baseR + 8` (vs `4.3 × baseR + 8` for all
-other variants). Pulsar lens-flare halos and streaks otherwise
-hit the rectangular quad boundary at peak alignment.
+The vertex shader picks the quad extent multiplier per-variant:
+- isPulsar → `5.0 × baseR + 8` (lens-flare reaches 3.5× baseR).
+- isAzazel → `2.4 × baseR + 8` (silhouette tops out at
+  `ASPECT_Y + SPIKE_LEN_MAX = 2.05` baseR units).
+- everything else → `4.3 × baseR + 8`.
+
+Pulsar lens-flare halos and streaks otherwise hit the rectangular
+quad boundary at peak alignment; Azazel's tighter quad is purely a
+perf optimisation (≈77% fewer fragments running the demon shader).
 
 ## Black holes
 
@@ -521,6 +527,102 @@ Comparable to nebula. Spawns at ~1 % from star ≥ 50 so typical
 scenes have zero teapots; impact on aggregate frame cost is
 negligible most of the time.
 
+## Azazel
+
+Flag bit 8192. Demon manifesting through a rip in space — pure
+2D SDF, no ray-marching. Drawn inside the common `star` program;
+working set comparable to teapot (~20-25 reg). Endgame variant
+(1-2% from star ≥ 50), high zoom (2.1×) when captured.
+
+### Body silhouette
+
+Tilted elongated ellipse (semi-axes `(ASPECT_X, ASPECT_Y) =
+(0.55, 1.45)` in `v_baseR` units, per-instance tilt ±0.3 rad)
+with three additive perturbations:
+
+- **Edge noise** — 4-wave plane-direction noise (triangle waves
+  on the dominant terms, |sin| cusp + smooth sin on the detail
+  terms) with independent phase drifts. Bell-shape `edgeMask` so
+  noise only fires inside `|base| < 0.20` — gated branch skips
+  the 4-hash + 4-trig evaluation entirely on deep-interior or
+  far-outside fragments.
+- **Spikes** — 14 angularly-spaced tapered cones radiating from
+  the ellipse boundary. Replaces a per-spike SDF loop with a
+  *nearest-spike* finder: parametric (q-space) angle `atan(q.y, q.x)`
+  → `floor((angParam - phase) / period + 0.5)` gives the spike
+  index, then evaluates the analytic tapered-cone SDF for that
+  one spike. ~50 ALU vs ~400 for the original 14-iter loop, and
+  the resulting SDF is approximately normalized so `-d` gives
+  correct inner-glow distance everywhere (body interior, spike
+  base, spike interior, spike tip — no detached-spike artifacts).
+  Per-slot presence (`step(0.25, hash)`) drops ~25% of slots
+  to break up the periodic regularity. Far-corner early-out
+  (`dot(pr, pr) < 4.7`) skips the spike-finder entirely past
+  max spike reach.
+- **Blobs** — two `smin`'d circular protrusions at random per-
+  instance offsets, soften the ellipse silhouette.
+
+Whole-rip breathing scale (`breath = 1 + 0.32·sin(t·0.40)`)
+applied as `p /= breath` at entry and `return base * breath` at
+exit, so the rip rhythmically inflates/deflates.
+
+### Inner glow
+
+`exp(-innerDepth · 5.0) · 1.10` red glow, where `innerDepth = -d`.
+Because the spike SDF is normalised, glow correctly fades from
+the actual silhouette boundary inward — bright at the body
+boundary, bright at the spike base where it meets the body,
+dimming toward each spike tip.
+
+### Faces
+
+Three stacked face tiers inside the body. Each face is a paired-
+eye + grin combo:
+
+- **Eyes** — paired triangular wedges with per-eye inward sneer
+  tilt and a `sin(π · axisFrac)` bow on `lp.y` so the eye edges
+  curve inward (almond shape). Iris dot inside, fixed red.
+  Animates with a blink phase (`sin(t · 0.30 + fi · 1.7)`) shaped
+  by `1 - pow(max(blinkPhase, 0), 12)` for sharp closes with long
+  open holds. Gated on `blink > 0.02` so the IQ triangle SDF
+  never sees a degenerate (collinear) input.
+- **Mouth** — two rows of rhombus-tooth SDFs. Each jaw rolls its
+  own outer-curve shape ∈ [-0.6, +0.6] from the seed (convex,
+  flat, or concave fangs); upper and lower are independent. The
+  mouth's vertical envelope grows with positive `halfGap` so
+  the lips visibly stretch open as the gap widens, instead of
+  the teeth shrinking inside a fixed box. Per-fragment outer
+  reject is a cheap rect bbox (the cap-ellipse SDF was a misuse
+  — the visible shape is decided downstream by the per-tooth
+  scan, the cap only saves work on far fragments).
+
+Per-face seed rolls (8 hash11 calls in the original) packed
+into two `vec4` hashes per iteration, collapsing 8 scalar
+sin/fract pairs into 2 vec4 ops on vec-SIMD GPUs.
+
+Face features blend into the inner glow via `faceMask = 1 -
+exp(-innerDepth · 5.0)` — zero at the rip border so eyes and
+teeth dissolve smoothly into the glow band instead of hard-
+clipping against the silhouette edge.
+
+### Camera + audio
+
+While captured, camera eases to **2.1×** zoom (1.8× on touch).
+Music switches to a Phrygian demon-mode chord progression
+(`[Am, Bb, Dm, E]` / `[Em, Bb, Dm, E]`) at the next section
+boundary. Reverts on leaving the orbit.
+
+*Cost:* outside silhouette ~80-150 ALU (sdRip body, edge-noise
+gated out, spike SDF gated by far-corner check on most pixels,
+return alpha=0). Inside silhouette ~600-900 ALU (sdRip + 3-face
+loop with eye/iris/mouth SDFs). Quad is 2.4× v_baseR (~77%
+fewer fragments than the original 5× sized for halftone +
+0.85-length spikes — both gone), so frame cost is dominated by
+the inside-silhouette region. At Azazel zoom 2.1× this is most
+of the screen, so the demon comfortably costs more than any
+other variant *while captured* — but spawn rate is endgame, so
+the aggregate impact across a typical run is small.
+
 ## Crash wobble
 
 When a ship crashes into a star, the star shader receives wobble
@@ -562,6 +664,8 @@ basis. Nebula is dramatically heavier than every other variant.
 | Pulsar | ~150 | 0.4× (smaller body, big quad) |
 | Ringworld | ~200 | 0.6× |
 | Black hole | ~100 + ~80 fullscreen pass | varies |
+| Azazel (outside silhouette) | ~80-150 | 0.3× (gated edge noise + far-corner spike skip) |
+| Azazel (inside silhouette) | ~600-900 | ~2× (3-face loop with eye/iris/mouth SDFs) |
 | Teapot (frame avg) | ~1700-2400 | ~5-7× (heavy on hits ~5000, cheap on far misses ~150 due to bounding sphere) |
 | **Nebula (ellipsoidal)** | **~2500** | **~7×** |
 | **Nebula (filamentary)** | **~3200** | **~10×** |

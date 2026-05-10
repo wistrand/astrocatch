@@ -89,34 +89,37 @@ idempotent — only one boost fires at capture.
 `SPAWN_TABLE` is a list of rows at star-index control points.
 Each row lists weights for each variant (`plain`, `binary`,
 `bh`, `bhBinary`, `monolith`, `ringworld`, `pulsar`, `nebula`,
-`teapot`). Weights interpolate linearly between rows and plateau
-past the last row. Normalized at sample time, so values don't
-need to sum to 100.
+`teapot`, `azazel`). Weights interpolate linearly between rows
+and plateau past the last row. Normalized at sample time, so
+values don't need to sum to 100.
 
 Planets and comets are **orthogonal** rolls applied on top:
 
 - **Planets**: ramp from 0 to `PLANET_PROB_MAX` over
   `PLANET_RAMP_STARS` captures. Allowed on `plain` and `bh`
   variants only; binaries, monoliths, ringworlds, pulsars,
-  Nebulae, and teapots skip (their visuals already occupy the
-  orbit volume).
+  Nebulae, teapots, and Azazel skip (their visuals already
+  occupy the orbit volume).
 - **Comets**: flat `COMET_PROB` chance from `COMET_MIN_STAR`+.
-  Allowed on any variant except monoliths (alien/alone vibe) and
+  Allowed on any variant except monoliths (alien/alone vibe),
   teapots (the Russell gag reads cleanest with the teapot solo
-  on screen). Pulsars and Nebulae are fine — debris disks around
-  real pulsars and comets weaving through nebula filaments both
-  read naturally.
+  on screen), and Azazel (the demonic vibe reads cleanest solo).
+  Pulsars and Nebulae are fine — debris disks around real
+  pulsars and comets weaving through nebula filaments both read
+  naturally.
 
 Decision order in `makeStar`: variant → planets → comets. Swap
 `SPAWN_TABLE_GAME` for `SPAWN_TABLE_DEBUG` to force-spawn a type
 for testing.
 
 `addNextStar` pre-rolls the variant via `pickVariant(n)` so
-pulsars / Nebulae / teapots can claim a higher minimum spawn
-radius — pulsars and Nebulae get `r ≥ 30` (tiny core / fine
+pulsars / Nebulae / teapots / Azazel can claim a higher minimum
+spawn radius — pulsars and Nebulae get `r ≥ 30` (tiny core / fine
 shell detail), teapots get `r ≥ 40` (rare Easter-egg variant
 that should read clearly when it appears — bounding sphere is
-~70 px and spout-tip thickness is ~2 px at the floor). Default
+~70 px and spout-tip thickness is ~2 px at the floor), Azazel
+gets `r ≥ 56` with a 1.5× size multiplier (the demon's three
+face tiers and ~14 spikes need surface area to read). Default
 is `r ≥ 18`.
 The pre-rolled variant is then passed to `makeStar(..., variant)`
 to avoid a second roll producing a different result.
@@ -327,6 +330,52 @@ nudge logic is `r * 1.7` (the SDF bounding sphere).
 **Save/resume.** Round-trips `isTeapot` alongside the other
 variant flags. Captured teapots persist through saves.
 
+## Azazel
+
+Flagged `isAzazel: true`. Physics identical to a normal star
+(gravity, capture, scoring). Rendered as a 2D-SDF demon
+manifesting through a "rip in space" — tilted ellipse with edge
+noise + 14 angularly-spaced tapered spikes + 3 stacked face
+tiers (paired triangular eyes above a two-row rhombus grin)
+inside a slowly breathing silhouette, all in pure procedural
+SDF (no raymarching). See `agent_docs/rendering.md → Azazel`
+for shader detail.
+
+**Spawn rate.** 0% until star 50, then ramps to ~2% by star 80
+— rarer than pulsars and Nebulae, comparable to teapots.
+Endgame variant; typical short runs won't see one.
+
+**Higher minR (`r ≥ 56`) and 1.5× size multiplier.** Bigger
+than every other variant. Three face tiers + 14 spikes need
+surface area; the demonic moment loses its weight if the rip
+is small. Combined with the captured-zoom (2.1×), the demon
+reliably fills the central viewport area.
+
+**Camera zoom.** While the ship's `currentStar.isAzazel` is
+true, the camera eases to **2.1×** zoom (1.8× on touch — mobile
+screens make extreme zoom feel excessive). `visualR` for the
+horizontal-camera-nudge logic is `cs0.r * 2.4` (matches the
+quad's `extentMul`).
+
+**Music override.** Capture flips `audio.setDemonMode(true)`,
+which swaps the active chord progression to a Phrygian-mode
+bank (`[Am, Bb, Dm, E]` / `[Em, Bb, Dm, E]`) at the next 4-bar
+section boundary. Reverts on leaving the orbit (or on death,
+init, continueRun, or resumeFromSave). The progression switch
+is bar-aligned so the swap doesn't crunch mid-phrase. See
+`agent_docs/audio.md → Demon-mode override`.
+
+**Launch-window override.** While captured around an Azazel,
+the launch-window indicator is forced visible regardless of
+the user toggle (W key / score-tap). The demon-orbit moment
+is a special-occasion focus and the indicator is part of its
+signature read. Other orbits keep the toggle behaviour.
+
+**Save/resume.** Round-trips `isAzazel` alongside the other
+variant flags. Captured demons persist through saves; on
+restore, `setDemonMode(true)` is re-issued so the music
+resumes correctly.
+
 ## Cinematic mode
 
 Toggled by `Z` (or long-press the score display on touch). Cycles
@@ -470,6 +519,12 @@ The player can still toggle it off manually at any time.
 Gameplay count is persisted in `localStorage`
 (`astrocatch_gameplays`).
 
+**Azazel orbit override**: while the ship is captured around
+an Azazel star, the launch-window draws regardless of the user
+toggle. The demon-orbit moment is special-occasion and the
+indicator is part of its signature read. Toggle still works
+on every other orbit. Gate is `currentStar.isAzazel`.
+
 ## Death sounds
 
 - `deathCrash()` — soft sine droplet, played on star collision.
@@ -505,6 +560,27 @@ Several late-game hot paths have been specifically tuned:
 - Music voices call `osc.onended = () => disconnect()` so
   stopped audio nodes are GC-eligible immediately (otherwise
   mobile accumulates zombie graph nodes under high note rate).
+- **Render-position is forward-extrapolated** from the post-tick
+  ball state by `(physicsAccumulator / PHYSICS_DT_MS)` of one
+  tick's velocity, instead of interpolating between the two most
+  recent physics states. The interpolation form collapsed when
+  a frame ran *zero* physics ticks (common on 120/144 Hz
+  monitors where elapsed ≈ tick dt and RAF jitter occasionally
+  drops below the threshold) — `ballPrev` and `ball` were equal,
+  rendering froze for that frame and then jumped two ticks the
+  next. Forward-extrapolation advances continuously regardless
+  of the per-frame tick count.
+
+### FPS counter (`?fps=1`)
+
+Append `?fps=1` to the URL to enable a debug FPS overlay
+(top-left, dim panel). Shows a rolling mean over the last
+`FPS_WINDOW_MS` (3 s); samples push onto a queue each frame
+and drain past the window. DOM update is throttled to 4 Hz so
+text-content churn stays off the hot path. Counter resets on
+each `init()` so welcome-screen idle frames don't poison the
+average. Only ticks during `STATE.PLAY` / `STATE.DYING`;
+pauses naturally with the game.
 
 ## Bluetooth audio compensation
 
