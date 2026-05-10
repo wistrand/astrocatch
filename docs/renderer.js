@@ -508,9 +508,13 @@ void main() {
   // inside this so the rectangle edge never appears.
   int flagsV = int(a_params.w);
   // Pulsar (32) and Azazel (8192) need a wider quad than other
-  // variants — pulsar's lens-flare reaches 3.5× v_baseR and
-  // Azazel's spikes reach ~2× v_baseR plus a halftone fringe.
-  float extentMul = ((flagsV & 32) != 0 || (flagsV & 8192) != 0) ? 5.0 : 4.3;
+  // variants — pulsar's lens-flare reaches 3.5× v_baseR; Azazel's
+  // silhouette tops out at ASPECT_Y + SPIKE_LEN_MAX ≈ 2.05 v_baseR
+  // (halftone fringe is gone, spikes shrunk from 0.85 → 0.6), so
+  // its quad is much tighter than pulsar's now.
+  float extentMul = (flagsV & 32)   != 0 ? 5.0
+                  : (flagsV & 8192) != 0 ? 2.4
+                  :                        4.3;
   float extent = baseR * extentMul + 8.0;
   vec2 local = a_vertex * extent;
   vec2 worldPos = a_center + local;
