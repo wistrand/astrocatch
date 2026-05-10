@@ -274,7 +274,7 @@ The `visualR` extent for the screen-edge horizontal-camera-
 nudge logic is `r * 2.7` for nebulae (vs `r * 3.6` for ringworlds,
 `r * 2.5` for everything else).
 
-The `nebula.html` inspector page (`?seed=N&grid=NxM`) renders a
+The `variants.html` inspector page (`?type=nebula&seed=N&grid=NxM`) renders a
 deterministic grid of Nebulae for population review.
 URL-driven seed and grid size make populations reproducible
 across reloads.

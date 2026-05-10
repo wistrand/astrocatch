@@ -43,6 +43,20 @@
     opacity: 0.7;
     pointer-events: none;
   }
+  #fps {
+    position: absolute;
+    top: 8px; right: 8px;
+    z-index: 10;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    color: rgba(180, 230, 255, 0.85);
+    background: rgba(10, 10, 18, 0.6);
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
@@ -51,6 +65,7 @@
 <div id="help-bar">
   drag to pan · scroll / pinch to zoom · 0 to reset
 </div>
+<div id="fps"></div>
 <script type="module" src="debug.js"></script>
 </body>
 </html>

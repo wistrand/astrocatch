@@ -252,12 +252,22 @@ window.addEventListener("keydown", (e) => {
 });
 
 const TIME_WRAP = Math.PI * 2 * 10000;
+// Rolling-mean FPS counter — same window/cadence as the
+// in-game one. Always-on in the inspector since this page is
+// purely a perf/visual reference.
+const FPS_WINDOW_MS = 3000;
+const fpsEl = document.getElementById("fps");
+const fpsSamples = [];
+let fpsWindowMs = 0;
+let fpsLastDisplayMs = 0;
+let lastFrameMs = -1;
 let frame = 0;
 function loop(t) {
   const tSec = (t / 1000) % TIME_WRAP;
 
   renderer.beginFrame(tSec, false);
-  // No drawBackground, no drawBgStars — empty void only.
+  renderer.drawBackground(0);
+  renderer.drawBgStars();
 
   const cam = renderer.replayMat(zoom, W / 2 + camX * zoom, H / 2 + camY * zoom);
 
@@ -307,6 +317,26 @@ function loop(t) {
   renderer.finalizeFrame([]);
 
   frame++;
+  // Rolling-mean FPS — push current frame's elapsed onto the
+  // queue, drop anything older than the window, refresh the
+  // readout at most every 250 ms.
+  if (lastFrameMs >= 0) {
+    let elapsed = t - lastFrameMs;
+    if (elapsed < 0) elapsed = 0;
+    if (elapsed > 250) elapsed = 250; // clamp big tab-switch gaps
+    fpsSamples.push(elapsed);
+    fpsWindowMs += elapsed;
+    while (fpsWindowMs > FPS_WINDOW_MS && fpsSamples.length > 1) {
+      fpsWindowMs -= fpsSamples.shift();
+    }
+    fpsLastDisplayMs += elapsed;
+    if (fpsLastDisplayMs >= 250 && fpsWindowMs > 0) {
+      const mean = (fpsSamples.length * 1000) / fpsWindowMs;
+      fpsEl.textContent = mean.toFixed(1) + " fps";
+      fpsLastDisplayMs = 0;
+    }
+  }
+  lastFrameMs = t;
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

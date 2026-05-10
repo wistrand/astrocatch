@@ -11,7 +11,7 @@ docs/
   physics.js         # pure physics ES module — used by browser and node
   star-rendering.js  # browser-only — binary positions, ejecta, comets
   debug.html / .js   # variant inspector — one of every star type in a grid
-  nebula.html / .js  # nebula population grid (?seed=N&grid=NxM)
+  variants.html / .js  # variant inspector grid (?type=&seed=&grid=NxM)
 scripts/
   physics-test.js    # node test runner — imports ../docs/physics.js
   check-distances.js # standalone diagnostic for addNextStar's distance curve

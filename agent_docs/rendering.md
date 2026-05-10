@@ -435,8 +435,8 @@ per-step composite. Roughly **7–10× a plain star** per
 fragment. Quad is the standard 4.3× v_baseR + 8, so per-
 instance pixel count is the same as plain. Nebulae spawn at
 5–10% rates (per `SPAWN_TABLE`) so typical scenes have 0–1
-visible at a time; the inspector grid (`nebula.html`) is the
-worst case where many simultaneous nebulae stack.
+visible at a time; the inspector grid (`variants.html?type=nebula`)
+is the worst case where many simultaneous nebulae stack.
 
 ## Russell's teapots
 
@@ -696,9 +696,9 @@ Back-of-envelope totals:
 - **Scene with one visible BH**: ~1.6× the plain scene because
   of the lensing composite. Still 60 fps on desktop; mobile
   integrated GPUs may dip to 45–55 fps depending on FBO size.
-- **Inspector grid (`nebula.html?grid=8`)**: 64 simultaneous
-  nebulae. Total nebula cost ≈ 9 GFLOP/frame ALU. Desktop fine;
-  mobile expects frame drops at large grid sizes.
+- **Inspector grid (`variants.html?type=nebula&grid=8`)**: 64
+  simultaneous nebulae. Total nebula cost ≈ 9 GFLOP/frame ALU.
+  Desktop fine; mobile expects frame drops at large grid sizes.
 
 If Nebula becomes a bottleneck, the cheap levers in priority:
 - Reduce `N_STEPS` from 7 to 5 (~30% cheaper).
