@@ -47,12 +47,6 @@ const QR_ALPHA_LOOKUP = new Int8Array(128).fill(-1);
 for (let i = 0; i < QR_ALPHA.length; i++) {
   QR_ALPHA_LOOKUP[QR_ALPHA.charCodeAt(i)] = i;
 }
-function isAlphaCompat(s) {
-  for (let i = 0; i < s.length; i++) {
-    if (QR_ALPHA_LOOKUP[s.charCodeAt(i)] < 0) return false;
-  }
-  return true;
-}
 
 // GF(256) tables — built once on first use.
 let _gfExp = null, _gfLog = null;
@@ -746,8 +740,15 @@ function b32ToBytes(s) {
   const out = [];
   let buf = 0, bits = 0;
   for (const ch of s) {
-    const v = B32_LOOKUP[ch.charCodeAt(0)];
-    if (v < 0) return null; // invalid char
+    const code = ch.charCodeAt(0);
+    // B32_LOOKUP is a 128-entry Int8Array. Out-of-bounds reads
+    // return undefined, and `undefined < 0` is false — so without
+    // the explicit charCode bound a non-ASCII char (emoji, é, …)
+    // would slip past the validity check and `(buf << 5) | undefined`
+    // would silently treat it as value 0, corrupting the decode.
+    if (code >= 128) return null;
+    const v = B32_LOOKUP[code];
+    if (v < 0) return null;
     buf = (buf << 5) | v;
     bits += 5;
     if (bits >= 8) {
