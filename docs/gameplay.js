@@ -18,7 +18,7 @@ import {
 } from "./star-rendering.js";
 import {
   buildChallengeUrl, makeQrMatrix, renderQrToCanvas, drawSunLogo,
-  decodeChallengeCode, DEATH_CAUSES,
+  encodeAnimatedQrPng, decodeChallengeCode, DEATH_CAUSES,
 } from "./challenge.js";
 
 // ── Incoming challenge (#…) ──────────────────────────────
@@ -2172,9 +2172,19 @@ function renderChallengeCard() {
     variants: runStats.variants,
     seed: currentRunSeed,
   }, location.origin + location.pathname);
-  const canvas = document.getElementById("challenge-out-qr");
+  // The slot holds either the live canvas (during/just after death) or a baked APNG <img> (from
+  // a previous death). Either way, ensure we have a canvas to draw the first frame onto before
+  // the APNG finishes encoding — replaces the img with a fresh canvas if needed.
+  let canvas = document.getElementById("challenge-out-qr");
   const copyBtn = document.getElementById("challenge-out-copy");
   if (!canvas || !copyBtn) return;
+  if (canvas.tagName === "IMG") {
+    const fresh = document.createElement("canvas");
+    fresh.id = "challenge-out-qr";
+    fresh.setAttribute("aria-label", "challenge QR code");
+    canvas.parentNode.replaceChild(fresh, canvas);
+    canvas = fresh;
+  }
   // Encode the URL as uppercase so the host + path + fragment payload all qualify for QR
   // alphanumeric mode (5.5 bits/char vs 8). Browsers normalise scheme + host case so the link still
   // resolves; the fragment stays uppercase, which our base32 decoder accepts. EC level M gives ~15%
@@ -2185,7 +2195,9 @@ function renderChallengeCard() {
   // scanner-friendly cells.
   const SCALE = 6, QUIET = 2;
   renderQrToCanvas(matrix, canvas, SCALE, QUIET);
-  drawSunLogo(canvas, matrix.size, SCALE, QUIET);
+  // Cache the bare QR (without logo) so the animation loop can re-blit it cheaply each frame
+  // instead of re-running the full QR fillRect grid. ~840 fillRects → one drawImage per frame.
+  startSunAnimation(canvas, matrix, SCALE, QUIET);
   // QR also acts as a clickable link to the same challenge URL (opens in a new tab). Useful for
   // pasting into a chat or verifying the encoded URL by eye.
   const qrLink = document.getElementById("challenge-out-link");
@@ -2193,6 +2205,108 @@ function renderChallengeCard() {
   copyBtn.dataset.url = url;
   copyBtn.classList.remove("copied");
   copyBtn.textContent = "copy challenge link";
+  // Bake the animation into an APNG blob and swap the live canvas for an <img>. The user gets a
+  // right-click-saveable animated image (drag into Slack / iMessage etc) and we stop burning RAF
+  // frames once the baked version takes over. The live canvas covers the ~250 ms it takes to
+  // encode 16 frames so the card never shows a static fallback.
+  bakeChallengeApng(canvas, matrix, SCALE, QUIET).catch((err) => {
+    console.log("[challenge] APNG bake failed, keeping live canvas:", err);
+  });
+}
+
+// Track the most recent blob URL so each new death revokes the prior one (URL.createObjectURL
+// allocations leak until revoked).
+let _challengeApngUrl = null;
+
+async function bakeChallengeApng(canvas, matrix, scale, quiet) {
+  const ctx = canvas.getContext("2d");
+  // 48 frames @ 16 fps = 3 s seamless loop. At 16 frames the highlight jumped ~22.5° per frame
+  // (~3 modules of arc on the rim) and read as a stop-motion slideshow; 48 frames drops the jump
+  // to ~7.5° (~1 module) which the eye perceives as continuous motion. Cost is ~250 KB blob and
+  // ~700 ms encode time on a mid-range laptop — both fine for a one-shot death-screen asset.
+  const FRAMES = 48;
+  const FPS = 16;
+  // The frames span exactly one azimuth cycle AND one elevation cycle, so the APNG loops
+  // seamlessly. Same easing / curve as the live animation (cubed sine for elevation bias).
+  const apngBytes = await encodeAnimatedQrPng(canvas, (i, total) => {
+    const t = i / total;
+    const phase = -3 * Math.PI / 4 + t * 2 * Math.PI;
+    const eRaw = (Math.sin(t * 2 * Math.PI) + 1) / 2;
+    const elev = eRaw * eRaw * eRaw * (Math.PI / 2);
+    ctx.drawImage(_sunAnimBareQr, 0, 0);
+    drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
+  }, FRAMES, FPS);
+  if (_challengeApngUrl) URL.revokeObjectURL(_challengeApngUrl);
+  // `File` (not bare Blob) carries a name property that most browsers surface as the suggested
+  // filename when the user right-clicks the resulting <img> and chooses "Save image as…". With
+  // a plain Blob the URL ends up as the suggestion (e.g. "Untitled.png").
+  const file = new File([apngBytes], "astrocatch-challenge.png", { type: "image/png" });
+  _challengeApngUrl = URL.createObjectURL(file);
+  // The encoder draws the LAST frame onto the canvas. Avoid showing it briefly before swap by
+  // restoring the bare QR (the live animation already drew frame 0 onto it on the prior tick).
+  ctx.drawImage(_sunAnimBareQr, 0, 0);
+  // Build the <img> with the same id / aria as the canvas it replaces; CSS for #challenge-out-qr
+  // already targets the slot regardless of tag.
+  const img = document.createElement("img");
+  img.id = "challenge-out-qr";
+  img.src = _challengeApngUrl;
+  img.setAttribute("aria-label", "challenge QR code");
+  img.style.imageRendering = "pixelated";
+  img.width = canvas.width;
+  img.height = canvas.height;
+  // Only swap if the canvas is still in the DOM (player hasn't restarted in the meantime).
+  if (canvas.parentNode) {
+    canvas.parentNode.replaceChild(img, canvas);
+    stopSunAnimation();
+  } else {
+    URL.revokeObjectURL(_challengeApngUrl);
+    _challengeApngUrl = null;
+  }
+}
+
+// Animation: sweep the sun logo's lighting direction around the ball so the QR card has a small
+// living detail. Cancelled and restarted on every renderChallengeCard call (so a re-death starts
+// fresh) and explicitly stopped from the RESTART/CONTINUE click handlers — RAF would otherwise
+// keep firing while the QR is hidden, burning a few hundred fillRects/sec for nothing.
+let _sunAnimRAF = null;
+let _sunAnimBareQr = null;
+function stopSunAnimation() {
+  if (_sunAnimRAF !== null) {
+    cancelAnimationFrame(_sunAnimRAF);
+    _sunAnimRAF = null;
+  }
+}
+function startSunAnimation(canvas, matrix, scale, quiet) {
+  stopSunAnimation();
+  // Snapshot the current canvas (bare QR) into an offscreen cache.
+  if (!_sunAnimBareQr || _sunAnimBareQr.width !== canvas.width
+      || _sunAnimBareQr.height !== canvas.height) {
+    _sunAnimBareQr = document.createElement("canvas");
+    _sunAnimBareQr.width = canvas.width;
+    _sunAnimBareQr.height = canvas.height;
+  }
+  const cacheCtx = _sunAnimBareQr.getContext("2d");
+  cacheCtx.clearRect(0, 0, _sunAnimBareQr.width, _sunAnimBareQr.height);
+  cacheCtx.drawImage(canvas, 0, 0);
+  const ctx = canvas.getContext("2d");
+  const t0 = performance.now();
+  // Azimuth rotates fast (~12 s / full cycle); elevation oscillates slow (~30 s / cycle) on a
+  // dwell-biased curve. A plain sine spent half the cycle ≥ 45° elevation, which read as "the
+  // light is mostly aimed at the camera". Cubing the [0,1]-mapped raw sine concentrates the
+  // dwell near the equator (≤ 30°) and reserves the head-on pose (peak π/2) as a brief flyby —
+  // visited but not lingered.
+  const AZIM_RAD_PER_SEC = (2 * Math.PI) / 12;
+  const ELEV_RAD_PER_SEC = (2 * Math.PI) / 30;
+  const tick = (now) => {
+    const t = (now - t0) / 1000;
+    const phase = -3 * Math.PI / 4 + t * AZIM_RAD_PER_SEC;
+    const eRaw = (Math.sin(t * ELEV_RAD_PER_SEC) + 1) / 2;
+    const elev = eRaw * eRaw * eRaw * (Math.PI / 2);
+    ctx.drawImage(_sunAnimBareQr, 0, 0);
+    drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
+    _sunAnimRAF = requestAnimationFrame(tick);
+  };
+  _sunAnimRAF = requestAnimationFrame(tick);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -3453,6 +3567,7 @@ document.getElementById("start-btn").addEventListener("click", (e) => {
 document.getElementById("retry-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
+  stopSunAnimation();
   state = STATE.PLAY;
   clearSave();
   init();
@@ -3507,6 +3622,7 @@ document.getElementById("challenge-out-copy").addEventListener("click", (e) => {
 document.getElementById("continue-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
+  stopSunAnimation();
   state = STATE.PLAY;
   // Continuing replaces the death snapshot — any future reload will offer RESUME only if the player
   // dies again (at which point a fresh snapshot is written). Without this clear, a reload after a

@@ -518,7 +518,17 @@ function sunRadialColor(t) {
   }
   return SUN_STOPS[SUN_STOPS.length - 1][1];
 }
-export function drawSunLogo(canvas, modulesPerSide, scale, quiet) {
+// Ray-traced Blinn-Phong shading on a sphere. Each filled module's centre is treated as a sample
+// on a unit-radius sphere centred at the QR centre; the closed-form sphere normal at that sample
+// drives Lambert diffuse (N·L) and Blinn-Phong specular ((N·H)^k). `phase` is the azimuth of the
+// rotating light source, `elevation` is its angle out of the screen plane (0 = equator, π/2 =
+// directly toward the viewer along +z, lighting the whole near hemisphere uniformly). Defaults
+// match the original static-render look. The MODULE MASK is unchanged from the earlier flat-shaded
+// version (same rMod=4.5 circle), so the outline reads identically — only the per-module colour
+// changes.
+export function drawSunLogo(canvas, modulesPerSide, scale, quiet, phase, elevation) {
+  if (phase === undefined) phase = -3 * Math.PI / 4;
+  if (elevation === undefined) elevation = Math.PI / 6;
   const ctx = canvas.getContext("2d");
   const cxMod = modulesPerSide / 2;
   const cyMod = modulesPerSide / 2;
@@ -526,31 +536,164 @@ export function drawSunLogo(canvas, modulesPerSide, scale, quiet) {
   // centre±0.5) sit at distance 4.528 (inside) but the next column is at 5.025 (outside), producing
   // 2-module tabs detached from the main diagonal body. Pulling r below 4.528 collapses them.
   const rMod = 4.5;
-  // The mask outline (which modules get filled) stays a circle centred on the QR. The BODY
-  // gradient's origin is shifted upper-left so the hot white core itself lives off-centre — that's
-  // the whole 3D-lit-ball effect at this resolution. Earlier passes layered a specular kicker on
-  // top of a centred body gradient; the body's natural near-white core at sun-centre always swamped
-  // the kicker, so the bright pool kept reading as centred no matter where we placed the kicker.
-  // Moving the gradient origin instead puts the bright pool at the lit side and the amber rim on
-  // the shadow side.
-  const bxMod = cxMod - 0.35 * rMod;
-  const byMod = cyMod - 0.35 * rMod;
+  // Light direction L (unit). Screen-space: x→right, y→down, z→out of screen.
+  const cE = Math.cos(elevation), sE = Math.sin(elevation);
+  const Lx = Math.cos(phase) * cE;
+  const Ly = Math.sin(phase) * cE;
+  const Lz = sE;
+  // Half-vector H = normalize(L + V), V = (0, 0, 1). Used for Blinn-Phong specular peak.
+  const hMag = Math.hypot(Lx, Ly, Lz + 1);
+  const Hx = Lx / hMag;
+  const Hy = Ly / hMag;
+  const Hz = (Lz + 1) / hMag;
+  // Shininess controls the specular spot size; higher = tighter. 28 covers ~2 modules at this
+  // scale. Highlight target is BRIGHT YELLOW, not white — additive shading on a near-white body
+  // stop blew the peak to pure white, which read as plastic / wet. Lerping the body colour toward
+  // a saturated-yellow target instead keeps the sphere reading as a sun.
+  const SHININESS = 28;
+  const SPEC_R = 255, SPEC_G = 240, SPEC_B = 80;
   for (let my = 0; my < modulesPerSide; my++) {
     for (let mx = 0; mx < modulesPerSide; mx++) {
       // Mask: only fill modules whose centre lies inside the sun.
       const sunDx = mx + 0.5 - cxMod;
       const sunDy = my + 0.5 - cyMod;
       if (Math.hypot(sunDx, sunDy) > rMod) continue;
-      // Gradient lookup uses distance from the offset body origin, capped at 1 so far-rim modules
-      // clamp to the amber-rim stop instead of overshooting the table.
-      const bDx = mx + 0.5 - bxMod;
-      const bDy = my + 0.5 - byMod;
-      const t = Math.min(1, Math.hypot(bDx, bDy) / rMod);
-      const [r, g, b] = sunRadialColor(t);
+      // Sphere normal at this sample, closed-form: nx,ny from screen offset; nz from sphere
+      // equation z² = r² - x² - y². Max guards against tiny-negative floats at the rim.
+      const nx = sunDx / rMod;
+      const ny = sunDy / rMod;
+      const nz = Math.sqrt(Math.max(0, 1 - nx * nx - ny * ny));
+      // Lambert diffuse — clamped at terminator so shadow side is dark-ambient only.
+      const NdotL = Math.max(0, nx * Lx + ny * Ly + nz * Lz);
+      // Body colour interpolated from the gradient table by "darkness": fully lit → core-white,
+      // terminator/shadow → amber rim.
+      let [r, g, b] = sunRadialColor(1 - NdotL);
+      // Specular only on the lit hemisphere. Without the NdotL gate, edge-on shading near the
+      // shadow rim could still register a spurious highlight from a positive N·H component. Lerp
+      // toward a yellow target instead of additive — peak highlight lands on saturated yellow,
+      // never pure white.
+      if (NdotL > 0) {
+        const NdotH = Math.max(0, nx * Hx + ny * Hy + nz * Hz);
+        const k = Math.pow(NdotH, SHININESS);
+        r = (r + (SPEC_R - r) * k) | 0;
+        g = (g + (SPEC_G - g) * k) | 0;
+        b = (b + (SPEC_B - b) * k) | 0;
+      }
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.fillRect((mx + quiet) * scale, (my + quiet) * scale, scale, scale);
     }
   }
+}
+
+// ═════════════════════════════════════════════════════════════
+// APNG encoder — bake an animated QR-with-spinning-sun into a single image/png blob. APNG is the
+// only multi-frame format that works in <img src>; we use canvas.toBlob to get each frame as a
+// regular PNG and stitch them by reusing the IHDR + IDAT data and inserting acTL + per-frame fcTL
+// + fdAT chunks. No external library — the PNG container is simple enough to assemble inline.
+//
+// Output is a valid PNG to non-APNG readers (they show the first frame) and an animated PNG to
+// APNG-aware readers (Chrome 59+, Firefox, Safari 14+). Use the resulting Uint8Array as a Blob
+// with type "image/png" and an Object URL is a working <img> source.
+// ═════════════════════════════════════════════════════════════
+
+const PNG_SIGNATURE = new Uint8Array([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+
+function crc32(buf) {
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) {
+    crc ^= buf[i];
+    for (let j = 0; j < 8; j++) {
+      crc = (crc & 1) ? (crc >>> 1) ^ 0xEDB88320 : crc >>> 1;
+    }
+  }
+  return (~crc) >>> 0;
+}
+
+function writePngChunk(type, data) {
+  const len = data.length;
+  const out = new Uint8Array(12 + len);
+  const v = new DataView(out.buffer);
+  v.setUint32(0, len);
+  for (let i = 0; i < 4; i++) out[4 + i] = type.charCodeAt(i);
+  out.set(data, 8);
+  v.setUint32(8 + len, crc32(out.subarray(4, 8 + len)));
+  return out;
+}
+
+function parsePngChunks(buf) {
+  const chunks = [];
+  let p = 8;
+  while (p < buf.length) {
+    const len = (buf[p] << 24) | (buf[p+1] << 16) | (buf[p+2] << 8) | buf[p+3];
+    const type = String.fromCharCode(buf[p+4], buf[p+5], buf[p+6], buf[p+7]);
+    chunks.push({ type, data: buf.subarray(p + 8, p + 8 + len) });
+    p += 12 + len;
+    if (type === "IEND") break;
+  }
+  return chunks;
+}
+
+// Encode a canvas-driven animation as an APNG. `drawFrame(i, total)` is the caller-supplied
+// per-frame render function that mutates the canvas — the encoder snapshots the canvas after each
+// call via canvas.toBlob. `fps` controls playback speed.
+export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps) {
+  // 1. Render each frame and snapshot the canvas into a PNG.
+  const framePngs = [];
+  for (let i = 0; i < frameCount; i++) {
+    drawFrame(i, frameCount);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+    framePngs.push(new Uint8Array(await blob.arrayBuffer()));
+  }
+  // 2. Pull IHDR from frame 0 and grab its width/height.
+  const firstChunks = parsePngChunks(framePngs[0]);
+  const ihdr = firstChunks.find((c) => c.type === "IHDR");
+  if (!ihdr) throw new Error("APNG: first frame has no IHDR");
+  const w = (ihdr.data[0] << 24) | (ihdr.data[1] << 16) | (ihdr.data[2] << 8) | ihdr.data[3];
+  const h = (ihdr.data[4] << 24) | (ihdr.data[5] << 16) | (ihdr.data[6] << 8) | ihdr.data[7];
+  // 3. Assemble APNG: signature + IHDR + acTL + per-frame (fcTL + IDAT/fdAT) + IEND.
+  const parts = [PNG_SIGNATURE, writePngChunk("IHDR", ihdr.data)];
+  const acTL = new Uint8Array(8);
+  new DataView(acTL.buffer).setUint32(0, frameCount);
+  // 0 plays = infinite loop. Second uint32 stays 0.
+  parts.push(writePngChunk("acTL", acTL));
+  let seq = 0;
+  for (let i = 0; i < frameCount; i++) {
+    const fcTL = new Uint8Array(26);
+    const fv = new DataView(fcTL.buffer);
+    fv.setUint32(0, seq++);
+    fv.setUint32(4, w);
+    fv.setUint32(8, h);
+    fv.setUint32(12, 0);     // x_offset
+    fv.setUint32(16, 0);     // y_offset
+    fv.setUint16(20, 1);     // delay_num
+    fv.setUint16(22, fps);   // delay_den (delay = num/den seconds = 1/fps)
+    fcTL[24] = 0;            // dispose_op: NONE
+    fcTL[25] = 0;            // blend_op: SOURCE (overwrite full frame)
+    parts.push(writePngChunk("fcTL", fcTL));
+    const chunks = parsePngChunks(framePngs[i]);
+    const idats = chunks.filter((c) => c.type === "IDAT");
+    if (i === 0) {
+      // First frame's data lives in IDAT chunks (decoders that don't understand APNG render this).
+      for (const idat of idats) parts.push(writePngChunk("IDAT", idat.data));
+    } else {
+      // Subsequent frames go in fdAT chunks: a 4-byte sequence number prefix then the raw IDAT
+      // bytes. APNG decoders concatenate fdAT payloads (sans seq) and inflate as one DEFLATE
+      // stream per frame, same as for IDAT.
+      for (const idat of idats) {
+        const fdat = new Uint8Array(4 + idat.data.length);
+        new DataView(fdat.buffer).setUint32(0, seq++);
+        fdat.set(idat.data, 4);
+        parts.push(writePngChunk("fdAT", fdat));
+      }
+    }
+  }
+  parts.push(writePngChunk("IEND", new Uint8Array(0)));
+  // 4. Concatenate.
+  const total = parts.reduce((s, p) => s + p.length, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) { out.set(p, off); off += p.length; }
+  return out;
 }
 
 // ═════════════════════════════════════════════════════════════
