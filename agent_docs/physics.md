@@ -1,107 +1,85 @@
 # Physics model
 
-`physics.js` is a pure ES module, no DOM. Used by both browser
-and the node test runner.
+`physics.js` is a pure ES module, no DOM. Used by both browser and the node test runner.
 
 ## Gravity
 
-Nearest-star only, not multi-body. The dominant body switches at
-the Voronoi midline. Velocity-Verlet integration with adaptive
-sub-stepping (sub = 4/2/1 based on distance to nearest star).
-Fixed timestep at `PHYSICS_HZ`, decoupled from RAF.
+Nearest-star only, not multi-body. The dominant body switches at the Voronoi midline.
+Velocity-Verlet integration with adaptive sub-stepping (sub = 4/2/1 based on distance to nearest
+star). Fixed timestep at `PHYSICS_HZ`, decoupled from RAF.
 
 ## Capture
 
-By periapsis detection, not hitbox proximity. `burnStep` tracks
-the running minimum of `d(t)`, rewinds to the periapsis snapshot,
-and clamps `|v|` into `[v_circ, v_max]`. Direction preserved.
-`predictCapture` forward-simulates with the same integrator so
-prediction matches live physics bit-for-bit.
+By periapsis detection, not hitbox proximity. `burnStep` tracks the running minimum of `d(t)`,
+rewinds to the periapsis snapshot, and clamps `|v|` into `[v_circ, v_max]`. Direction preserved.
+`predictCapture` forward-simulates with the same integrator so prediction matches live physics
+bit-for-bit.
 
-`predictCapture` accepts an optional `outResult` scratch object
-so high-frequency callers (launch-window hint) can reuse a
-single allocation. Its crash-check loop starts at
-`currentStarIdx` — past stars can't collide with a forward-going
-trajectory, and skipping them roughly halves crash-check cost at
-late-game star counts.
+`predictCapture` accepts an optional `outResult` scratch object so high-frequency callers
+(launch-window hint) can reuse a single allocation. Its crash-check loop starts at
+`currentStarIdx` — past stars can't collide with a forward-going trajectory, and skipping them
+roughly halves crash-check cost at late-game star counts.
 
-`BOOST_SEARCH_MIN`, `BOOST_SEARCH_MAX`, and `BOOST_SEARCH_STEPS`
-are exported alongside the helpers so the launch-window hint
-in `gameplay.js` searches the exact same boost-factor grid as
-`applyBoostAndArm` — single source of truth keeps the indicator
-in lockstep with the live search.
+`BOOST_SEARCH_MIN`, `BOOST_SEARCH_MAX`, and `BOOST_SEARCH_STEPS` are exported alongside the
+helpers so the launch-window hint in `gameplay.js` searches the exact same boost-factor grid as
+`applyBoostAndArm` — single source of truth keeps the indicator in lockstep with the live
+search.
 
 ## Planets
 
-Orthogonal to the variant roll. Probability ramps from 0% to
-`PLANET_PROB_MAX` over `PLANET_RAMP_STARS` captures. Skipped on
-binary variants (sub-stars already occupy that volume); allowed
-on plain and BH variants. Stars that pass get 1–2 planets.
-Planets orbit at constant angular velocity, carry a small
-fraction of the parent's GM, and perturb the ship via
-`accelFromStarWithPlanets`. Plummer softening (`softR2`) prevents
-divergence on direct hits. No collision. Planet positions are a
-pure function of `ball.frame`, shared between live physics and
-prediction. Past-star planets are stripped in `captureStar`.
+Orthogonal to the variant roll. Probability ramps from 0% to `PLANET_PROB_MAX` over
+`PLANET_RAMP_STARS` captures. Skipped on binary variants (sub-stars already occupy that
+volume); allowed on plain and BH variants. Stars that pass get 1–2 planets. Planets orbit at
+constant angular velocity, carry a small fraction of the parent's GM, and perturb the ship via
+`accelFromStarWithPlanets`. Plummer softening (`softR2`) prevents divergence on direct hits. No
+collision. Planet positions are a pure function of `ball.frame`, shared between live physics
+and prediction. Past-star planets are stripped in `captureStar`.
 
 ## Comets
 
-Controlled by `COMET_PROB` and `COMET_MIN_STAR`. Analytical
-Kepler orbits (`solveKepler` + `cometPosition`), no numerical
-integration. Highly eccentric; direction chosen by scanning 8
-directions for the biggest gap, apoapsis capped by clearance
-fraction, minimum apo:peri ratio required. Comets do NOT affect
-ship gravity. Close-pass within `COMET_SCORE_RADIUS` awards
-`COMET_BONUS` points with sparkle burst and removal.
-Multi-syndyne tail, distance-dependent coma glow, and solar-
-wind-pushed wake particles near periapsis. Past-star comets
-stripped alongside planets.
+Controlled by `COMET_PROB` and `COMET_MIN_STAR`. Analytical Kepler orbits (`solveKepler` +
+`cometPosition`), no numerical integration. Highly eccentric; direction chosen by scanning 8
+directions for the biggest gap, apoapsis capped by clearance fraction, minimum apo:peri ratio
+required. Comets do NOT affect ship gravity. Close-pass within `COMET_SCORE_RADIUS` awards
+`COMET_BONUS` points with sparkle burst and removal. Multi-syndyne tail, distance-dependent
+coma glow, and solar-wind-pushed wake particles near periapsis. Past-star comets stripped
+alongside planets.
 
 ## Binary stars
 
-Binary stars have `isBinary: true` and a `binary` object with
-sub-star data. Physics treats the COM as a single point mass
-(combined GM, same gravity model). Crash detection in both
-`predictCapture` and `checkCollisions` checks against both
-sub-star positions (computed from `ball.frame` and the binary's
-orbital parameters, same pattern as planets). Captures against
-a binary use a wider periapsis floor (`minPeriMult = 2.2` instead
-of the default 1.5) so the captured orbit clears the sub-stars'
-reach. No planets on binaries; comets allowed. BH accretor is
-supported (`binary.accretorIsBH`).
+Binary stars have `isBinary: true` and a `binary` object with sub-star data. Physics treats the
+COM as a single point mass (combined GM, same gravity model). Crash detection in both
+`predictCapture` and `checkCollisions` checks against both sub-star positions (computed from
+`ball.frame` and the binary's orbital parameters, same pattern as planets). Captures against a
+binary use a wider periapsis floor (`minPeriMult = 2.2` instead of the default 1.5) so the
+captured orbit clears the sub-stars' reach. No planets on binaries; comets allowed. BH accretor
+is supported (`binary.accretorIsBH`).
 
 ## Black holes
 
-Black holes are stars with `isBlackHole: true`. Physics is
-identical to normal stars — same GM, same collision radius, same
-capture mechanics. The only difference is visual (rendering +
-lensing, handled in `renderer.js` and `gameplay.js draw()`).
-`BH_VISUAL_SCALE` makes the event horizon appear smaller than
-the physics radius. Black holes can be the accretor in a binary
-pair — same physics, with ejecta particles (visual only, no
-ship interaction) handled in `gameplay.js`.
+Black holes are stars with `isBlackHole: true`. Physics is identical to normal stars — same GM,
+same collision radius, same capture mechanics. The only difference is visual (rendering +
+lensing, handled in `renderer.js` and `gameplay.js draw()`). `BH_VISUAL_SCALE` makes the event
+horizon appear smaller than the physics radius. Black holes can be the accretor in a binary
+pair — same physics, with ejecta particles (visual only, no ship interaction) handled in
+`gameplay.js`.
 
 ## Monoliths
 
-Stars with `isMonolith: true`. Physics identical to normal
-stars (gravity, collision, capture). Only the visual rendering
-differs — a raymarched 3D slab in `renderer.js`. Not supported
-as binary components.
+Stars with `isMonolith: true`. Physics identical to normal stars (gravity, collision, capture).
+Only the visual rendering differs — a raymarched 3D slab in `renderer.js`. Not supported as
+binary components.
 
 ## Ringworlds
 
-Stars with `isRingworld: true`. Physics identical to normal
-stars — the band is purely visual and doesn't interact with
-the ship. The collision/capture radius is still `s.r`; the
-ring hoop renders at `2.6 * s.r` but has no gameplay effect.
-Not supported as binary components; not attached to planets
-or comets.
+Stars with `isRingworld: true`. Physics identical to normal stars — the band is purely visual
+and doesn't interact with the ship. The collision/capture radius is still `s.r`; the ring hoop
+renders at `2.6 * s.r` but has no gameplay effect. Not supported as binary components; not
+attached to planets or comets.
 
 ## Key invariants
 
 - `SAFE_SEP` guarantees minimum star separation.
-- `PERI_VORONOI_FRAC` keeps captured orbits inside the star's
-  Voronoi cell.
-- `BOOST_DEFAULT` — bad-direction taps commit and usually fail,
-  not silently no-op.
+- `PERI_VORONOI_FRAC` keeps captured orbits inside the star's Voronoi cell.
+- `BOOST_DEFAULT` — bad-direction taps commit and usually fail, not silently no-op.
 - No crashes from a clean capture, ever.
