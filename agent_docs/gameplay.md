@@ -541,6 +541,148 @@ FIFO). Dynamic follow-camera with simplex zoom on the DEAD
 screen. Trailing window caps the polyline. Music keeps playing
 across runs.
 
+## Challenge links
+
+`challenge.js` is a self-contained module with two
+responsibilities: a minimal QR encoder and the per-run
+challenge-link payload codec.
+
+### Payload format
+
+Bit-packed into a single base32-encoded URL fragment. Format
+v1 (`CHALLENGE_FORMAT_VERSION = 1`):
+
+```
+4  bits   format version
+1  bit    has_seed
+20 bits   score              (0..1,048,575)
+10 bits   starsVisited
+4  bits   streakPeak
+8  bits   blazingCount
+8  bits   quickCount
+8  bits   slowCount
+6  bits   cometsCaught
+4  bits   deathCause         (enum DEATH_CAUSES)
+24 bits   variant census     (8 variants × 3 bits, fixed slot order)
+32 bits   seed               (only if has_seed=1)
+5  bits   checksum (low 5 bits of CRC-16/CCITT-FALSE over the
+                    byte-aligned payload pre-checksum)
+```
+
+97 (no seed) or 129 (with seed) payload bits + 5-bit checksum =
+102 / 134 bits → byte-padded to **13 / 17 bytes** = base32 = **21
+/ 28 chars**. The checksum lives inside the byte-pad bits the
+original layout wasted, so adding it didn't grow the encoded
+length. Adding a new variant means bumping format version
+because the slot indices shift.
+
+### Forgery deterrence
+
+The checksum exists to defeat the trivial "edit the URL fragment
+to fake a higher score" attack. Two layers:
+
+1. **Strict byte-length equality.** Insertions/deletions always
+   shift the base32 byte count → rejected before the checksum
+   even runs. (An earlier `>=` check left a 1% leak via
+   end-of-fragment insertions; `!==` closed it — see commit
+   history.)
+2. **5-bit checksum.** Random bit-flip survives at ~1/32. Not
+   cryptographically authenticated — anyone reading
+   `challenge.js` can compute valid checksums — but raises the
+   pass-rate from ~100% to ~3%, enough to discourage casual
+   hand-edits. Stronger authentication would need a server
+   secret, which a static-page game can't keep.
+
+### URL shape
+
+- Fragment-routed: `https://astrocatch.live#<base32>`. Visible
+  fragment is **lowercase** for tidiness; QR-render path
+  uppercases the entire URL on the way into the encoder so the
+  alphanumeric segments still pack at 5.5 bits/char. Decoder
+  always `toUpperCase()`s on entry.
+- Trailing-slash optimisation: `buildChallengeUrl()` strips the
+  `/` when the page sits at the site root (production AND local
+  dev, since browsers normalise empty path back to `/` on load).
+  Saves one alphanumeric char in the QR. Sub-path deployments
+  keep `/` so SPAs that distinguish `/foo` from `/foo/` aren't
+  broken.
+- Each rejected decode logs `[challenge] rejected: <reason>` at
+  log level so a stale or tampered hash is visible in DevTools
+  without firing as an error.
+
+### QR + sun logo
+
+`makeQrMatrix()` is a multi-segment QR encoder (alphanumeric +
+byte modes, EC L or M, version 1..10, standard mask penalty
+selection). The death-screen card (`#challenge-out`, flip-card
+3D reveal) renders at v3 (29×29) with EC level M (~15% damage
+budget) so a centred logo overlay is RS-recoverable.
+
+`drawSunLogo()` paints a snap-to-grid pixel-art sun:
+
+- Mask: every module whose centre lies inside `rMod = 4.5` from
+  the QR centre. Radius isn't 5 because at 5 the cardinal-axis
+  modules (centre±0.5, ±4.5) sit at distance 4.528 (just inside)
+  while the next column is at 5.025 (just outside), producing
+  2-module tabs detached from the diagonal silhouette. Pulling
+  below 4.528 collapses them into a clean 6-8-8-8-8-8-8-6
+  outline.
+- Body gradient origin is offset upper-left by `0.35 * rMod` —
+  earlier passes layered a separate specular kicker on top of a
+  centred body gradient, but the body's natural near-white core
+  at sun-centre always swamped the kicker visually. Moving the
+  gradient origin instead puts the bright pool at the lit side
+  and the warm amber rim on the shadow side.
+- Each covered module is filled with one solid colour (no
+  anti-aliasing). Snap-to-grid is what keeps RS recovery clean:
+  a fully obscured cell reads as missing data (RS fills it in),
+  whereas a partially obscured cell injects noise that erodes
+  the EC budget.
+
+### Incoming challenges
+
+`gameplay.js` decodes `location.hash` once at module load AND on
+every `hashchange` event — so editing the URL in the address bar
+of an already-loaded page (a same-tab soft navigation, not a
+full reload) still surfaces the welcome card. The `#challenge`
+welcome card on the start screen shows the sender's score, run
+summary, and variant census; closing it strips both the
+fragment and any `?seed=` query so a fresh-random run can roll.
+
+`init()` reads `_incomingChallenge` at the moment the player
+clicks START, so any hash change before that point picks up.
+Seed-source priority:
+
+1. `#…` challenge code with embedded seed
+2. `?seed=XYZ` legacy/explicit param
+3. fresh-random per run
+
+The RESUME button is hidden whenever an incoming challenge is
+active (`updateResumeButtonVisibility()` checks `loadGame() &&
+!_incomingChallenge`). Without this guard, a player on a fresh
+challenge URL could click RESUME and `resumeFromSave()` would
+restore their prior session's score — instantly clearing the
+sender's bar with no actual play. CONTINUE on the game-over
+screen is unaffected because `continueRun()` already resets
+`score = 0`.
+
+`updateSub()` appends `· target N` to the sub-line under the
+HUD score whenever `_incomingChallenge` is set, so the
+sender's bar is visible alongside the player's running total
+throughout the run (not just on the welcome card).
+
+### Once-per-run "challenge beaten" flash
+
+`updateScoreUI()` checks `score > _incomingChallenge.score` on
+every score change; the first cross flips a `challengeBeaten`
+flag and fires `showChallengeBeatFlash()` (gold lazy-created
+overlay element at top:90px, ~1.5s hold so it reads as a
+once-per-run event rather than a per-capture beat). The flag is
+reset by `resetRunStats()` based on the *current* score — fresh
+start / continueRun (score=0) → false; resume from save where
+the saved score already cleared the challenge → true (so the
+flash doesn't re-fire on the resumed frame).
+
 ## Window resize
 
 `resize()` re-centers the camera on the current star (`camY`

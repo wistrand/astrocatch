@@ -18,6 +18,91 @@ import {
   cometPosition,
   appendCometBatch,
 } from "./star-rendering.js";
+import {
+  buildChallengeUrl, makeQrMatrix, renderQrToCanvas, drawSunLogo,
+  decodeChallengeCode, DEATH_CAUSES,
+} from "./challenge.js";
+
+// ── Incoming challenge (#…) ──────────────────────────────
+// Challenge codes ride in the URL fragment (uppercase base32) so
+// the QR can encode them in alphanumeric mode and stay small.
+// `_incomingChallenge` is recomputed from `location.hash` at
+// module load AND on every `hashchange`, so editing the URL in
+// the address bar (which the browser treats as a soft same-tab
+// navigation, not a reload) still surfaces the welcome card.
+// init() reads `_incomingChallenge` at the moment the player
+// clicks START, so any hash change before that point picks up.
+let _incomingChallenge = null;
+function recomputeIncomingChallenge() {
+  const code = location.hash ? location.hash.replace(/^#/, "") : "";
+  _incomingChallenge = code ? decodeChallengeCode(code) : null;
+}
+recomputeIncomingChallenge();
+function showChallengeCard() {
+  const wrap = document.getElementById("challenge");
+  if (!wrap) return;
+  const c = _incomingChallenge;
+  // No (or invalid) hash → hide the card. This also handles the
+  // path where a hashchange wipes a previously-valid challenge.
+  if (!c) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  document.getElementById("challenge-score").textContent =
+    c.score.toLocaleString();
+  const tierBits = `${c.blazingCount}/${c.quickCount}/${c.slowCount}`;
+  document.getElementById("challenge-line").textContent =
+    `${c.starsVisited} stars · streak ×${c.streakPeak} · ${tierBits}` +
+    (c.cometsCaught ? ` · ${c.cometsCaught} comets` : "");
+  // Variant census line — only mention variants the sender
+  // actually saw, with friendly labels. Keeps the card terse
+  // when the run was vanilla. Surprise variants (azazel, teapot)
+  // are aggregated under "special" so the public-facing card
+  // doesn't spoil what's out there to discover.
+  const labels = {
+    blackHole: "black hole", ringworld: "ringworld",
+    nebula: "nebula", pulsar: "pulsar",
+    binary: "binary", monolith: "monolith",
+  };
+  const seen = [];
+  const specials = (c.variants.azazel || 0) + (c.variants.teapot || 0);
+  if (specials > 0) {
+    seen.push(`${specials} special${specials > 1 ? "s" : ""}`);
+  }
+  for (const k of Object.keys(labels)) {
+    const n = c.variants[k] || 0;
+    if (n > 0) seen.push(`${n} ${labels[k]}${n > 1 ? "s" : ""}`);
+  }
+  document.getElementById("challenge-variants").textContent =
+    seen.length ? "saw " + seen.join(", ") : "";
+  wrap.classList.remove("hidden");
+}
+showChallengeCard();
+window.addEventListener("hashchange", () => {
+  recomputeIncomingChallenge();
+  showChallengeCard();
+  // Hide RESUME when a challenge arrives, restore it when one
+  // is cleared (close-button → bare-page reload also handles
+  // this, but a same-tab hash flip needs the explicit refresh).
+  // updateResumeButtonVisibility is a function declaration so
+  // hoisting makes it callable here even though it lives below.
+  updateResumeButtonVisibility();
+});
+// Close button — strip the challenge fragment and ?seed= so the
+// run-seed roll goes back to fresh-random, then reload.
+// Equivalent to landing on the bare page from scratch.
+{
+  const closeBtn = document.getElementById("challenge-close");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const url = new URL(location.href);
+      url.searchParams.delete("seed");
+      url.hash = "";
+      location.assign(url.toString());
+    });
+  }
+}
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -462,6 +547,65 @@ const TUTORIAL_GAMES = 3;
 const TUTORIAL_STARS = 15;
 let gameplayCount = +(localStorage.getItem(GAMEPLAYS_KEY) || 0);
 let isTutorialRun = false;
+
+// ── Per-run seeded PRNG ───────────────────────────────────
+// Drives every spawn-time random decision (variant, position,
+// radius, planets, comets, binary phases). Each run captures
+// a 32-bit seed at init() — either lifted from the URL
+// (?seed=XYZ, base36) so a recipient can replay the sender's
+// run, or freshly random. The seed is exposed on
+// `currentRunSeed` for challenge-card payloads. Visual-flavor
+// randomness (particle bursts, death effects, comet wakes)
+// stays on Math.random() — those have no effect on the
+// challenge sequence and don't need to be reproducible.
+let currentRunSeed = 0;
+let _runRngState = 0;
+function setRunSeed(s) {
+  currentRunSeed = s >>> 0;
+  // mulberry32 init: any non-zero state works; mirrors
+  // renderer.js's bgStars init pattern.
+  _runRngState = (currentRunSeed * 0x9E3779B1 + 1) >>> 0;
+}
+function runRand() {
+  _runRngState = (_runRngState + 0x6D2B79F5) >>> 0;
+  let t = _runRngState;
+  t = Math.imul(t ^ (t >>> 15), t | 1);
+  t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+  return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+}
+
+// ── Per-run challenge-card stats ──────────────────────────
+// Updated incrementally by captureStar / die / comet-catch and
+// consumed by the death-screen challenge card. Reset on init,
+// continueRun, resumeFromSave so a fresh run starts clean.
+let runStats = {
+  blazingCount: 0, quickCount: 0, slowCount: 0,
+  cometsCaught: 0, streakPeak: 0,
+  deathCause: DEATH_CAUSES.unknown,
+  variants: {
+    azazel: 0, teapot: 0, blackHole: 0, ringworld: 0,
+    nebula: 0, pulsar: 0, binary: 0, monolith: 0,
+  },
+};
+function resetRunStats() {
+  runStats.blazingCount = 0;
+  runStats.quickCount = 0;
+  runStats.slowCount = 0;
+  runStats.cometsCaught = 0;
+  runStats.streakPeak = 0;
+  runStats.deathCause = DEATH_CAUSES.unknown;
+  for (const k of Object.keys(runStats.variants)) runStats.variants[k] = 0;
+  // If we're resuming a save where the score already exceeds the
+  // incoming challenge, treat the milestone as already crossed so
+  // the flash doesn't re-fire on the resumed frame. Fresh-start
+  // and continueRun paths set score=0 first, so this evaluates
+  // false there.
+  challengeBeaten = !!(_incomingChallenge && score > _incomingChallenge.score);
+}
+// Once-per-run flag: flips true the first frame `score` exceeds
+// the incoming challenge's score, fires showChallengeBeatFlash().
+// Reset by resetRunStats() based on current score (see above).
+let challengeBeaten = false;
 // Tracked ball speed, normalized to [0, 1] against MAX_SPEED,
 // fed to audio.setIntensity() each render frame so the music's
 // chord progression escalates as the player boosts faster.
@@ -566,7 +710,7 @@ function pickVariant(starIdx) {
   let total = 0;
   for (const k of Object.keys(w)) total += w[k];
   if (total <= 0) return "plain";
-  let r = Math.random() * total;
+  let r = runRand() * total;
   for (const k of Object.keys(w)) {
     r -= w[k];
     if (r < 0) return k;
@@ -584,11 +728,11 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     // Visual variety: only ~half the stars get coronal streamers,
     // so the ones that do stand out instead of every star looking
     // identically spiky. The renderer reads these per instance.
-    hasRays: Math.random() < 0.5,
+    hasRays: runRand() < 0.5,
     // Per-star granule count in [5, 8]. The coronal streamers
     // (when hasRays is true) reuse this count since each streamer
     // is rooted to a granule in the star fragment shader.
-    nGran: 5 + Math.floor(Math.random() * 4),
+    nGran: 5 + Math.floor(runRand() * 4),
     // Optional planets — see assignPlanets below. Most stars get
     // none; the ones that do get 1–2. Planets perturb the ship
     // orbit slightly via AC.physicsStep, but have no collision.
@@ -639,19 +783,19 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
       ? presetVariant
       : pickVariant(starIdx);
     if (variant === "binary") {
-      assignBinary(s);
+      assignBinary(s, runRand);
     } else if (variant === "bh") {
       s.isBlackHole = true;
     } else if (variant === "bhBinary") {
       s.isBlackHole = true;
-      assignBinary(s);
+      assignBinary(s, runRand);
     } else if (variant === "monolith") {
       s.isMonolith = true;
     } else if (variant === "ringworld") {
       s.isRingworld = true;
       // Random 0-7 plates. 0 means no night/day sectors —
       // roughly 1 in 8 ringworlds is plate-free for variety.
-      s.ringPlateCount = Math.floor(Math.random() * 8);
+      s.ringPlateCount = Math.floor(runRand() * 8);
     } else if (variant === "pulsar") {
       s.isPulsar = true;
     } else if (variant === "nebula") {
@@ -668,7 +812,7 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
         && !s.isPulsar && !s.isNebula && !s.isTeapot
         && !s.isAzazel) {
       const planetRamp = Math.min(1, starIdx / PLANET_RAMP_STARS);
-      if (Math.random() < planetRamp * PLANET_PROB_MAX) {
+      if (runRand() < planetRamp * PLANET_PROB_MAX) {
         assignPlanets(s);
       }
     }
@@ -679,7 +823,7 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     // past a pulsar reads naturally.
     if (!s.isMonolith && !s.isTeapot && !s.isAzazel
         && starIdx >= COMET_MIN_STAR
-        && Math.random() < COMET_PROB) {
+        && runRand() < COMET_PROB) {
       assignComets(s, starIdx);
     }
   }
@@ -702,7 +846,7 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
 // diverging inside the planet, so prediction stays stable
 // even on a near-hit.
 function assignPlanets(s) {
-  const nPlanets = 1 + (Math.random() < 0.25 ? 1 : 0);
+  const nPlanets = 1 + (runRand() < 0.25 ? 1 : 0);
   const planets = [];
   for (let i = 0; i < nPlanets; i++) {
     // Orbit radius: 1.9–2.8 R of the parent plus a small
@@ -710,20 +854,20 @@ function assignPlanets(s) {
     // don't overlap. That keeps planets inside the ship's
     // likely orbit band so they're visible AND dynamically
     // relevant on most captures.
-    const orbitR = s.r * (1.9 + Math.random() * 0.9 + i * 0.4);
+    const orbitR = s.r * (1.9 + runRand() * 0.9 + i * 0.4);
     // Period in physics frames. At PHYSICS_HZ = 120 this is
     // roughly 5–12 seconds per revolution — slow enough to
     // feel graceful, fast enough to see movement across one
     // capture's worth of orbit time.
-    const periodFrames = 600 + Math.random() * 840;
-    const spin = Math.random() < 0.5 ? 1 : -1;
-    const planetR = 3 + Math.random() * 3;
+    const periodFrames = 600 + runRand() * 840;
+    const spin = runRand() < 0.5 ? 1 : -1;
+    const planetR = 3 + runRand() * 3;
     planets.push({
       orbitR,
       omega: spin * (Math.PI * 2) / periodFrames,
-      phase: Math.random() * Math.PI * 2,
+      phase: runRand() * Math.PI * 2,
       radius: planetR,
-      colorIdx: Math.floor(Math.random() * PALETTE_LEN),
+      colorIdx: Math.floor(runRand() * PALETTE_LEN),
       // 1.5% of the parent's GM — a perturbation, not a body.
       gm: s.gm * 0.015,
       // Plummer softening length squared. At ~2× planet radius
@@ -801,7 +945,7 @@ function assignComets(s, starIdx) {
   // properly eccentric orbit — if no direction has enough room,
   // skip the comet rather than drawing a near-circular one.
   const maxApo = Math.min(bestClearance * 0.45, 600);
-  const peri = s.r * (1.05 + Math.random() * 0.2);
+  const peri = s.r * (1.05 + runRand() * 0.2);
   if (maxApo < peri * 2.5) return; // not eccentric enough
 
   const a = (maxApo + peri) / 2;
@@ -809,7 +953,7 @@ function assignComets(s, starIdx) {
 
   // omega: apoapsis at bestAngle → omega = bestAngle - π,
   // plus a small random spread.
-  const omega = bestAngle - Math.PI + (Math.random() - 0.5) * 0.3;
+  const omega = bestAngle - Math.PI + (runRand() - 0.5) * 0.3;
   // Period via Kepler's third law in physics-frame units.
   const T = Math.PI * 2 * Math.sqrt(a * a * a / s.gm);
   s.comets = [{
@@ -817,13 +961,13 @@ function assignComets(s, starIdx) {
     e,
     omega,
     meanMotion: (Math.PI * 2) / T,
-    phase: Math.random() * Math.PI * 2,
-    radius: 2 + Math.random() * 2,
-    tailLength: 25 + Math.random() * 25,
+    phase: runRand() * Math.PI * 2,
+    radius: 2 + runRand() * 2,
+    tailLength: 25 + runRand() * 25,
     // 1–3 syndynes (dust-size populations) per comet. More
     // syndynes = wider, richer fan-shaped tail. Fewer = a
     // thinner, simpler streak.
-    numSyndynes: 1 + Math.floor(Math.random() * 3),
+    numSyndynes: 1 + Math.floor(runRand() * 3),
     scored: false,
   }];
 }
@@ -880,7 +1024,7 @@ function addNextStar() {
   // (eyes, mouths, spikes) reads at the size the design needs;
   // smaller demons just lose their face detail.
   const sizeMul = variant === "azazel" ? 1.5 : 1.0;
-  const r = Math.max(minR, ((34 + Math.random() * 24) - difficulty * 14) * sizeMul);
+  const r = Math.max(minR, ((34 + runRand() * 24) - difficulty * 14) * sizeMul);
 
   // Base distance range. As difficulty grows we push the next star
   // further away (harder to reach) AND widen the angle cone (harder
@@ -900,16 +1044,16 @@ function addNextStar() {
   // Try several candidate positions in the upward cone; accept the
   // first that respects the separation invariant against every star.
   for (let tries = 0; tries < 40; tries++) {
-    const dist = minD + Math.random() * (maxD - minD);
+    const dist = minD + runRand() * (maxD - minD);
     // 45° half-cone early → ~85° at max difficulty. On landscape
     // screens, widen the cone so stars use the horizontal space
     // instead of clustering in a narrow vertical column.
     const aspectBoost = W > H ? (W / H - 1) * 0.3 : 0;
     const halfSpread = Math.PI * 0.25 + difficulty * Math.PI * 0.22 + aspectBoost;
-    const angle = -Math.PI / 2 + (Math.random() - 0.5) * 2 * halfSpread;
+    const angle = -Math.PI / 2 + (runRand() - 0.5) * 2 * halfSpread;
     let nx = prev.x + Math.cos(angle) * dist;
     let ny = prev.y + Math.sin(angle) * dist;
-    if (ny > prev.y - 120) ny = prev.y - 120 - Math.random() * 60;
+    if (ny > prev.y - 120) ny = prev.y - 120 - runRand() * 60;
     nx = Math.max(80, Math.min(W - 80, nx));
     if (separationOk(nx, ny, r)) {
       stars.push(makeStar(nx, ny, r, n, n, variant));
@@ -978,6 +1122,23 @@ function init() {
   if (isTutorialRun) showLaunchWindow = true;
   gameplayCount++;
   localStorage.setItem(GAMEPLAYS_KEY, "" + gameplayCount);
+  // Per-run seed selection, in priority order:
+  //   1. #… challenge code with embedded seed (full challenge URL).
+  //   2. ?seed=XYZ legacy/explicit seed param.
+  //   3. Fresh random — one per run, ready to send.
+  // (1) and (2) stick across retries so the player can re-attempt
+  // the same challenge without manipulating the URL.
+  if (_incomingChallenge && _incomingChallenge.seed != null) {
+    setRunSeed(_incomingChallenge.seed || 1);
+  } else {
+    const urlSeedRaw = new URLSearchParams(location.search).get("seed");
+    if (urlSeedRaw !== null) {
+      const parsed = parseInt(urlSeedRaw, 36) >>> 0;
+      setRunSeed(parsed || 1); // 0 would degenerate the PRNG; remap to 1
+    } else {
+      setRunSeed((Math.random() * 0x100000000) >>> 0);
+    }
+  }
   stars = [];
   trail = [];
   particles = [];
@@ -993,6 +1154,7 @@ function init() {
   camTargetY = 0;
   hasBoosted = false;
   audio.setDemonMode(false);
+  resetRunStats();
 
   // First star: intentionally larger than later stars so the
   // player's starting orbit has a longer period (period scales
@@ -1084,6 +1246,7 @@ function continueRun() {
   fastStreak = 0;
   trackedSpeed = 0;
   audio.setStreak(0);
+  resetRunStats();
   // Re-establish demon mode based on the anchor star — `die()`
   // cleared it but if we're respawning around an Azazel the
   // dark progression should resume.
@@ -1222,6 +1385,7 @@ function resumeFromSave(data) {
   camTargetY = camY;
   audio.setStreak(fastStreak);
   audio.setDemonMode(!!anchor.isAzazel);
+  resetRunStats();
   // Clear all transient buffers (trail/particles/shockwaves/
   // replay) that we don't save.
   trail = [];
@@ -1251,6 +1415,9 @@ function updateSub() {
   let text = "best " + best + " · " + starsVisited + " stars";
   if (fastStreak >= 2) {
     text += " · streak ×" + fmtMult(streakMultiplier(fastStreak));
+  }
+  if (_incomingChallenge) {
+    text += " · target " + _incomingChallenge.score.toLocaleString();
   }
   document.getElementById("sub").textContent = text;
 }
@@ -1325,7 +1492,7 @@ function checkCollisions() {
           if (d < subs[j].r * CRASH_MULT) {
             s.wobble = 1.0;
             s.wobbleAngle = Math.atan2(dy, dx);
-            die(true);
+            die(true, s);
             return;
           }
         }
@@ -1338,7 +1505,7 @@ function checkCollisions() {
     if (d < s.r * CRASH_MULT) {
       s.wobble = 1.0;
       s.wobbleAngle = Math.atan2(dy, dx);
-      die(true);
+      die(true, s);
       return;
     }
   }
@@ -1394,6 +1561,21 @@ function captureStar(idx) {
   const streakMult = streakMultiplier(fastStreak);
   score += Math.round(bonus * streakMult);
   starsVisited += 1;
+  // Challenge-card stats: bonus tier (3=Blazing/2=Quick/1=Slow),
+  // variant census, peak streak. Bonus 0/no-multiplier still
+  // counts as a "slow" capture for the histogram.
+  if (bonus >= 3) runStats.blazingCount++;
+  else if (bonus >= 2) runStats.quickCount++;
+  else runStats.slowCount++;
+  if (fastStreak > runStats.streakPeak) runStats.streakPeak = fastStreak;
+  if (s.isAzazel)     runStats.variants.azazel++;
+  if (s.isTeapot)     runStats.variants.teapot++;
+  if (s.isBlackHole)  runStats.variants.blackHole++;
+  if (s.isRingworld)  runStats.variants.ringworld++;
+  if (s.isNebula)     runStats.variants.nebula++;
+  if (s.isPulsar)     runStats.variants.pulsar++;
+  if (s.isBinary)     runStats.variants.binary++;
+  if (s.isMonolith)   runStats.variants.monolith++;
   // Tutorial assist auto-off at the boundary. One-shot — the
   // player can still re-enable with W and their preference
   // will stick from here on.
@@ -1899,6 +2081,39 @@ function updateScoreUI(bump, bonus, streak) {
   if (bonus && bonus > 1) {
     showBonusFlash(bonus, streak);
   }
+  // Challenge milestone: only fires the first time the player
+  // crosses the sender's score during this run.
+  if (_incomingChallenge && !challengeBeaten
+      && score > _incomingChallenge.score) {
+    challengeBeaten = true;
+    showChallengeBeatFlash();
+  }
+}
+
+function showChallengeBeatFlash() {
+  let el = document.getElementById("challenge-beat-flash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "challenge-beat-flash";
+    // Sits above the bonus-flash row so the two don't overlap
+    // when the milestone-crossing capture also earns a tier
+    // bonus. Larger + warmer-glowing than bonus-flash to read
+    // as a once-per-run event rather than a per-capture beat.
+    el.style.cssText =
+      "position:absolute;top:90px;left:0;right:0;text-align:center;" +
+      "font-size:26px;font-weight:800;letter-spacing:5px;text-transform:uppercase;" +
+      "pointer-events:none;opacity:0;transition:opacity .3s,transform .9s;" +
+      "color:#ffe262;text-shadow:0 0 22px rgba(255,226,98,.85),0 0 50px rgba(255,170,60,.55)";
+    document.getElementById("ui").appendChild(el);
+  }
+  el.textContent = "challenge beaten";
+  el.style.opacity = "1";
+  el.style.transform = "translateY(0) scale(1)";
+  void el.offsetWidth;
+  setTimeout(() => {
+    el.style.opacity = "0";
+    el.style.transform = "translateY(-24px) scale(1.06)";
+  }, 1500);
 }
 
 function showBonusFlash(bonus, streak) {
@@ -2060,11 +2275,26 @@ function boost() {
 // for DYING_FRAMES_MS so the ball drifts a bit before the game
 // over screen appears — much less abrupt than a hard freeze.
 // ─────────────────────────────────────────────────────────────
-function die(crash) {
+function die(crash, crashedStar) {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
   syncPausedIndicator();
   ball.pendingCapture = -1; // cancel any in-flight transfer
+  // Death-cause categorisation for the challenge card. Crashing
+  // into a binary's sub-star or BH gets its own enum so the
+  // challenge narrative can read the right way ("hit by donor"
+  // is more interesting than the generic "starCrash").
+  if (crash) {
+    if (crashedStar && crashedStar.isBlackHole) {
+      runStats.deathCause = DEATH_CAUSES.blackHoleCrash;
+    } else if (crashedStar && crashedStar.isBinary) {
+      runStats.deathCause = DEATH_CAUSES.binaryCrash;
+    } else {
+      runStats.deathCause = DEATH_CAUSES.starCrash;
+    }
+  } else {
+    runStats.deathCause = DEATH_CAUSES.escape;
+  }
   if (crash) audio.deathCrash(); else audio.death();
   // Music keeps playing through DYING → DEAD → next PLAY.
   // The retry's startMusic() is idempotent, so the loop
@@ -2104,7 +2334,54 @@ function die(crash) {
     // Hide the live HUD score so it doesn't duplicate the #final on
     // the game-over overlay. init() re-shows it on the next run.
     document.getElementById("score-display").style.display = "none";
+    renderChallengeCard();
   }, DYING_FRAMES_MS);
+}
+
+// Build the challenge URL from the current run's stats and
+// render its QR onto the overlay's canvas. Stash the URL on
+// the copy-button so the click handler can read it.
+function renderChallengeCard() {
+  // Reset the flip-card to its front face for each new death,
+  // so a player who flipped, played again, then died re-sees
+  // the "get challenge link" text rather than the prior QR.
+  const card = document.getElementById("challenge-out");
+  if (card) card.classList.remove("flipped");
+  const url = buildChallengeUrl({
+    score, starsVisited,
+    streakPeak: runStats.streakPeak,
+    blazingCount: runStats.blazingCount,
+    quickCount: runStats.quickCount,
+    slowCount: runStats.slowCount,
+    cometsCaught: runStats.cometsCaught,
+    deathCause: runStats.deathCause,
+    variants: runStats.variants,
+    seed: currentRunSeed,
+  }, location.origin + location.pathname);
+  const canvas = document.getElementById("challenge-out-qr");
+  const copyBtn = document.getElementById("challenge-out-copy");
+  if (!canvas || !copyBtn) return;
+  // Encode the URL as uppercase so the host + path + fragment
+  // payload all qualify for QR alphanumeric mode (5.5 bits/char
+  // vs 8). Browsers normalise scheme + host case so the link
+  // still resolves; the fragment stays uppercase, which our
+  // base32 decoder accepts. EC level M gives ~15% damage
+  // tolerance — enough to overlay the centred sun logo.
+  const qrText = url.toUpperCase();
+  const matrix = makeQrMatrix(qrText, "M");
+  // Backing-store scale 6 → 33-module v3 = 198 px native; CSS
+  // displays at native size for crisp scanner-friendly cells.
+  const SCALE = 6, QUIET = 2;
+  renderQrToCanvas(matrix, canvas, SCALE, QUIET);
+  drawSunLogo(canvas, matrix.size, SCALE, QUIET);
+  // QR also acts as a clickable link to the same challenge URL
+  // (opens in a new tab). Useful for pasting into a chat or
+  // verifying the encoded URL by eye.
+  const qrLink = document.getElementById("challenge-out-link");
+  if (qrLink) qrLink.href = url;
+  copyBtn.dataset.url = url;
+  copyBtn.classList.remove("copied");
+  copyBtn.textContent = "copy challenge link";
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2462,6 +2739,7 @@ function renderTick() {
         if (cdx * cdx + cdy * cdy < COMET_SCORE_RADIUS * COMET_SCORE_RADIUS) {
           // Score + HUD flash.
           score += COMET_BONUS;
+          runStats.cometsCaught++;
           updateScoreUI(true, 0, 0);
           showCometFlash();
           audio.comet();
@@ -3473,6 +3751,55 @@ document.getElementById("retry-btn").addEventListener("click", (e) => {
   clearSave();
   init();
 });
+// Challenge card flip toggle. The .flipped class lives on
+// #challenge-out itself so its CSS transitions (width/height)
+// glide with the inner's rotateY at the same time. Clicking the
+// front-face "get challenge link" text flips it open; clicking
+// the description line on the back flips it back closed.
+document.getElementById("challenge-out-flip").addEventListener("click", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const card = document.getElementById("challenge-out");
+  if (card) card.classList.add("flipped");
+});
+{
+  const infoEl = document.getElementById("challenge-out-info");
+  if (infoEl) {
+    infoEl.style.cursor = "pointer";
+    infoEl.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      const card = document.getElementById("challenge-out");
+      if (card) card.classList.remove("flipped");
+    });
+  }
+}
+// Challenge card: copy the current run's URL to clipboard. Falls
+// back to a textarea + execCommand on browsers without async
+// clipboard access (older Safari, http origins).
+document.getElementById("challenge-out-copy").addEventListener("click", (e) => {
+  e.preventDefault(); e.stopPropagation();
+  const btn = e.currentTarget;
+  const url = btn.dataset.url || "";
+  if (!url) return;
+  const flash = () => {
+    btn.classList.add("copied");
+    btn.textContent = "copied";
+    setTimeout(() => {
+      btn.classList.remove("copied");
+      btn.textContent = "copy challenge link";
+    }, 1500);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
+  } else {
+    const ta = document.createElement("textarea");
+    ta.value = url;
+    ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); flash(); } catch (_) { /* swallow */ }
+    document.body.removeChild(ta);
+  }
+});
 document.getElementById("continue-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
@@ -3494,16 +3821,20 @@ document.getElementById("resume-btn").addEventListener("click", (e) => {
   resumeFromSave(data);
 });
 
-// Expose the RESUME button on the menu if a saved run exists.
-// Runs once at module load — subsequent save state changes happen
-// after the menu is already dismissed, so no re-check needed.
-// The button's slot is reserved in HTML via `visibility:hidden`
-// so a load with a save and a load without one have the same
-// layout — flipping visibility doesn't shift the description /
-// link block beneath it.
-(function initResumeButton() {
-  if (loadGame()) {
-    const btn = document.getElementById("resume-btn");
-    if (btn) btn.style.visibility = "visible";
-  }
-})();
+// Expose the RESUME button on the menu if a saved run exists
+// AND no incoming challenge is active. The challenge guard
+// matters because RESUME calls resumeFromSave(), which restores
+// the saved score — letting a player land on a #challenge URL
+// and instantly exceed the sender's score with their prior
+// run's progress. Forcing them to start fresh keeps the
+// challenge meaningful. The button's slot is reserved in HTML
+// via `visibility:hidden` so a load with a save and a load
+// without one have the same layout — flipping visibility
+// doesn't shift the description / link block beneath it.
+function updateResumeButtonVisibility() {
+  const btn = document.getElementById("resume-btn");
+  if (!btn) return;
+  const allowed = !_incomingChallenge && !!loadGame();
+  btn.style.visibility = allowed ? "visible" : "hidden";
+}
+updateResumeButtonVisibility();

@@ -123,29 +123,31 @@ export function binaryPositions(star, frame) {
   ];
 }
 
-// Mutate `s` into a binary. Uses Math.random() for parameters
-// — caller is responsible for any deterministic seeding.
-export function assignBinary(s) {
-  const q = 0.2 + Math.random() * 0.45;
+// Mutate `s` into a binary. Pass `rand` to drive the parameters
+// from a seeded PRNG (gameplay's runRand for per-run determinism);
+// defaults to Math.random for callers that don't care, e.g. the
+// variant inspector.
+export function assignBinary(s, rand = Math.random) {
+  const q = 0.2 + rand() * 0.45;
   const totalGM = s.gm;
   const gm1 = totalGM * q / (1 + q);
   const gm2 = totalGM / (1 + q);
   let r1 = s.r * Math.cbrt(q / (1 + q)) * 0.72;
   let r2 = s.r * Math.cbrt(1 / (1 + q)) * 0.72;
   const minSep = (r1 + r2) * 2.2;
-  const sep = Math.max(minSep, s.r * (0.8 + Math.random() * 0.4));
+  const sep = Math.max(minSep, s.r * (0.8 + rand() * 0.4));
   const d1 = sep / (1 + q);
   const d2 = sep * q / (1 + q);
-  const periodFrames = 400 + Math.random() * 400;
-  const spin = Math.random() < 0.5 ? 1 : -1;
+  const periodFrames = 400 + rand() * 400;
+  const spin = rand() < 0.5 ? 1 : -1;
   s.isBinary = true;
   s.planets = null;
   s.binary = {
     q, sep, r1, r2, gm1, gm2, d1, d2,
     omega: spin * (Math.PI * 2) / periodFrames,
-    phase: Math.random() * Math.PI * 2,
+    phase: rand() * Math.PI * 2,
     colorIdx1: s.colorIdx,
-    colorIdx2: Math.floor(Math.random() * PALETTE_LEN),
+    colorIdx2: Math.floor(rand() * PALETTE_LEN),
     accretorIsBH: s.isBlackHole,
     stream: null,
   };

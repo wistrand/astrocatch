@@ -59,6 +59,15 @@ pulls you in and you orbit that one too.
   levels and back.
 - **Watch your replay.** A cinematic follow-camera plays back
   your run with simplex-driven zoom behind the AGAIN button.
+- **Send a challenge.** On death, flip the small text link
+  on the game-over screen to reveal a QR + copy button. The
+  link encodes your score, run summary and game seed (nothing
+  more) so a friend opening it sees your numbers and plays the
+  exact same star sequence. While playing a challenge run, the
+  sender's score sits next to your running total under the HUD
+  so you can see where you are; beating it pops a once-per-run
+  "challenge beaten" notification. RESUME is unavailable on a
+  challenge URL — you start fresh.
 - **Mute anytime** via the speaker button in the top-right
   corner, or press **M**. Both the sound effects and the
   ambient music loop are generated on the fly from oscillators
@@ -156,6 +165,7 @@ docs/
   audio.js            browser-only: procedural WebAudio sound effects
   physics.js          pure physics module, used by browser and node
   star-rendering.js   browser-only: binary positions, ejecta, comets
+  challenge.js        browser-only: QR encoder + challenge-link payload
   debug.html / .js    variant inspector — one of every star type
   variants.html / .js  variant inspector grid
                        (?type=&seed=N&grid=NxM)

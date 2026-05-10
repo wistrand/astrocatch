@@ -286,6 +286,199 @@
     #gameover-keys { display: none; }
   }
 
+  /* Challenge-out card: a CSS-3D flip-reveal. Front is a single
+     "get challenge link" button; the QR + info + copy-link sit
+     on the back face and only render to the eye after the flip.
+     Both faces use the same panel styling (border / background /
+     radius) so the flip looks like one card spinning rather than
+     two stacked rectangles. */
+  /* The card reserves its FULL flipped size at all times so
+     the surrounding overlay layout doesn't shift when the card
+     opens or closes. Unflipped state shows just a small dim
+     text link at the top of that reserved area; flipped state
+     reveals the panel filling the whole reserved area. */
+  #challenge-out {
+    margin-top: 18px;
+    width: 240px;
+    /* Tall enough to fit info-text + QR (198) + button + ~24
+       padding on each end + flex gaps with breathing room. */
+    height: 348px;
+    perspective: 1200px;
+    align-self: center;
+  }
+  #challenge-out .flip-inner {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    transform-style: preserve-3d;
+    transition: transform 0.55s cubic-bezier(0.4, 0.0, 0.2, 1);
+  }
+  #challenge-out.flipped .flip-inner {
+    transform: rotateY(180deg);
+  }
+  #challenge-out .flip-front,
+  #challenge-out .flip-back {
+    position: absolute;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    box-sizing: border-box;
+  }
+  #challenge-out .flip-front {
+    /* Sits at the top of the reserved card area, small height,
+       so the text link reads as continuing-from-the-buttons
+       rather than floating in the middle of empty space. */
+    top: 0; left: 0; right: 0;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Belt-and-braces hide for the flip: backface-visibility
+       isn't honoured on <button> elements in some browsers
+       (the text bleeds through, mirrored). Fade out as the
+       flip reaches its midpoint so the back face is the only
+       thing visible by the time the rotation completes. */
+    opacity: 1;
+    transition: opacity 0.18s ease;
+    pointer-events: auto;
+  }
+  #challenge-out.flipped .flip-front {
+    opacity: 0;
+    transition: opacity 0.18s ease 0.22s;
+    pointer-events: none;
+  }
+  #challenge-out .flip-back {
+    /* Fills the whole reserved card area. translateZ pushes
+       the back face slightly forward so it reliably wins the
+       depth fight against the front face after the parent
+       flips (works around backface-visibility edge cases on
+       some browsers where the front face's edges leak). */
+    inset: 0;
+    transform: rotateY(180deg) translateZ(1px);
+    padding: 22px 14px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    background: rgba(20, 30, 60, 0.35);
+    border: 1px solid rgba(140, 210, 255, 0.25);
+    border-radius: 6px;
+  }
+  #challenge-out-flip {
+    width: 100%;
+    height: 100%;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    font-family: inherit;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: color 0.2s;
+  }
+  #challenge-out-flip:hover {
+    color: rgba(255, 255, 255, 0.85);
+  }
+  #challenge {
+    position: relative;
+    margin: 16px auto 12px;
+    padding: 14px 30px;
+    border: 1px solid rgba(140, 210, 255, 0.25);
+    border-radius: 6px;
+    background: rgba(20, 30, 60, 0.35);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    min-width: 240px;
+  }
+  #challenge.hidden { display: none; }
+  #challenge-close {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.4);
+    font-size: 22px;
+    line-height: 1;
+    font-family: inherit;
+    cursor: pointer;
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    appearance: none;
+    -webkit-appearance: none;
+  }
+  #challenge-close:hover {
+    color: rgba(255, 255, 255, 0.9);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  #challenge-score {
+    font-size: 38px;
+    font-weight: 750;
+    letter-spacing: -1px;
+    text-shadow: 0 0 18px rgba(140, 210, 255, 0.5);
+    margin: 2px 0 4px;
+  }
+  #challenge-line, #challenge-variants {
+    font-size: 11px;
+    letter-spacing: 1.5px;
+    color: rgba(255, 255, 255, 0.65);
+  }
+  #challenge-variants:empty { display: none; }
+  #challenge-out-link {
+    display: inline-block;
+    line-height: 0; /* kill anchor descender gap below the canvas */
+    text-decoration: none;
+  }
+  #challenge-out-info {
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: rgba(255, 255, 255, 0.4);
+    text-align: center;
+    max-width: 220px;
+    line-height: 1.4;
+  }
+  #challenge-out-qr {
+    /* Display at the backing-store's native pixel size — any
+       non-integer downscale produces uneven module widths that
+       trip stricter QR scanners. The encoder picks the canvas
+       width via canvas.width = (size + 2*quiet) * scale.
+       width/height: auto overrides the global `canvas { width:
+       100%; height: 100%; }` rule meant for the game canvas;
+       without this the QR stretches to fill its flex parent
+       and renders non-square. */
+    width: auto;
+    height: auto;
+    image-rendering: pixelated;
+    border-radius: 4px;
+    box-shadow: 0 0 12px rgba(140, 210, 255, 0.18);
+    cursor: pointer;
+  }
+  .link-btn {
+    background: transparent;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 11px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 4px 12px;
+    border-radius: 3px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .link-btn:hover { color: #fff; border-color: rgba(255, 255, 255, 0.6); }
+  .link-btn.copied { color: #9fe3a3; border-color: #6cb87166; }
+
   /* Start screen is also see-through so the ambient stars drawn
     on the canvas are visible behind the title block. */
   #start {
@@ -444,6 +637,13 @@
     <h1>ASTROCATCH</h1>
     <div class="tag">click / space to play</div>
     <div id="start-best" class="label" style="visibility:hidden">&nbsp;</div>
+    <div id="challenge" class="hidden">
+      <button id="challenge-close" type="button" aria-label="dismiss challenge">×</button>
+      <div class="label">challenge</div>
+      <div id="challenge-score">0</div>
+      <div id="challenge-line" class="label">0 stars</div>
+      <div id="challenge-variants" class="label"></div>
+    </div>
     <button id="start-btn">START</button>
     <button id="resume-btn" style="visibility:hidden">RESUME</button>
     <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next one. The game picks a boost; gravity bends the path and captures you on the other side. Release within one rotation for bonus points.</div>
@@ -457,6 +657,18 @@
     <button id="retry-btn">RESTART</button>
     <button id="continue-btn">CONTINUE</button>
     <div id="gameover-keys" class="tag" style="margin-top:12px">[space] restart · [enter] continue</div>
+    <div id="challenge-out">
+      <div class="flip-inner">
+        <button id="challenge-out-flip" class="flip-front" type="button">get challenge link</button>
+        <div class="flip-back">
+          <div id="challenge-out-info">challenge link is score, run summary and game seed</div>
+          <a id="challenge-out-link" href="#" target="_blank" rel="noopener" aria-label="open challenge link">
+            <canvas id="challenge-out-qr" aria-label="challenge QR code"></canvas>
+          </a>
+          <button id="challenge-out-copy" class="link-btn">copy challenge link</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="unsupported" class="overlay hidden">
