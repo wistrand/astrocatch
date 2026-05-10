@@ -53,7 +53,7 @@ function zoomTargetFor(star) {
   if (star.isRingworld) return IS_TOUCH ? 1.5 : 1.7;
   if (star.isNebula)    return IS_TOUCH ? 1.4 : 1.6;
   if (star.isTeapot)    return IS_TOUCH ? 1.4 : 1.6;
-  if (star.isAzazel)    return IS_TOUCH ? 1.8 : 3.5;
+  if (star.isAzazel)    return IS_TOUCH ? 2.5 : 4.5;
   return 1.0;
 }
 // World-space horizontal camera pan. Normally 0; nudged when
@@ -1033,6 +1033,12 @@ function init() {
   // persists across runs even though `ball` is rebuilt fresh.
   lastProjectedLaunchWindowFrame = -1;
   computeLaunchWindow();
+  // Rolling-mean FPS counter (debug, ?fps=1) — clear the sample
+  // queue so a long welcome-screen idle doesn't carry into the
+  // first seconds of gameplay.
+  _fpsSamples.length = 0;
+  _fpsWindowMs = 0;
+  _fpsLastDisplayMs = 0;
 
   document.getElementById("score").textContent = "0";
   updateSub();
@@ -2212,11 +2218,12 @@ function renderTick() {
   // perturbation. Only runs if the hint is currently visible
   // so we don't burn CPU on invisible state. The build itself
   // is time-sliced (see tickLaunchWindowBuild below).
-  if (showLaunchWindow && ball && ball.pendingCapture < 0) {
+  if (ball && ball.pendingCapture < 0) {
     const cs0 = stars[ball.currentStar];
+    const visible = showLaunchWindow || (cs0 && cs0.isAzazel);
     const perturbed = cs0 && (cs0.planets || cs0.isBinary);
     const frame = ball.frame || 0;
-    if (perturbed && frame - lastLaunchWindowFrame
+    if (visible && perturbed && frame - lastLaunchWindowFrame
         >= LAUNCH_WINDOW_RECOMPUTE_FRAMES && _lwBuildSlot < 0) {
       computeLaunchWindow();
     }
@@ -2661,7 +2668,12 @@ function draw() {
   // Launch-window indicator — short tangent ticks on the orbit
   // where a tap would land a clean capture. Player watches the
   // bright zone approach as they orbit.
-  if (showLaunchWindow && ball && ball.launchWindow
+  // Azazel always shows the launch window — the demon orbit is
+  // a special-occasion moment and the indicator is part of its
+  // signature read.
+  const csCur = ball ? stars[ball.currentStar] : null;
+  const lwForced = csCur && csCur.isAzazel;
+  if ((showLaunchWindow || lwForced) && ball && ball.launchWindow
       && ball.pendingCapture < 0
       && ball.launchWindowStarIdx === ball.currentStar) {
     const cs = stars[ball.currentStar];
@@ -3174,6 +3186,17 @@ let ballRenderX = 0, ballRenderY = 0;
 // into cam-velocity jitter.
 let renderFrameDt = 16.67;
 
+// Rolling-mean FPS counter — opt-in via ?fps=1 URL param.
+// Drops samples older than FPS_WINDOW_MS so the readout
+// reflects current performance, not the run average.
+const _fpsEnabled = new URLSearchParams(location.search).get("fps") === "1";
+const _fpsEl = _fpsEnabled ? document.getElementById("fps") : null;
+if (_fpsEl) _fpsEl.style.display = "block";
+const FPS_WINDOW_MS = 3000;
+const _fpsSamples = [];
+let _fpsWindowMs = 0;
+let _fpsLastDisplayMs = 0;
+
 function loop(rafTime) {
   if (paused) {
     lastFrameTime = -1;
@@ -3188,15 +3211,8 @@ function loop(rafTime) {
   renderFrameDt = elapsed;
   physicsAccumulator += elapsed;
 
-  // Track the ball's pre-tick position so we can interpolate
-  // between the two most recent physics states after the tick
-  // loop finishes. Only the LAST saved prev matters — with 2
-  // ticks per frame, that's one tick's worth of sim time.
-  let ballPrevX = ball ? ball.x : 0;
-  let ballPrevY = ball ? ball.y : 0;
   let ticks = 0;
   while (physicsAccumulator >= PHYSICS_DT_MS && ticks < MAX_PHYSICS_PER_FRAME) {
-    if (ball) { ballPrevX = ball.x; ballPrevY = ball.y; }
     physicsTick();
     physicsAccumulator -= PHYSICS_DT_MS;
     ticks++;
@@ -3205,15 +3221,21 @@ function loop(rafTime) {
   // try to "catch up" forever after a long stall.
   if (ticks >= MAX_PHYSICS_PER_FRAME) physicsAccumulator = 0;
 
-  // Render-position lerp. alpha ∈ [0, 1). At alpha=0 we're right
-  // after a tick (draw the pre-tick state); at alpha→1 we're
-  // about to commit the next tick (draw the current state). The
-  // visual glides smoothly across the sim grid instead of
-  // snapping once per tick.
+  // Render-position extrapolation. ball.x is the post-last-tick
+  // sim state; we project forward by the leftover accumulator
+  // using the post-tick velocity (vx/vy are world units PER
+  // tick, so accFrac is the fraction of a tick to advance). On
+  // a K=0 frame (high-refresh displays where elapsed < dt) the
+  // sim doesn't tick but accFrac still grows continuously —
+  // the previous interpolation collapsed in that case (ballPrev
+  // == ball.x), freezing the ship for one frame and then
+  // jumping when the next K=2 frame caught up. Extrapolation
+  // makes the rendered position a smooth function of wall time
+  // regardless of how ticks are distributed across frames.
   if (ball) {
-    const alpha = physicsAccumulator / PHYSICS_DT_MS;
-    ballRenderX = ballPrevX + (ball.x - ballPrevX) * alpha;
-    ballRenderY = ballPrevY + (ball.y - ballPrevY) * alpha;
+    const accFrac = physicsAccumulator / PHYSICS_DT_MS;
+    ballRenderX = ball.x + ball.vx * accFrac;
+    ballRenderY = ball.y + ball.vy * accFrac;
   }
 
   renderTick();
@@ -3223,6 +3245,22 @@ function loop(rafTime) {
   if (state === STATE.DEAD && replay.length > 0) {
     replayIdx += REPLAY_SPEED;
     if (replayIdx >= replay.length + 30) replayIdx = 0; // brief hold then loop
+  }
+  // Rolling-mean FPS counter — push the current frame's elapsed
+  // onto the sample queue, drop anything older than the window,
+  // and refresh the readout at most every 250 ms.
+  if (_fpsEl && (state === STATE.PLAY || state === STATE.DYING)) {
+    _fpsSamples.push(elapsed);
+    _fpsWindowMs += elapsed;
+    while (_fpsWindowMs > FPS_WINDOW_MS && _fpsSamples.length > 1) {
+      _fpsWindowMs -= _fpsSamples.shift();
+    }
+    _fpsLastDisplayMs += elapsed;
+    if (_fpsLastDisplayMs >= 250 && _fpsWindowMs > 0) {
+      const mean = (_fpsSamples.length * 1000) / _fpsWindowMs;
+      _fpsEl.textContent = mean.toFixed(1) + " fps";
+      _fpsLastDisplayMs = 0;
+    }
   }
   requestAnimationFrame(loop);
 }

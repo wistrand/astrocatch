@@ -895,7 +895,7 @@ const float AZ_INNER_GLOW_FALLOFF = 5.0;
 const float AZ_INNER_GLOW_AMP = 1.10;
 const vec3  AZ_EYE_IRIS_RED = vec3(0.95, 0.10, 0.05);
 const float AZ_EYE_IRIS_PROB = 0.30;
-const float AZ_EYE_IRIS_R = 0.022;
+const float AZ_EYE_IRIS_R = 0.028;
 const vec3  AZ_TOOTH_WHITE = vec3(0.93, 0.88, 0.74);
 const int   AZ_N_FACES = 3;
 const float AZ_FACE_SPREAD_X = 0.78;
@@ -906,10 +906,10 @@ const float AZ_FACE_MOTION_AMP = 0.10;
 const float AZ_FACE_MOTION_RATE = 0.20;
 const float AZ_FACE_SCALE_AMP = 0.15;
 const float AZ_FACE_SCALE_RATE = 0.20;
-const float AZ_EYE_INNER_X = 0.022;
-const float AZ_EYE_OUTER_X = 0.115;
-const float AZ_EYE_HEIGHT = 0.024;
-const float AZ_EYE_Y_OFFSET = -0.115;
+const float AZ_EYE_INNER_X = 0.026;
+const float AZ_EYE_OUTER_X = 0.135;
+const float AZ_EYE_HEIGHT = 0.030;
+const float AZ_EYE_Y_OFFSET = -0.140;
 const float AZ_EYE_BLINK_RATE = 0.30;
 const float AZ_EYE_GLOW_FALLOFF = 35.0;
 const float AZ_EYE_INNER_TILT = 0.42;
@@ -918,7 +918,7 @@ const float AZ_MOUTH_HALFW = 0.13;
 const float AZ_MOUTH_HALFH = 0.110;
 const float AZ_MOUTH_Y_OFFSET = 0.085;
 const float AZ_MOUTH_GAP_MIN = -0.14;
-const float AZ_MOUTH_GAP_MAX = 0.008;
+const float AZ_MOUTH_GAP_MAX = 0.04;
 const float AZ_LOWER_W_RATIO = 0.78;
 const float AZ_TEETH_PER_MOUTH = 6.0;
 const float AZ_MOUTH_OPEN_RATE = 0.40;
@@ -1009,12 +1009,17 @@ float az_sdRip(vec2 p, float seed, float t) {
     float edgeMask = 1.0 - smoothstep(0.0, 0.20, abs(base));
     base += AZ_BOUNDARY_AMP * az_dirNoise(p, seed, t) * edgeMask;
   }
-  // Spikes start at the ellipse boundary and extend outward;
-  // the deepest a spike body reaches inward is its half-width
-  // (~0.06). For fragments well inside the body (base < -0.20,
-  // and unperturbed by dirNoise per the gate above), no spike
-  // can improve min(base, spikes) — skip the 14-spike loop.
-  if (base >= -0.20) {
+  // Spike loop is the dominant cost at high zoom (~14 iters of
+  // line/box math per fragment), so gate it on both sides:
+  //   - base < -0.20: deep inside body, spikes can't improve
+  //     min(base, spikes) since their half-width is ~0.06.
+  //   - dot(pr,pr) > 5.76: fragment is past max spike reach
+  //     (max_ellipse_axis + SPIKE_LEN_MAX + SPIKE_BASE_W
+  //     ≈ 1.45 + 0.85 + 0.06 = 2.36), so spike SDF can't be
+  //     negative here — sign of base is preserved either way,
+  //     and outside fragments only need a correct sign before
+  //     writing alpha=0.
+  if (base >= -0.20 && dot(pr, pr) < 5.76) {
     float spikes = az_sdSpikes(pr, seed, t);
     base = min(base, spikes);
   }
@@ -1068,8 +1073,17 @@ float az_sdRhombusTooth(vec2 p, float topFlat, float wHalf,
   return abs(p.x) - w;
 }
 
-float az_sdToothRow(vec2 p, float halfW, float jawH,
-                    float nTeeth, float seed, float bend) {
+// Tooth-row coordinate convention (row-local frame):
+//   y = 0           → outer jaw boundary (this row's tooth root)
+//   y = effHalfH    → row centre line
+//   y = effHalfH - halfGap → tooth tip / gap edge
+// shape selects the outer-curve form:
+//   +1: convex (regular ellipse — corners shrink to the gap)
+//    0: flat (rectangular row)
+//   −1: concave (corners poke outward past the rest height)
+// Each tooth roots on the curve at column xc.
+float az_sdToothRow(vec2 p, float halfW, float effHalfH, float halfGap,
+                    float shape, float nTeeth, float seed, float bend) {
   float d = 1e6;
   float cellW = 2.0 * halfW / nTeeth;
   float wHalfBase = cellW * 0.60;
@@ -1081,11 +1095,22 @@ float az_sdToothRow(vec2 p, float halfW, float jawH,
     float jawOffset = bend * (1.0 - xRel * xRel);
     float symIdx = min(fi, nTeeth - 1.0 - fi);
     float sizeScale = 0.55 + 0.45 * az_hash11(seed + symIdx * 7.31);
-    float toothLen = jawH * sizeScale;
+    // 4th-order polynomial fit to arc(xRel)=sqrt(1-xRel²).
+    // 1-arc ≈ 0.475·x² + 0.244·x⁴, factored as
+    // x²·(0.475 + 0.244·x²) for one fewer mul. Matches the
+    // ellipse to <0.001 at every tooth column for nTeeth=6
+    // (xRel ∈ {±0.167, ±0.5, ±0.833}) — visually identical
+    // to the true sqrt, no sqrt needed.
+    float x2 = xRel * xRel;
+    float colHeight = effHalfH * (1.0 - shape * x2 * (0.475 + 0.244 * x2));
+    float availLen = colHeight - halfGap;
+    if (availLen <= 0.0) continue;
+    float toothLen = availLen * sizeScale;
     float toothMid = toothLen * 0.50;
     float wHalf = wHalfBase * sqrt(sizeScale);
     float topFlat = wHalf * 0.40;
-    vec2 lp = p - vec2(xc, jawOffset);
+    float rootY = effHalfH - colHeight + jawOffset;
+    vec2 lp = p - vec2(xc, rootY);
     d = min(d, az_sdRhombusTooth(lp, topFlat, wHalf, toothMid, toothLen));
   }
   return d;
@@ -1093,19 +1118,38 @@ float az_sdToothRow(vec2 p, float halfW, float jawH,
 
 float az_sdMouthRows(vec2 p, float halfW, float halfH,
                      float halfGap, float nTeeth, float seed) {
-  vec2 bbox = abs(p) - vec2(halfW, halfH);
-  if (max(bbox.x, bbox.y) > 0.0) return max(bbox.x, bbox.y);
+  // Each jaw rolls its own outer-curve shape in [-1,+1] from
+  // the seed — upper and lower are independent, so a face can
+  // pair a convex top with a concave bottom or any mix. Both
+  // jaws still expand vertically when the mouth opens (halfH
+  // grows with positive halfGap).
+  // Shape range capped at ±0.6 — full ±1.0 lets corner teeth
+  // collapse to nothing (convex) or stretch to 2× rest height
+  // (concave fangs). Both extremes read as "very fat curves",
+  // so dial the amplitude back to keep the variation subtle.
+  float upperShape = (az_hash11(seed * 31.5) - 0.5) * 1.2;
+  float lowerShape = (az_hash11(seed * 41.7) - 0.5) * 1.2;
+  float effHalfH = halfH + max(halfGap, 0.0);
+  // Cheap rect bbox early-reject. Concave-shape rolls extend
+  // corner teeth outward, so the cap is sized to the larger
+  // jaw. The visible mouth silhouette is drawn downstream by
+  // the per-tooth scan — the cap only saves work for far
+  // fragments, no visual impact from making it rectangular.
+  float capH = effHalfH * max(1.0, max(1.0 - upperShape, 1.0 - lowerShape));
+  vec2 bbox = abs(p) - vec2(halfW, capH);
+  float bboxOut = max(bbox.x, bbox.y);
+  if (bboxOut > 0.0) return bboxOut;
   float yAbs = abs(p.y);
   if (yAbs < halfGap) return halfGap - yAbs;
-  float jawH = halfH - halfGap;
   float upperBend = (az_hash11(seed * 17.7) - 0.5) * 2.0 * AZ_JAW_BEND_RANGE;
   float lowerBend = (az_hash11(seed * 23.1) - 0.5) * 2.0 * AZ_JAW_BEND_RANGE;
   if (p.y < 0.0) {
-    return az_sdToothRow(vec2(p.x, p.y + halfH),
-                         halfW, jawH, nTeeth, seed, upperBend);
+    return az_sdToothRow(vec2(p.x, p.y + effHalfH),
+                         halfW, effHalfH, halfGap, upperShape,
+                         nTeeth, seed, upperBend);
   }
-  return az_sdToothRow(vec2(p.x, halfH - p.y),
-                       halfW * AZ_LOWER_W_RATIO, jawH,
+  return az_sdToothRow(vec2(p.x, effHalfH - p.y),
+                       halfW * AZ_LOWER_W_RATIO, effHalfH, halfGap, lowerShape,
                        nTeeth, seed, lowerBend);
 }
 
@@ -1362,6 +1406,12 @@ void main() {
       float innerGlow = exp(-innerDepth * AZ_INNER_GLOW_FALLOFF)
                       * AZ_INNER_GLOW_AMP;
       col += AZ_INNER_GLOW * innerGlow;
+      // Face features are masked by the *inverse* of the
+      // inner-glow falloff: zero at the rip border so eyes and
+      // teeth fade into the glow band instead of cutting hard
+      // against the silhouette edge, ramping to one a short
+      // way inside.
+      float faceMask = 1.0 - exp(-innerDepth * AZ_INNER_GLOW_FALLOFF);
       for (int i = 0; i < AZ_N_FACES; i++) {
         float fi = float(i);
         float tierY = (fi - float(AZ_N_FACES - 1) * 0.5) * AZ_TIER_SPACING;
@@ -1396,26 +1446,30 @@ void main() {
           float rEyeD = az_sdEyeWedge(eyeP, +AZ_EYE_INNER_X, +AZ_EYE_OUTER_X, h, -AZ_EYE_INNER_TILT);
           float eD = min(lEyeD, rEyeD);
           float glow = exp(-max(eD, 0.0) * AZ_EYE_GLOW_FALLOFF) * 0.35;
-          col += v_c1 * 0.78 * glow;
-          if (eD < 0.0) col = v_c1;
+          col += v_c1 * 0.78 * glow * faceMask;
+          if (eD < 0.0) col = mix(col, v_c1, faceMask);
           if (az_hash11(v_seed * 211.7 + fi) < AZ_EYE_IRIS_PROB) {
             vec2 lEyeC = vec2((-AZ_EYE_INNER_X + -AZ_EYE_OUTER_X) * 0.5, 0.0);
             vec2 rEyeC = vec2((+AZ_EYE_INNER_X + +AZ_EYE_OUTER_X) * 0.5, 0.0);
             float lIrisD = length(eyeP - lEyeC) - AZ_EYE_IRIS_R;
             float rIrisD = length(eyeP - rEyeC) - AZ_EYE_IRIS_R;
             if ((lIrisD < 0.0 && lEyeD < 0.0)
-             || (rIrisD < 0.0 && rEyeD < 0.0)) col = AZ_EYE_IRIS_RED;
+             || (rIrisD < 0.0 && rEyeD < 0.0)) col = mix(col, AZ_EYE_IRIS_RED, faceMask);
           }
         }
         // Mouth
         vec2 mp = fp - vec2(0.0, AZ_MOUTH_Y_OFFSET);
         float gapBase = mix(AZ_MOUTH_GAP_MIN, AZ_MOUTH_GAP_MAX,
                             az_hash11(v_seed * 167.0 + fi));
-        float halfGap = gapBase * (0.6 + 0.4 * (0.5 + 0.5 * openPhase));
+        // Full close-to-open chomp: 0 at one phase extreme,
+        // gapBase at the other. Negative-gapBase faces stay
+        // visually closed; positive-gapBase ones swing through
+        // the entire visible range.
+        float halfGap = gapBase * (0.5 + 0.5 * openPhase);
         float mSeed = v_seed * 200.0 + fi * 13.0;
         float mD = az_sdMouthRows(mp, AZ_MOUTH_HALFW, AZ_MOUTH_HALFH,
                                   halfGap, AZ_TEETH_PER_MOUTH, mSeed);
-        if (mD < 0.0) col = AZ_TOOTH_WHITE;
+        if (mD < 0.0) col = mix(col, AZ_TOOTH_WHITE, faceMask);
       }
       outColor = vec4(col, 1.0);
       return;

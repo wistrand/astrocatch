@@ -217,6 +217,22 @@
     margin-top: 2px;
   }
 
+  #fps {
+    position: absolute;
+    top: env(safe-area-inset-top, 8px);
+    left: 8px;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-weight: 400;
+    font-variant-numeric: tabular-nums;
+    color: rgba(180, 230, 255, 0.85);
+    background: rgba(0, 0, 0, 0.35);
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    pointer-events: none;
+    z-index: 5;
+  }
+
   #hint {
     position: absolute;
     bottom: 40px;
@@ -422,6 +438,7 @@
   <div id="score-display" style="display:none"><div id="score">0</div><div id="sub">best 0 · 0 stars</div></div>
   <div id="hint">tap to boost</div>
   <div id="paused-indicator">paused</div>
+  <div id="fps" style="display:none"></div>
 
   <div id="start" class="overlay">
     <h1>ASTROCATCH</h1>
