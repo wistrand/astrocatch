@@ -2220,19 +2220,18 @@ let _challengeApngUrl = null;
 
 async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   const ctx = canvas.getContext("2d");
-  // 48 frames @ 16 fps = 3 s seamless loop. At 16 frames the highlight jumped ~22.5° per frame
-  // (~3 modules of arc on the rim) and read as a stop-motion slideshow; 48 frames drops the jump
-  // to ~7.5° (~1 module) which the eye perceives as continuous motion. Cost is ~250 KB blob and
-  // ~700 ms encode time on a mid-range laptop — both fine for a one-shot death-screen asset.
-  const FRAMES = 48;
+  // 32 frames @ 16 fps = 2 s seamless loop. Azimuth per-frame jump is ~11.25° (~1.5 modules of
+  // arc on the highlight's path). Pure sine on elevation: the previous cubed-sine bias squashed
+  // dwell near the equator and produced a visible kink when the curve sharpened toward the brief
+  // head-on visit — at low frame counts that kink reads as choppy motion. Plain sine with a
+  // narrower [π/8, 3π/8] range traces a smooth oval path on the sphere without ever fully facing
+  // the camera.
+  const FRAMES = 32;
   const FPS = 16;
-  // The frames span exactly one azimuth cycle AND one elevation cycle, so the APNG loops
-  // seamlessly. Same easing / curve as the live animation (cubed sine for elevation bias).
   const apngBytes = await encodeAnimatedQrPng(canvas, (i, total) => {
     const t = i / total;
     const phase = -3 * Math.PI / 4 + t * 2 * Math.PI;
-    const eRaw = (Math.sin(t * 2 * Math.PI) + 1) / 2;
-    const elev = eRaw * eRaw * eRaw * (Math.PI / 2);
+    const elev = Math.PI / 4 + Math.sin(t * 2 * Math.PI) * Math.PI / 8;
     ctx.drawImage(_sunAnimBareQr, 0, 0);
     drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
   }, FRAMES, FPS);
