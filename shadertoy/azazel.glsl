@@ -118,6 +118,12 @@ vec2 hash21(float x) {
 float hash12(vec2 p) {
   return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);
 }
+// Packed scalar hash on a vec4 — same formula as hash11
+// applied component-wise. Collapses 4 scalar hashes into 1
+// vec4 sin/fract on vec-SIMD GPUs.
+vec4 hash41(vec4 x) {
+  return fract(sin(x * 12.9898) * 43758.5453);
+}
 
 float smin(float a, float b, float k) {
   float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0);
@@ -378,19 +384,37 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     for (int i = 0; i < N_FACES; i++) {
       float fi = float(i);
       float tierY = (fi - float(N_FACES - 1) * 0.5) * TIER_SPACING;
+      // Pack the eight per-face hash11 calls into two vec4
+      // hashes — collapses 8 scalar sin/fract pairs into 2
+      // vec4 ops on vec-SIMD GPUs (Adreno).
+      //   A.x: facePos.x  (V_SEED*53.0  + fi*23.7)
+      //   A.y: facePos.y  (V_SEED*91.3  + fi*47.1)
+      //   A.z: faceAng    (V_SEED*87.3  + fi)
+      //   A.w: mxPhase    (V_SEED*71.3  + fi)
+      //   B.x: myPhase    (V_SEED*79.7  + fi)
+      //   B.y: sPhase     (V_SEED*83.1  + fi)
+      //   B.z: irisProb   (V_SEED*211.7 + fi)
+      //   B.w: gapBase    (V_SEED*167.0 + fi)
+      vec4 hashA = hash41(
+        V_SEED * vec4(53.0, 91.3, 87.3, 71.3)
+        + fi   * vec4(23.7, 47.1, 1.0,  1.0)
+      );
+      vec4 hashB = hash41(
+        V_SEED * vec4(79.7, 83.1, 211.7, 167.0) + fi
+      );
       vec2 facePos = vec2(
-        (hash11(V_SEED * 53.0 + fi * 23.7) - 0.5) * FACE_SPREAD_X,
-        tierY + (hash11(V_SEED * 91.3 + fi * 47.1) - 0.5) * 0.04
+        (hashA.x - 0.5) * FACE_SPREAD_X,
+        tierY + (hashA.y - 0.5) * 0.04
       );
       float blinkPhase = sin(iTime * EYE_BLINK_RATE + fi * 1.7);
       float openPhase  = sin(iTime * MOUTH_OPEN_RATE + fi * 2.3);
-      float faceAng = (hash11(V_SEED * 87.3 + fi) - 0.5) * FACE_TILT_RANGE;
+      float faceAng = (hashA.z - 0.5) * FACE_TILT_RANGE;
       float fc = cos(faceAng), fs = sin(faceAng);
       mat2 faceRot = mat2(fc, -fs, fs, fc);
       // Independent xy drift + size pulse phases.
-      float mxPhase = hash11(V_SEED * 71.3 + fi) * TAU;
-      float myPhase = hash11(V_SEED * 79.7 + fi) * TAU;
-      float sPhase  = hash11(V_SEED * 83.1 + fi) * TAU;
+      float mxPhase = hashA.w * TAU;
+      float myPhase = hashB.x * TAU;
+      float sPhase  = hashB.y * TAU;
       vec2 motion = vec2(
         sin(iTime * FACE_MOTION_RATE       + mxPhase),
         sin(iTime * FACE_MOTION_RATE * 0.8 + myPhase)
@@ -413,7 +437,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         float glow = exp(-max(eD, 0.0) * EYE_GLOW_FALLOFF) * 0.35;
         col += EYE_GLOW_TINT * glow * faceMask;
         if (eD < 0.0) col = mix(col, V_C1, faceMask);
-        if (hash11(V_SEED * 211.7 + fi) < EYE_IRIS_PROB) {
+        if (hashB.z < EYE_IRIS_PROB) {
           vec2 lEyeC = vec2((-EYE_INNER_X + -EYE_OUTER_X) * 0.5, 0.0);
           vec2 rEyeC = vec2((+EYE_INNER_X + +EYE_OUTER_X) * 0.5, 0.0);
           float lIrisD = length(eyeP - lEyeC) - EYE_IRIS_R;
@@ -425,8 +449,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
       // Mouth — two rows with animated gap.
       vec2 mp = fp - vec2(0.0, MOUTH_Y_OFFSET);
-      float gapBase = mix(MOUTH_GAP_MIN, MOUTH_GAP_MAX,
-                          hash11(V_SEED * 167.0 + fi));
+      float gapBase = mix(MOUTH_GAP_MIN, MOUTH_GAP_MAX, hashB.w);
       // Full close-to-open chomp: 0 at one phase extreme,
       // gapBase at the other. Negative-gapBase faces stay
       // visually closed; positive-gapBase ones swing through

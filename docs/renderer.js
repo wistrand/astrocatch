@@ -933,6 +933,13 @@ vec2 az_hash21(float x) {
     fract(sin(x * 78.233 + 1.7) * 43758.5453)
   );
 }
+// Packed scalar hash on a vec4 — same formula as az_hash11
+// applied component-wise. On vec-SIMD GPUs (Adreno) this
+// collapses 4 scalar hashes into 1 vec4 sin/fract; on
+// scalar GPUs (Mali) the cost is the same as 4 hash11s.
+vec4 az_hash41(vec4 x) {
+  return fract(sin(x * 12.9898) * 43758.5453);
+}
 
 float az_triWave(float x) {
   return abs(fract(x / TAU + 0.25) * 4.0 - 2.0) - 1.0;
@@ -1409,18 +1416,37 @@ void main() {
       for (int i = 0; i < AZ_N_FACES; i++) {
         float fi = float(i);
         float tierY = (fi - float(AZ_N_FACES - 1) * 0.5) * AZ_TIER_SPACING;
+        // Pack the eight per-face hash11 calls into two vec4
+        // hashes — collapses 8 scalar sin/fract pairs into 2
+        // vec4 ops on vec-SIMD GPUs (Adreno). Multipliers and
+        // fi-coefficients identical to the original scalar form:
+        //   A.x: facePos.x  (v_seed*53.0  + fi*23.7)
+        //   A.y: facePos.y  (v_seed*91.3  + fi*47.1)
+        //   A.z: faceAng    (v_seed*87.3  + fi)
+        //   A.w: mxPhase    (v_seed*71.3  + fi)
+        //   B.x: myPhase    (v_seed*79.7  + fi)
+        //   B.y: sPhase     (v_seed*83.1  + fi)
+        //   B.z: irisProb   (v_seed*211.7 + fi)
+        //   B.w: gapBase    (v_seed*167.0 + fi)
+        vec4 hashA = az_hash41(
+          v_seed * vec4(53.0, 91.3, 87.3, 71.3)
+          + fi   * vec4(23.7, 47.1, 1.0,  1.0)
+        );
+        vec4 hashB = az_hash41(
+          v_seed * vec4(79.7, 83.1, 211.7, 167.0) + fi
+        );
         vec2 facePos = vec2(
-          (az_hash11(v_seed * 53.0 + fi * 23.7) - 0.5) * AZ_FACE_SPREAD_X,
-          tierY + (az_hash11(v_seed * 91.3 + fi * 47.1) - 0.5) * 0.04
+          (hashA.x - 0.5) * AZ_FACE_SPREAD_X,
+          tierY + (hashA.y - 0.5) * 0.04
         );
         float blinkPhase = sin(u_time * AZ_EYE_BLINK_RATE + fi * 1.7);
         float openPhase  = sin(u_time * AZ_MOUTH_OPEN_RATE + fi * 2.3);
-        float faceAng = (az_hash11(v_seed * 87.3 + fi) - 0.5) * AZ_FACE_TILT_RANGE;
+        float faceAng = (hashA.z - 0.5) * AZ_FACE_TILT_RANGE;
         float fc = cos(faceAng), fs = sin(faceAng);
         mat2 faceRot = mat2(fc, -fs, fs, fc);
-        float mxPhase = az_hash11(v_seed * 71.3 + fi) * TAU;
-        float myPhase = az_hash11(v_seed * 79.7 + fi) * TAU;
-        float sPhase  = az_hash11(v_seed * 83.1 + fi) * TAU;
+        float mxPhase = hashA.w * TAU;
+        float myPhase = hashB.x * TAU;
+        float sPhase  = hashB.y * TAU;
         vec2 motion = vec2(
           sin(u_time * AZ_FACE_MOTION_RATE       + mxPhase),
           sin(u_time * AZ_FACE_MOTION_RATE * 0.8 + myPhase)
@@ -1442,7 +1468,7 @@ void main() {
           float glow = exp(-max(eD, 0.0) * AZ_EYE_GLOW_FALLOFF) * 0.35;
           col += v_c1 * 0.78 * glow * faceMask;
           if (eD < 0.0) col = mix(col, v_c1, faceMask);
-          if (az_hash11(v_seed * 211.7 + fi) < AZ_EYE_IRIS_PROB) {
+          if (hashB.z < AZ_EYE_IRIS_PROB) {
             vec2 lEyeC = vec2((-AZ_EYE_INNER_X + -AZ_EYE_OUTER_X) * 0.5, 0.0);
             vec2 rEyeC = vec2((+AZ_EYE_INNER_X + +AZ_EYE_OUTER_X) * 0.5, 0.0);
             float lIrisD = length(eyeP - lEyeC) - AZ_EYE_IRIS_R;
@@ -1453,8 +1479,7 @@ void main() {
         }
         // Mouth
         vec2 mp = fp - vec2(0.0, AZ_MOUTH_Y_OFFSET);
-        float gapBase = mix(AZ_MOUTH_GAP_MIN, AZ_MOUTH_GAP_MAX,
-                            az_hash11(v_seed * 167.0 + fi));
+        float gapBase = mix(AZ_MOUTH_GAP_MIN, AZ_MOUTH_GAP_MAX, hashB.w);
         // Full close-to-open chomp: 0 at one phase extreme,
         // gapBase at the other. Negative-gapBase faces stay
         // visually closed; positive-gapBase ones swing through
