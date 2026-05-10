@@ -31,15 +31,9 @@ const float TILT_ANGLE      = 0.30;   // ± radians per instance
 const float BOUNDARY_AMP    = 0.16;
 // Spikes: discrete tapered triangles around the body.
 const int   N_SPIKES        = 14;
-const float SPIKE_LEN_MIN   = 0.20;
-const float SPIKE_LEN_MAX   = 0.85;
+const float SPIKE_LEN_MAX   = 0.6;
 const float SPIKE_BASE_W    = 0.06;
 const float SPIKE_PULSE_RATE = 0.40;
-// Higher = spikes cluster perpendicular to the long axis.
-const float SPIKE_ANGLE_STRETCH = 2.6;
-// Sawtooth side profile.
-const float SPIKE_TEETH     = 8.0;
-const float SPIKE_TEETH_AMP = 0.45;
 // Whole-rip breathing.
 const float BREATHE_RATE    = 0.40;
 const float BREATHE_AMP     = 0.32;
@@ -156,46 +150,9 @@ float dirNoise(vec2 p, float seed, float t) {
 
 float sdBlob(vec2 p, vec2 c, float r) { return length(p - c) - r; }
 
-// Tapered spike with sawtooth side modulation.
-float sdTaperedSpike(vec2 p, vec2 base, vec2 tip, float wBase, float sawPhase) {
-  vec2 ba = tip - base;
-  vec2 pa = p - base;
-  float L = max(dot(ba, ba), 1e-6);
-  float h = clamp(dot(pa, ba) / L, 0.0, 1.0);
-  vec2 q = pa - ba * h;
-  float baseTaper = wBase * (1.0 - h);
-  float saw = abs(fract(h * SPIKE_TEETH + sawPhase) * 2.0 - 1.0);
-  float w = baseTaper * (1.0 - SPIKE_TEETH_AMP * (1.0 - saw));
-  return length(q) - w;
-}
-
-// N radial spikes around the elliptical body, p in rotated frame.
-// atan2(sin u, cos u * stretch) clusters angles toward ±x
-// (perpendicular to the tilted long axis).
-float sdSpikes(vec2 p, float seed, float t) {
-  float d = 1e6;
-  for (int i = 0; i < N_SPIKES; i++) {
-    float fi = float(i);
-    float u = (fi / float(N_SPIKES)) * TAU
-            + (hash11(seed * 13.7 + fi) - 0.5) * 0.7;
-    float ang = atan(sin(u), cos(u) * SPIKE_ANGLE_STRETCH);
-    vec2 dir = vec2(cos(ang), sin(ang));
-    vec2 basePt = dir * vec2(ASPECT_X, ASPECT_Y);
-    float lenR = hash11(seed * 23.1 + fi);
-    float len = mix(SPIKE_LEN_MIN, SPIKE_LEN_MAX, lenR);
-    len *= 0.78 + 0.22 * sin(t * SPIKE_PULSE_RATE + fi * 2.71);
-    float tipJitter = (hash11(seed * 31.7 + fi) - 0.5) * 0.50;
-    vec2 tipDir = vec2(cos(ang + tipJitter), sin(ang + tipJitter));
-    vec2 tipPt = basePt + tipDir * len;
-    float baseW = SPIKE_BASE_W * (0.6 + 0.8 * hash11(seed * 41.3 + fi));
-    float sawPhase = hash11(seed * 51.7 + fi);
-    d = min(d, sdTaperedSpike(p, basePt, tipPt, baseW, sawPhase));
-  }
-  return d;
-}
-
-// Body silhouette: tilted ellipse + edge noise + spikes + blobs,
-// all inside a uniform breath scale. Negative = inside the rip.
+// Body silhouette: tilted ellipse + edge noise + nearest-spike
+// SDF + blobs, all inside a uniform breath scale. Negative =
+// inside the rip.
 float sdRip(vec2 p, float seed, float t) {
   float breath = 1.0 + sin(t * BREATHE_RATE) * BREATHE_AMP;
   p /= breath;
@@ -213,14 +170,42 @@ float sdRip(vec2 p, float seed, float t) {
     float edgeMask = 1.0 - smoothstep(0.0, 0.20, abs(base));
     base += BOUNDARY_AMP * dirNoise(p, seed, t) * edgeMask;
   }
-  // Spike loop is the dominant cost at high zoom; gate it on
-  // both sides: deep-interior (base < -0.20, can't improve
-  // min) and far-outside (dot(pr,pr) > 5.76, past max spike
-  // reach ≈ 2.36 = ellipse_axis + SPIKE_LEN_MAX + SPIKE_BASE_W).
-  // Sign of base is preserved either way, and the outside
-  // path only needs a correct sign before writing alpha=0.
-  if (base >= -0.20 && dot(pr, pr) < 5.76) {
-    base = min(base, sdSpikes(pr, seed, t));
+  // Spikes via nearest-spike SDF. Find the spike whose centre
+  // angle is closest to the fragment's parametric (q-space)
+  // angle, then compute the analytic SDF of that one spike's
+  // tapered body. Costs ~50 ALU vs ~400 for the 14-iter loop,
+  // and the resulting SDF is approximately normalized so -d
+  // gives correct inner-glow distance everywhere.
+  // Far-corner early-out: max pr-space spike extent is
+  //   ASPECT_Y + SPIKE_LEN_MAX = 1.45 + 0.6 = 2.05
+  // so |pr| > ~2.17 (dot > 4.7) is provably outside every
+  // spike body — skip the spike-finder path on those fragments.
+  if (dot(pr, pr) < 4.7) {
+    float angParam = atan(q.y, q.x);
+    float spPhase = hash11(seed * 13.7) * TAU;
+    float period = TAU / float(N_SPIKES);
+    float spikeIdx = floor((angParam - spPhase) / period + 0.5);
+    float angCenter = spikeIdx * period + spPhase;
+    vec2 spDir = vec2(cos(angCenter), sin(angCenter));
+    vec2 basePt = spDir * vec2(ASPECT_X, ASPECT_Y);
+    float spLenHash = hash11(spikeIdx * 7.31 + seed * 23.1);
+    float pulse = 0.85 + 0.15 * sin(t * SPIKE_PULSE_RATE);
+    float spikeLen = SPIKE_LEN_MAX * mix(0.45, 1.0, spLenHash) * pulse;
+    // Per-slot presence — drop ~25% of the angular spike slots
+    // (zero baseW kills the body without breaking the nearest-
+    // spike geometry, so the periodic finder still works).
+    float spPresent = step(0.25, hash11(spikeIdx * 19.7 + seed * 67.3));
+    float baseW = SPIKE_BASE_W
+                * (0.6 + 0.8 * hash11(spikeIdx * 41.3 + seed * 51.7))
+                * spPresent;
+    vec2 ba = spDir * spikeLen;
+    vec2 pa = pr - basePt;
+    // L = spikeLen² > 0 always (spikeLen ≥ 0.19), so no clamp.
+    float L = dot(ba, ba);
+    float h = clamp(dot(pa, ba) / L, 0.0, 1.0);
+    vec2 qp = pa - ba * h;
+    float spikeSDF = length(qp) - baseW * (1.0 - h);
+    base = min(base, spikeSDF);
   }
   vec2 b1Off = (hash21(seed * 11.7) - 0.5) * vec2(0.5, 1.4);
   vec2 b2Off = (hash21(seed * 23.1) - 0.5) * vec2(0.5, 1.4);
@@ -377,6 +362,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
   vec3 col;
   if (d < 0.0) {
     // Inside: black void + soft red inner glow + face tiers.
+    // The nearest-spike SDF used by sdRip is approximately
+    // normalized, so -d is a correct distance to the actual
+    // silhouette (body or spike, whichever is nearer) and
+    // glow falls off naturally everywhere.
     col = INK_BLACK;
     float innerDepth = -d;
     col += INNER_GLOW * exp(-innerDepth * INNER_GLOW_FALLOFF) * INNER_GLOW_AMP;

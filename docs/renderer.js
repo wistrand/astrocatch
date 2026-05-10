@@ -873,13 +873,9 @@ const float AZ_ASPECT_Y = 1.45;
 const float AZ_TILT_ANGLE = 0.30;
 const float AZ_BOUNDARY_AMP = 0.16;
 const int   AZ_N_SPIKES = 14;
-const float AZ_SPIKE_LEN_MIN = 0.20;
-const float AZ_SPIKE_LEN_MAX = 0.85;
+const float AZ_SPIKE_LEN_MAX = 0.6;
 const float AZ_SPIKE_BASE_W = 0.06;
 const float AZ_SPIKE_PULSE_RATE = 0.40;
-const float AZ_SPIKE_ANGLE_STRETCH = 2.6;
-const float AZ_SPIKE_TEETH = 8.0;
-const float AZ_SPIKE_TEETH_AMP = 0.45;
 const float AZ_BREATHE_RATE = 0.40;
 const float AZ_BREATHE_AMP = 0.32;
 const float AZ_WRITHE_RATE_1 = 0.30;
@@ -957,40 +953,6 @@ float az_sdBlob(vec2 p, vec2 c, float r) {
   return length(p - c) - r;
 }
 
-float az_sdTaperedSpike(vec2 p, vec2 base, vec2 tip, float wBase, float sawPhase) {
-  vec2 ba = tip - base;
-  vec2 pa = p - base;
-  float L = max(dot(ba, ba), 1e-6);
-  float h = clamp(dot(pa, ba) / L, 0.0, 1.0);
-  vec2 q = pa - ba * h;
-  float baseTaper = wBase * (1.0 - h);
-  float saw = abs(fract(h * AZ_SPIKE_TEETH + sawPhase) * 2.0 - 1.0);
-  float w = baseTaper * (1.0 - AZ_SPIKE_TEETH_AMP * (1.0 - saw));
-  return length(q) - w;
-}
-
-float az_sdSpikes(vec2 p, float seed, float t) {
-  float d = 1e6;
-  for (int i = 0; i < AZ_N_SPIKES; i++) {
-    float fi = float(i);
-    float u = (fi / float(AZ_N_SPIKES)) * TAU
-            + (az_hash11(seed * 13.7 + fi) - 0.5) * 0.7;
-    float ang = atan(sin(u), cos(u) * AZ_SPIKE_ANGLE_STRETCH);
-    vec2 dir = vec2(cos(ang), sin(ang));
-    vec2 basePt = dir * vec2(AZ_ASPECT_X, AZ_ASPECT_Y);
-    float lenR = az_hash11(seed * 23.1 + fi);
-    float len = mix(AZ_SPIKE_LEN_MIN, AZ_SPIKE_LEN_MAX, lenR);
-    len *= 0.78 + 0.22 * sin(t * AZ_SPIKE_PULSE_RATE + fi * 2.71);
-    float tipJitter = (az_hash11(seed * 31.7 + fi) - 0.5) * 0.50;
-    vec2 tipDir = vec2(cos(ang + tipJitter), sin(ang + tipJitter));
-    vec2 tipPt = basePt + tipDir * len;
-    float baseW = AZ_SPIKE_BASE_W * (0.6 + 0.8 * az_hash11(seed * 41.3 + fi));
-    float sawPhase = az_hash11(seed * 51.7 + fi);
-    d = min(d, az_sdTaperedSpike(p, basePt, tipPt, baseW, sawPhase));
-  }
-  return d;
-}
-
 float az_sdRip(vec2 p, float seed, float t) {
   float breath = 1.0 + sin(t * AZ_BREATHE_RATE) * AZ_BREATHE_AMP;
   p /= breath;
@@ -1009,19 +971,44 @@ float az_sdRip(vec2 p, float seed, float t) {
     float edgeMask = 1.0 - smoothstep(0.0, 0.20, abs(base));
     base += AZ_BOUNDARY_AMP * az_dirNoise(p, seed, t) * edgeMask;
   }
-  // Spike loop is the dominant cost at high zoom (~14 iters of
-  // line/box math per fragment), so gate it on both sides:
-  //   - base < -0.20: deep inside body, spikes can't improve
-  //     min(base, spikes) since their half-width is ~0.06.
-  //   - dot(pr,pr) > 5.76: fragment is past max spike reach
-  //     (max_ellipse_axis + SPIKE_LEN_MAX + SPIKE_BASE_W
-  //     ≈ 1.45 + 0.85 + 0.06 = 2.36), so spike SDF can't be
-  //     negative here — sign of base is preserved either way,
-  //     and outside fragments only need a correct sign before
-  //     writing alpha=0.
-  if (base >= -0.20 && dot(pr, pr) < 5.76) {
-    float spikes = az_sdSpikes(pr, seed, t);
-    base = min(base, spikes);
+  // Spikes via nearest-spike SDF. Find the spike whose centre
+  // angle is closest to the fragment's parametric (q-space)
+  // angle, then compute the analytic SDF of that one spike's
+  // tapered body. Costs ~50 ALU vs ~400 for the 14-iter loop,
+  // and the resulting SDF is approximately normalized so -d
+  // gives correct inner-glow distance everywhere.
+  // Far-corner early-out: max pr-space spike extent is
+  //   ASPECT_Y + AZ_SPIKE_LEN_MAX = 1.45 + 0.6 = 2.05
+  // (along the long body axis), so |pr| > ~2.17 (dot > 4.7)
+  // is provably outside every spike body — skip the entire
+  // spike-finder path for those ~30% corner fragments.
+  if (dot(pr, pr) < 4.7) {
+    float angParam = atan(q.y, q.x);
+    float spPhase = az_hash11(seed * 13.7) * TAU;
+    float period = TAU / float(AZ_N_SPIKES);
+    float spikeIdx = floor((angParam - spPhase) / period + 0.5);
+    float angCenter = spikeIdx * period + spPhase;
+    vec2 spDir = vec2(cos(angCenter), sin(angCenter));
+    vec2 basePt = spDir * vec2(AZ_ASPECT_X, AZ_ASPECT_Y);
+    float spLenHash = az_hash11(spikeIdx * 7.31 + seed * 23.1);
+    float pulse = 0.85 + 0.15 * sin(t * AZ_SPIKE_PULSE_RATE);
+    float spikeLen = AZ_SPIKE_LEN_MAX * mix(0.45, 1.0, spLenHash) * pulse;
+    // Per-slot presence — drop ~25% of the angular spike slots
+    // (zero baseW kills the body without breaking the nearest-
+    // spike geometry, so the periodic finder still works).
+    float spPresent = step(0.25, az_hash11(spikeIdx * 19.7 + seed * 67.3));
+    float baseW = AZ_SPIKE_BASE_W
+                * (0.6 + 0.8 * az_hash11(spikeIdx * 41.3 + seed * 51.7))
+                * spPresent;
+    vec2 ba = spDir * spikeLen;
+    vec2 pa = pr - basePt;
+    // L = dot(ba, ba) = spikeLen² > 0 always (spikeLen ≥ 0.19),
+    // so the max(·, 1e-6) safety clamp is dead.
+    float L = dot(ba, ba);
+    float h = clamp(dot(pa, ba) / L, 0.0, 1.0);
+    vec2 qp = pa - ba * h;
+    float spikeSDF = length(qp) - baseW * (1.0 - h);
+    base = min(base, spikeSDF);
   }
   vec2 b1Off = (az_hash21(seed * 11.7) - 0.5) * vec2(0.5, 1.4);
   vec2 b2Off = (az_hash21(seed * 23.1) - 0.5) * vec2(0.5, 1.4);
@@ -1399,8 +1386,11 @@ void main() {
     float d = az_sdRip(azP, v_seed, u_time);
     if (d < 0.0) {
       // Silhouette interior — solid black with an inner orange
-      // glow hugging the boundary, then eyes / iris / teeth on
-      // top.
+      // glow hugging the actual boundary (body + spikes), then
+      // eyes / iris / teeth on top. The nearest-spike SDF used
+      // by sdRip is approximately normalized, so -d here is a
+      // correct distance to the silhouette and the glow fades
+      // naturally inside both the body and the spike bodies.
       vec3 col = AZ_INK_BLACK;
       float innerDepth = -d;
       float innerGlow = exp(-innerDepth * AZ_INNER_GLOW_FALLOFF)
