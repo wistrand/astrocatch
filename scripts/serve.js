@@ -1,6 +1,5 @@
-// Minimal static file server for ASTROCATCH local development.
-// ES modules can't be loaded from file:// in most browsers (CORS),
-// so `npm start` runs this on http://localhost:8001/ instead.
+// Minimal static file server for ASTROCATCH local development. ES modules can't be loaded from
+// file:// in most browsers (CORS), so `npm start` runs this on http://localhost:8001/ instead.
 
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
@@ -8,9 +7,8 @@ import { extname, join, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const PORT = 8001;
-// Anchor the served root to ../docs relative to this script file,
-// so the server works whether you run it from the repo root, from
-// scripts/, or via `npm start`.
+// Anchor the served root to ../docs relative to this script file, so the server works whether you
+// run it from the repo root, from scripts/, or via `npm start`.
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "../docs");
 

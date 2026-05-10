@@ -1,15 +1,14 @@
-// Shared rendering / data helpers for star variants.
-// Pure functions + per-star data construction. No DOM, no audio,
-// no input. Imported by both gameplay.js (live game) and
-// debug.js (variant inspector).
+// Shared rendering / data helpers for star variants. Pure functions + per-star data construction.
+// No DOM, no audio, no input. Imported by both gameplay.js (live game) and debug.js (variant
+// inspector).
 
 import { c1Of } from "./renderer.js";
 
 export const PALETTE_LEN = 7;
 
 // ─── Comets ────────────────────────────────────────────────
-// Newton's method on Kepler's equation; 8 iterations handles
-// e ≤ ~0.93 reliably with a convergence early-exit.
+// Newton's method on Kepler's equation; 8 iterations handles e ≤ ~0.93 reliably with a convergence
+// early-exit.
 export function solveKepler(M, e) {
   let E = M;
   for (let i = 0; i < 8; i++) {
@@ -42,10 +41,9 @@ export function cometPosition(star, comet, frame) {
   };
 }
 
-// Append a comet's draw instances (multi-syndyne tail + coma +
-// core) to the given circle batch. Fully self-contained — the
-// caller supplies the comet, its star, the current frame, and
-// an array to push into.
+// Append a comet's draw instances (multi-syndyne tail + coma + core) to the given circle batch.
+// Fully self-contained — the caller supplies the comet, its star, the current frame, and an array
+// to push into.
 const _ALL_SYNDYNES = [
   { wm: 0.4, al: 0.3 },
   { wm: 1.0, al: 0.5 },
@@ -110,8 +108,8 @@ export function appendCometBatch(star, comet, frame, batch) {
 }
 
 // ─── Binary stars ──────────────────────────────────────────
-// Sub-star positions at a given physics frame. Used by live
-// physics (crash detection), prediction, and rendering.
+// Sub-star positions at a given physics frame. Used by live physics (crash detection), prediction,
+// and rendering.
 export function binaryPositions(star, frame) {
   const b = star.binary;
   if (!b) return null;
@@ -125,8 +123,7 @@ export function binaryPositions(star, frame) {
 
 // Mutate `s` into a binary. Pass `rand` to drive the parameters
 // from a seeded PRNG (gameplay's runRand for per-run determinism);
-// defaults to Math.random for callers that don't care, e.g. the
-// variant inspector.
+// defaults to Math.random for callers that don't care, e.g. the variant inspector.
 export function assignBinary(s, rand = Math.random) {
   const q = 0.2 + rand() * 0.45;
   const totalGM = s.gm;
@@ -158,10 +155,9 @@ export const EJECTA_MAX = 160;
 export const EJECTA_SPAWN_PER_FRAME = 2;
 export const EJECTA_GM_MULT = 0.2;
 
-// Step ejecta particles forward one frame. `frame` is used to
-// position the binary's sub-stars (donor + accretor) for the
-// physics step; particles are pulled by the inflated accretor
-// gravity and weakly repelled by the donor.
+// Step ejecta particles forward one frame. `frame` is used to position the binary's sub-stars
+// (donor + accretor) for the physics step; particles are pulled by the inflated accretor gravity
+// and weakly repelled by the donor.
 export function updateEjecta(stars, frame) {
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];

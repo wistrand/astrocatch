@@ -1,19 +1,14 @@
-// Variant inspector. Renders a deterministic grid of one star
-// type with per-cell variations for visual review of the
-// procedural shader. URL params:
+// Variant inspector. Renders a deterministic grid of one star type with per-cell variations for
+// visual review of the procedural shader. URL params:
 //
-//   ?type=<name>       which variant to render. Default: nebula.
-//                      Recognised: plain, binary, bh, bhBinary,
-//                      monolith, ringworld, pulsar, nebula, teapot.
-//   ?seed=<float>      base seed for the whole grid. Each cell
-//                      derives its own seed by stride. Page writes
-//                      its random pick back to the URL on first
-//                      load so the bar always shows the seed.
-//   ?grid=N or ?grid=CxR  grid size; clamped to [1, 20] per axis.
-//                      Default: 3x3.
+// ?type=<name> which variant to render. Default: nebula. Recognised: plain, binary, bh, bhBinary,
+// monolith, ringworld, pulsar, nebula, teapot. ?seed=<float> base seed for the whole grid. Each
+// cell derives its own seed by stride. Page writes its random pick back to the URL on first load so
+// the bar always shows the seed. ?grid=N or ?grid=CxR grid size; clamped to [1, 20] per axis.
+// Default: 3x3.
 //
-// Backward compatibility: with no `type=`, behaves identically
-// to the previous nebula-only inspector.
+// Backward compatibility: with no `type=`, behaves identically to the previous nebula-only
+// inspector.
 
 import { createRenderer } from "./renderer.js";
 import {
@@ -49,18 +44,16 @@ renderer.setViewport(W, H, DPR);
 const urlParams = new URLSearchParams(window.location.search);
 
 // ─── Type registry ────────────────────────────────────────
-// Each entry mutates a base star to express the variant.
-// `apply(s, seed)` runs after the star is constructed; it can
-// flip flags, attach a `binary`, set `ringPlateCount`, etc.
-// `seed` is the per-cell seed (handy for any deterministic
-// internal variation we want to drive — e.g. ringPlateCount).
+// Each entry mutates a base star to express the variant. `apply(s, seed)` runs after the star is
+// constructed; it can flip flags, attach a `binary`, set `ringPlateCount`, etc. `seed` is the
+// per-cell seed (handy for any deterministic internal variation we want to drive — e.g.
+// ringPlateCount).
 function hash01(s) {
   return ((Math.sin(s * 12.9898) * 43758.5453) % 1 + 1) % 1;
 }
-// rMin / rMax bracket the per-cell size range. Heavy variants
-// (pulsar, nebula, teapot) use higher floors because the
-// gameplay's minR rules make their visuals depend on adequate
-// size; smaller floors here would just produce illegible cells.
+// rMin / rMax bracket the per-cell size range. Heavy variants (pulsar, nebula, teapot) use higher
+// floors because the gameplay's minR rules make their visuals depend on adequate size; smaller
+// floors here would just produce illegible cells.
 const TYPE_REGISTRY = {
   plain:     { apply: () => {},                                rMin: 22, rMax: 52 },
   binary:    { apply: (s) => assignBinary(s),                  rMin: 28, rMax: 56 },
@@ -81,8 +74,8 @@ const cfg = TYPE_REGISTRY[TYPE] || TYPE_REGISTRY.nebula;
 const RESOLVED_TYPE = TYPE_REGISTRY[TYPE] ? TYPE : "nebula";
 document.title = `ASTROCATCH — ${RESOLVED_TYPE} inspector`;
 
-// Base seed: random if absent, written back to the URL bar so
-// reloading without changing the URL keeps the same grid.
+// Base seed: random if absent, written back to the URL bar so reloading without changing the URL
+// keeps the same grid.
 const seedParam = urlParams.get("seed");
 const baseSeed = seedParam !== null && !Number.isNaN(parseFloat(seedParam))
   ? parseFloat(seedParam)
@@ -134,9 +127,8 @@ function makeStar(x, y, r, colorIdx, seed) {
     isAzazel: false,
   };
   cfg.apply(s, seed);
-  // Nebula doesn't want diffraction rays from the central
-  // pinpoint; teapot/monolith/ringworld/azazel replace the body
-  // entirely so rays are irrelevant.
+  // Nebula doesn't want diffraction rays from the central pinpoint;
+  // teapot/monolith/ringworld/azazel replace the body entirely so rays are irrelevant.
   if (s.isNebula || s.isMonolith || s.isRingworld
       || s.isTeapot || s.isAzazel) {
     s.hasRays = false;
@@ -152,8 +144,8 @@ for (let row = 0; row < gridRows; row++) {
     const y = row * SPACING_Y;
     const cellSeed = baseSeed + cellIdx * 7.13;
     const colorIdx = Math.floor(hash01(cellSeed * 31.0) * PALETTE_LEN);
-    // Independent hash for size so colour and size vary
-    // independently rather than co-correlating with the seed.
+    // Independent hash for size so colour and size vary independently rather than co-correlating
+    // with the seed.
     const tR = hash01(cellSeed * 5.7);
     const r = cfg.rMin + (cfg.rMax - cfg.rMin) * tR;
     stars.push(makeStar(x, y, r, colorIdx, cellSeed));
@@ -185,10 +177,8 @@ fitView();
 window.addEventListener("resize", () => { fitView(); });
 
 // ─── Pan + pinch-zoom (ported from debug.js) ──────────────
-//   1 pointer (mouse drag or single touch): pan
-//   2 touches: pinch to zoom toward the midpoint
-//   wheel: zoom toward cursor
-//   '0' key: reset view
+// 1 pointer (mouse drag or single touch): pan 2 touches: pinch to zoom toward the midpoint wheel:
+// zoom toward cursor '0' key: reset view
 const activePointers = new Map();
 let lastPinchDist = 0;
 let lastPinchMid = null;
@@ -252,9 +242,8 @@ window.addEventListener("keydown", (e) => {
 });
 
 const TIME_WRAP = Math.PI * 2 * 10000;
-// Rolling-mean FPS counter — same window/cadence as the
-// in-game one. Always-on in the inspector since this page is
-// purely a perf/visual reference.
+// Rolling-mean FPS counter — same window/cadence as the in-game one. Always-on in the inspector
+// since this page is purely a perf/visual reference.
 const FPS_WINDOW_MS = 3000;
 const fpsEl = document.getElementById("fps");
 const fpsSamples = [];
@@ -317,9 +306,8 @@ function loop(t) {
   renderer.finalizeFrame([]);
 
   frame++;
-  // Rolling-mean FPS — push current frame's elapsed onto the
-  // queue, drop anything older than the window, refresh the
-  // readout at most every 250 ms.
+  // Rolling-mean FPS — push current frame's elapsed onto the queue, drop anything older than the
+  // window, refresh the readout at most every 250 ms.
   if (lastFrameMs >= 0) {
     let elapsed = t - lastFrameMs;
     if (elapsed < 0) elapsed = 0;

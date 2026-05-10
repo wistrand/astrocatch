@@ -1,8 +1,7 @@
-// Variant inspector — renders one example of each star-spawn
-// type in a static grid for visual reference. No physics, no
-// audio, no input beyond pan/zoom on the canvas. Useful for
-// regression testing shader changes and for seeing all
-// variants side by side without playing through random spawns.
+// Variant inspector — renders one example of each star-spawn type in a static grid for visual
+// reference. No physics, no audio, no input beyond pan/zoom on the canvas. Useful for regression
+// testing shader changes and for seeing all variants side by side without playing through random
+// spawns.
 
 import * as AC from "./physics.js";
 import { createRenderer, c1Of } from "./renderer.js";
@@ -19,14 +18,13 @@ const canvas = document.getElementById("c");
 const labelsEl = document.getElementById("labels");
 let W = 0, H = 0, DPR = 1;
 let renderer = null;
-// Declared early so resize()'s layoutLabels() call doesn't
-// hit a TDZ on initial module load.
+// Declared early so resize()'s layoutLabels() call doesn't hit a TDZ on initial module load.
 const labelDoms = [];
 let stars = null;
 // Wake particles (outgassing trail) for active comets.
 const particles = [];
-// Zoom limits — referenced by fitView(), which runs at load
-// time before the input handlers are wired up.
+// Zoom limits — referenced by fitView(), which runs at load time before the input handlers are
+// wired up.
 const ZMIN = 0.1, ZMAX = 12.0;
 function resize() {
   DPR = Math.min(window.devicePixelRatio || 1, 2);
@@ -94,11 +92,9 @@ function addPlanets(s) {
 }
 
 function addComet(s) {
-  // Field names match the gameplay's comet schema so
-  // appendCometBatch / cometPosition work unchanged.
-  // Randomize orbit orientation + starting phase so each cell
-  // shows a visually distinct comet rather than three identical
-  // copies.
+  // Field names match the gameplay's comet schema so appendCometBatch / cometPosition work
+  // unchanged. Randomize orbit orientation + starting phase so each cell shows a visually distinct
+  // comet rather than three identical copies.
   s.comets = [{
     a: s.r * 4,
     e: 0.75 + Math.random() * 0.18,
@@ -216,8 +212,7 @@ let camX = 0, camY = 0;     // world translation
 let zoom = 0.55;
 function fitView() {
   if (!stars || stars.length === 0) return;
-  // Compute world bounds covering all stars + a margin for
-  // labels and corona / lensing extent.
+  // Compute world bounds covering all stars + a margin for labels and corona / lensing extent.
   let minX = Infinity, maxX = -Infinity;
   let minY = Infinity, maxY = -Infinity;
   for (const s of stars) {
@@ -233,8 +228,7 @@ function fitView() {
   const cy = (minY + maxY) * 0.5;
   camX = -cx;
   camY = -cy;
-  // Pick the larger zoom-out factor so both axes fit, with a
-  // small breathing-room reduction.
+  // Pick the larger zoom-out factor so both axes fit, with a small breathing-room reduction.
   zoom = 0.92 * Math.min(W / wWorld, H / hWorld);
   zoom = Math.max(ZMIN, Math.min(ZMAX, zoom));
 }
@@ -242,9 +236,7 @@ fitView();
 // Also re-fit on resize.
 window.addEventListener("resize", () => { fitView(); });
 
-// Pan + pinch-zoom.
-//   1 touch (or mouse drag): pan
-//   2 touches: pinch to zoom toward the midpoint
+// Pan + pinch-zoom. 1 touch (or mouse drag): pan 2 touches: pinch to zoom toward the midpoint
 // Wheel: zoom toward the cursor.
 const activePointers = new Map();
 let lastPinchDist = 0;
@@ -278,11 +270,9 @@ canvas.addEventListener("pointermove", (e) => {
     camX += dx / zoom;
     camY += dy / zoom;
   } else if (activePointers.size === 2) {
-    // Two-pointer pinch + pan. Anchor the world point that was
-    // under the previous midpoint so it follows the current
-    // midpoint exactly — gives the natural "the world stays
-    // glued to your fingers" feel. Single derivation, no
-    // double-correction.
+    // Two-pointer pinch + pan. Anchor the world point that was under the previous midpoint so it
+    // follows the current midpoint exactly — gives the natural "the world stays glued to your
+    // fingers" feel. Single derivation, no double-correction.
     const pts = [...activePointers.values()];
     const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
     const midX = (pts[0].x + pts[1].x) * 0.5;
@@ -323,16 +313,13 @@ window.addEventListener("keydown", (e) => {
 });
 
 // ─── Render loop ───────────────────────────────────────────
-// Wrap the shader clock at a multiple of 2π so sin(u_time * k)
-// stays bit-identical across the wrap boundary for every k used
-// (all k are ≤ 2-decimal rationals). Matches gameplay.js's
-// TIME_WRAP so the debug inspector doesn't develop precision
-// rings after being open for an hour.
+// Wrap the shader clock at a multiple of 2π so sin(u_time * k) stays bit-identical across the wrap
+// boundary for every k used (all k are ≤ 2-decimal rationals). Matches gameplay.js's TIME_WRAP so
+// the debug inspector doesn't develop precision rings after being open for an hour.
 const TIME_WRAP = Math.PI * 2 * 10000;
 let frame = 0;
-// Rolling-mean FPS counter — same window/cadence as the
-// in-game one. Always-on in the inspector since this page
-// is purely a perf/visual reference.
+// Rolling-mean FPS counter — same window/cadence as the in-game one. Always-on in the inspector
+// since this page is purely a perf/visual reference.
 const FPS_WINDOW_MS = 3000;
 const fpsEl = document.getElementById("fps");
 const fpsSamples = [];
@@ -356,8 +343,8 @@ function loop(t) {
   renderer.drawBackground(0);
   renderer.drawBgStars();
 
-  // Camera matrix: bounds-fit form (world → screen with zoom + pan).
-  // screen = world * zoom + (W/2 + camX*zoom, H/2 + camY*zoom)
+  // Camera matrix: bounds-fit form (world → screen with zoom + pan). screen = world * zoom + (W/2 +
+  // camX*zoom, H/2 + camY*zoom)
   const cam = renderer.replayMat(zoom, W / 2 + camX * zoom, H / 2 + camY * zoom);
 
   // Update ejecta if any BH binaries.
@@ -482,8 +469,8 @@ function loop(t) {
     const sc = c1Of(s.colorIdx);
     for (const c of s.comets) {
       const pos = appendCometBatch(s, c, frame, cometBatch);
-      // Outgassing wake — same logic as gameplay.js, gated on
-      // periapsis activity. Particles drift anti-sunward.
+      // Outgassing wake — same logic as gameplay.js, gated on periapsis activity. Particles drift
+      // anti-sunward.
       const periD = c.a * (1 - c.e);
       const apoD = c.a * (1 + c.e);
       const activity = Math.max(0, 1 - (pos.r - periD) / (apoD - periD));
@@ -507,8 +494,8 @@ function loop(t) {
   }
   if (cometBatch.length) renderer.drawCircleBatch(cometBatch, cam);
 
-  // ─ Particle update + render (comet wake) ────────────────
-  // Same settings as gameplay's particle render.
+  // ─ Particle update + render (comet wake) ──────────────── Same settings as gameplay's particle
+  // render.
   const partBatch = [];
   for (let i = particles.length - 1; i >= 0; i--) {
     const p = particles[i];
@@ -580,9 +567,8 @@ function loop(t) {
     div.style.top = sy + "px";
   }
 
-  // Rolling-mean FPS — push current frame's elapsed onto the
-  // queue, drop anything older than the window, refresh the
-  // readout at most every 250 ms.
+  // Rolling-mean FPS — push current frame's elapsed onto the queue, drop anything older than the
+  // window, refresh the readout at most every 250 ms.
   if (lastFrameMs >= 0) {
     let elapsed = t - lastFrameMs;
     if (elapsed < 0) elapsed = 0;

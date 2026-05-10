@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="viewport"
+      content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>ASTROCATCH</title>
 <meta name="description" content="A one-tap browser game. Move between stars, gravity controls your path. No install, no download.">
 <meta name="theme-color" content="#0a0a12">
@@ -628,7 +629,9 @@
       <path class="icon-off" fill="currentColor" d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
     </svg>
   </button>
-  <div id="score-display" style="display:none"><div id="score">0</div><div id="sub">best 0 · 0 stars</div></div>
+  <div id="score-display" style="display:none">
+    <div id="score">0</div><div id="sub">best 0 · 0 stars</div>
+  </div>
   <div id="hint">tap to boost</div>
   <div id="paused-indicator">paused</div>
   <div id="fps" style="display:none"></div>
@@ -646,8 +649,11 @@
     </div>
     <button id="start-btn">START</button>
     <button id="resume-btn" style="visibility:hidden">RESUME</button>
-    <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next one. The game picks a boost; gravity bends the path and captures you on the other side. Release within one rotation for bonus points.</div>
-    <a id="repo-link" href="https://github.com/wistrand/astrocatch" target="_blank" rel="noopener">github.com/wistrand/astrocatch</a>
+    <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next
+      one. The game picks a boost; gravity bends the path and captures you on the other side.
+      Release within one rotation for bonus points.</div>
+    <a id="repo-link" href="https://github.com/wistrand/astrocatch"
+       target="_blank" rel="noopener">github.com/wistrand/astrocatch</a>
   </div>
 
   <div id="gameover" class="overlay hidden">
@@ -656,13 +662,15 @@
     <div class="label"><span id="stars">0</span> stars · best <span id="best">0</span></div>
     <button id="retry-btn">RESTART</button>
     <button id="continue-btn">CONTINUE</button>
-    <div id="gameover-keys" class="tag" style="margin-top:12px">[space] restart · [enter] continue</div>
+    <div id="gameover-keys" class="tag" style="margin-top:12px">
+      [space] restart · [enter] continue</div>
     <div id="challenge-out">
       <div class="flip-inner">
         <button id="challenge-out-flip" class="flip-front" type="button">get challenge link</button>
         <div class="flip-back">
           <div id="challenge-out-info">challenge link is score, run summary and game seed</div>
-          <a id="challenge-out-link" href="#" target="_blank" rel="noopener" aria-label="open challenge link">
+          <a id="challenge-out-link" href="#" target="_blank" rel="noopener"
+             aria-label="open challenge link">
             <canvas id="challenge-out-qr" aria-label="challenge QR code"></canvas>
           </a>
           <button id="challenge-out-copy" class="link-btn">copy challenge link</button>
@@ -674,14 +682,19 @@
   <div id="unsupported" class="overlay hidden">
     <h1>ASTROCATCH</h1>
     <div class="tag">webgl2 required</div>
-    <div class="desc">This browser doesn't support WebGL2, which the game needs for rendering. Try a recent version of Chrome, Firefox, or Safari.</div>
+    <div class="desc">This browser doesn't support WebGL2, which the game needs for
+      rendering. Try a recent version of Chrome, Firefox, or Safari.</div>
   </div>
 
   <div id="help" class="overlay hidden">
     <div class="help-body">
       <h2>how to play</h2>
-      <p>Tap (or Space) to launch from your orbit. Time it so your direction aims at the next star. Release within one rotation for bonus points; chain fast captures to build a streak.</p>
-      <p>Dodge planets. Catch comets for bonus points. Binaries orbit a shared center — watch both stars. Black holes play like normal stars but bend space around them.</p>
+      <p>Tap (or Space) to launch from your orbit. Time it so your direction aims at the
+        next star. Release within one rotation for bonus points; chain fast captures to
+        build a streak.</p>
+      <p>Dodge planets. Catch comets for bonus points. Binaries orbit a shared center —
+        watch both stars. Black holes play like normal stars but bend space around
+        them.</p>
       <div class="shortcuts">
         <kbd>Click / Space</kbd><span>boost / play</span>
         <kbd>← →</kbd><span>nudge orbital velocity</span>

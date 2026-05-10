@@ -1,30 +1,24 @@
-// WebGL2 renderer for ASTROCATCH. Owns the GL context, shader programs,
-// dynamic vertex buffers, and the draw API consumed by gameplay.js.
-// Browser-only — the node physics test runner never imports this file.
+// WebGL2 renderer for ASTROCATCH. Owns the GL context, shader programs, dynamic vertex buffers, and
+// the draw API consumed by gameplay.js. Browser-only — the node physics test runner never imports
+// this file.
 //
 // Four shader programs cover the full render surface:
 //
-//   fullscreen  background radial gradient. One draw.
-//   circle      ball, particles, shockwaves, isNext hint ring, bgStars.
-//               Instanced quad. Kind flag in per-instance attributes
-//               picks between solid, ring, glow, dashed ring. Parallax
-//               and twinkle are opt-in per instance, so the same program
-//               handles gameplay effects AND the parallax starfield.
-//   star        active stars (gameplay and menu). Instanced quad.
-//               Fragment shader evaluates corona, streamers, glow,
-//               photosphere, granulation, core highlight per pixel,
-//               driven by u_time so the whole star animates as before.
-//   polyline    trail, connector lines, velocity shaft, replay ghost
-//               path. Dynamic vertex buffer, triangle-strip extrusion
-//               in the vertex shader from a line strip of points.
+// fullscreen background radial gradient. One draw. circle ball, particles, shockwaves, isNext hint
+// ring, bgStars. Instanced quad. Kind flag in per-instance attributes picks between solid, ring,
+// glow, dashed ring. Parallax and twinkle are opt-in per instance, so the same program handles
+// gameplay effects AND the parallax starfield. star active stars (gameplay and menu). Instanced
+// quad. Fragment shader evaluates corona, streamers, glow, photosphere, granulation, core highlight
+// per pixel, driven by u_time so the whole star animates as before. polyline trail, connector
+// lines, velocity shaft, replay ghost path. Dynamic vertex buffer, triangle-strip extrusion in the
+// vertex shader from a line strip of points.
 //
-// No libraries, no build step, no shader loader. Shaders live below as
-// template strings. Matrices are 3x3 row-major; uniformMatrix3fv with
-// transpose=true lets WebGL2 consume them directly.
+// No libraries, no build step, no shader loader. Shaders live below as template strings. Matrices
+// are 3x3 row-major; uniformMatrix3fv with transpose=true lets WebGL2 consume them directly.
 
 // ─────────────────────────────────────────────────────────────
-// Palette — kept in sync with gameplay.js. Each row is the hot
-// and cool color for a stellar type, as RGB floats in [0, 1].
+// Palette — kept in sync with gameplay.js. Each row is the hot and cool color for a stellar type,
+// as RGB floats in [0, 1].
 // ─────────────────────────────────────────────────────────────
 const PALETTE = [
   [0x58/255, 0xe0/255, 0xfb/255, 0x3a/255, 0x7c/255, 0xe4/255], // ice blue
@@ -46,9 +40,8 @@ export function c2Of(idx) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// 2D matrix helpers. Row-major 3x3 stored in a Float32Array(9).
-// WebGL2's uniformMatrix3fv accepts transpose=true, so we pass
-// row-major straight through — no manual transpose.
+// 2D matrix helpers. Row-major 3x3 stored in a Float32Array(9). WebGL2's uniformMatrix3fv accepts
+// transpose=true, so we pass row-major straight through — no manual transpose.
 // ─────────────────────────────────────────────────────────────
 function mat3Identity() {
   return new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1]);
@@ -64,8 +57,8 @@ function mat3Multiply(A, B) {
   mat3MulInto(A, B, out);
   return out;
 }
-// In-place variants used by the hot camera path so per-frame
-// matrix math allocates zero. `out` must not alias A or B.
+// In-place variants used by the hot camera path so per-frame matrix math allocates zero. `out` must
+// not alias A or B.
 function mat3SetTranslate(out, tx, ty) {
   out[0] = 1; out[1] = 0; out[2] = tx;
   out[3] = 0; out[4] = 1; out[5] = ty;
@@ -90,10 +83,9 @@ function mat3MulInto(A, B, out) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Program compile helper. Throws on failure with the info log so
-// a bad shader surfaces in the dev console instead of silently
-// producing a broken program. Collects uniform + attribute
-// locations once so draw paths don't call getUniformLocation.
+// Program compile helper. Throws on failure with the info log so a bad shader surfaces in the dev
+// console instead of silently producing a broken program. Collects uniform + attribute locations
+// once so draw paths don't call getUniformLocation.
 // ─────────────────────────────────────────────────────────────
 function compileShader(gl, type, src, name) {
   const sh = gl.createShader(type);
@@ -127,8 +119,8 @@ function compileProgram(gl, vsSrc, fsSrc, name) {
   for (let i = 0; i < nu; i++) {
     const info = gl.getActiveUniform(p, i);
     uniforms[info.name] = gl.getUniformLocation(p, info.name);
-    // Some drivers return array uniforms as "u_foo" instead of
-    // "u_foo[0]". Store both names so lookups work either way.
+    // Some drivers return array uniforms as "u_foo" instead of "u_foo[0]". Store both names so
+    // lookups work either way.
     if (info.name.endsWith("[0]")) {
       uniforms[info.name.slice(0, -3)] = uniforms[info.name];
     } else if (info.size > 1 && !info.name.endsWith("[0]")) {
@@ -148,8 +140,7 @@ function compileProgram(gl, vsSrc, fsSrc, name) {
 // Shader sources.
 // ─────────────────────────────────────────────────────────────
 
-// Fullscreen quad. Uses gl_VertexID to synthesize the 4 corners —
-// no vertex buffer needed at all.
+// Fullscreen quad. Uses gl_VertexID to synthesize the 4 corners — no vertex buffer needed at all.
 const FULLSCREEN_VS = `#version 300 es
 void main() {
   // 0 → (-1,-1), 1 → (1,-1), 2 → (-1,1), 3 → (1,1)
@@ -249,12 +240,10 @@ void main() {
 }
 `;
 
-// Lensing composite — fullscreen pass that reads the scene FBO
-// texture and applies gravitational lensing distortion around
-// each visible black hole. Only runs on frames where at least
+// Lensing composite — fullscreen pass that reads the scene FBO texture and applies gravitational
+// lensing distortion around each visible black hole. Only runs on frames where at least
 // one active black hole is on screen (~5% of gameplay frames);
-// all other frames render directly to the default framebuffer
-// with zero FBO overhead.
+// all other frames render directly to the default framebuffer with zero FBO overhead.
 const LENSING_FS = `#version 300 es
 precision highp float;
 uniform sampler2D u_sceneTex;
@@ -342,8 +331,8 @@ void main() {
 }
 `;
 
-// Circle program: instanced quad, per-instance params control size,
-// kind (solid / ring / glow / dashed ring), optional parallax depth
+// Circle program: instanced quad, per-instance params control size, kind (solid / ring / glow /
+// dashed ring), optional parallax depth
 // for bgStars, optional twinkle. Drawn in world or screen space
 // depending on the u_view matrix the caller sets.
 const CIRCLE_VS = `#version 300 es
@@ -465,11 +454,10 @@ void main() {
 }
 `;
 
-// Star program: instanced quad per active star. Fragment shader
-// procedurally reproduces the layered Canvas2D drawStar visuals —
-// corona, streamers, outer glow, photosphere with limb darkening,
-// animated granules, core highlight — driven by u_time so every
-// layer animates. Past stars are a separate short-circuit path.
+// Star program: instanced quad per active star. Fragment shader procedurally reproduces the layered
+// Canvas2D drawStar visuals — corona, streamers, outer glow, photosphere with limb darkening,
+// animated granules, core highlight — driven by u_time so every layer animates. Past stars are a
+// separate short-circuit path.
 const STAR_VS = `#version 300 es
 in vec2 a_vertex;
 in vec2 a_center;
@@ -1468,8 +1456,10 @@ void main() {
         if (blink > 0.02) {
           float h = AZ_EYE_HEIGHT * blink;
           vec2 eyeP = fp - vec2(0.0, AZ_EYE_Y_OFFSET);
-          float lEyeD = az_sdEyeWedge(eyeP, -AZ_EYE_INNER_X, -AZ_EYE_OUTER_X, h, +AZ_EYE_INNER_TILT);
-          float rEyeD = az_sdEyeWedge(eyeP, +AZ_EYE_INNER_X, +AZ_EYE_OUTER_X, h, -AZ_EYE_INNER_TILT);
+          float lEyeD = az_sdEyeWedge(
+            eyeP, -AZ_EYE_INNER_X, -AZ_EYE_OUTER_X, h, +AZ_EYE_INNER_TILT);
+          float rEyeD = az_sdEyeWedge(
+            eyeP, +AZ_EYE_INNER_X, +AZ_EYE_OUTER_X, h, -AZ_EYE_INNER_TILT);
           float eD = min(lEyeD, rEyeD);
           float glow = exp(-max(eD, 0.0) * AZ_EYE_GLOW_FALLOFF) * 0.35;
           col += v_c1 * 0.78 * glow * faceMask;
@@ -3097,11 +3087,9 @@ void main() {
 }
 `;
 
-// Polyline program: takes a line-strip vertex buffer and extrudes
-// each point into a pair of triangle-strip vertices offset along
-// the local normal. Progress ∈ [0, 1] interpolates head→tail color.
-// Per-pixel SDF smoothing on |side| gives the line a soft edge
-// without relying on MSAA.
+// Polyline program: takes a line-strip vertex buffer and extrudes each point into a pair of
+// triangle-strip vertices offset along the local normal. Progress ∈ [0, 1] interpolates head→tail
+// color. Per-pixel SDF smoothing on |side| gives the line a soft edge without relying on MSAA.
 const POLYLINE_VS = `#version 300 es
 in vec2 a_pos;
 in vec2 a_normal;
@@ -3141,22 +3129,19 @@ void main() {
 `;
 
 // ─────────────────────────────────────────────────────────────
-// createRenderer — acquires the WebGL2 context, compiles every
-// program, builds dynamic buffers, and returns the draw API.
-// Returns null if WebGL2 is unavailable, so gameplay.js can show
-// an unsupported-device message.
+// createRenderer — acquires the WebGL2 context, compiles every program, builds dynamic buffers, and
+// returns the draw API. Returns null if WebGL2 is unavailable, so gameplay.js can show an
+// unsupported-device message.
 // ─────────────────────────────────────────────────────────────
 export function createRenderer(canvas) {
-  // Per-session seed for procedural background (galaxy positions,
-  // star tilts, etc). Random per page load so the background
-  // isn't identical every refresh.
+  // Per-session seed for procedural background (galaxy positions, star tilts, etc). Random per page
+  // load so the background isn't identical every refresh.
   const sessionSeed = Math.random() * 1000;
-  // antialias: false — every edge in this pipeline is SDF-smoothed
-  // in the fragment shader (fwidth for circles, smoothstep on |side|
+  // antialias: false — every edge in this pipeline is SDF-smoothed in the fragment shader (fwidth
+  // for circles, smoothstep on |side|
   // for polylines, smoothstep on disk edge for stars). MSAA would
-  // buy us nothing here and costs color-write bandwidth on tiled
-  // mobile GPUs, which is the platform where performance matters
-  // most. colorSpace: "srgb" is the default today but being explicit
+  // buy us nothing here and costs color-write bandwidth on tiled mobile GPUs, which is the platform
+  // where performance matters most. colorSpace: "srgb" is the default today but being explicit
   // future-proofs us for when HDR canvas support lands.
   const gl = canvas.getContext("webgl2", {
     antialias: false,
@@ -3169,20 +3154,18 @@ export function createRenderer(canvas) {
   });
   if (!gl) return null;
 
-  // Enable standard derivatives (fwidth) — core in WebGL2, but
-  // fragment shader still needs the extension declaration in some
-  // drivers. In WebGL2 this is implicit, so no extension call here.
+  // Enable standard derivatives (fwidth) — core in WebGL2, but fragment shader still needs the
+  // extension declaration in some drivers. In WebGL2 this is implicit, so no extension call here.
 
   const fullscreenProg = compileProgram(gl, FULLSCREEN_VS, FULLSCREEN_FS, "fullscreen");
   const lensingProg    = compileProgram(gl, FULLSCREEN_VS, LENSING_FS, "lensing");
   const circleProg     = compileProgram(gl, CIRCLE_VS, CIRCLE_FS, "circle");
   const starProg       = compileProgram(gl, STAR_VS, STAR_FS, "star");
-  // Nebula uses the same source compiled with `NEBULA_ONLY` defined.
-  // The preprocessor strips the noise helpers and the `if (isNebula)`
-  // branch out of the common build, dropping its register footprint
-  // to ~ringworld-with-plates level (was set by nebula). The nebula
-  // build keeps everything; its register count was already nebula-
-  // dominated so the dead other-variant branches don't add cost.
+  // Nebula uses the same source compiled with `NEBULA_ONLY` defined. The preprocessor strips the
+  // noise helpers and the `if (isNebula)` branch out of the common build, dropping its register
+  // footprint to ~ringworld-with-plates level (was set by nebula). The nebula build keeps
+  // everything; its register count was already nebula- dominated so the dead other-variant branches
+  // don't add cost.
   const nebulaFs = STAR_FS.replace(
     "#version 300 es",
     "#version 300 es\n#define NEBULA_ONLY 1"
@@ -3191,11 +3174,9 @@ export function createRenderer(canvas) {
   const polylineProg   = compileProgram(gl, POLYLINE_VS, POLYLINE_FS, "polyline");
 
   // ── Conditional scene FBO for gravitational lensing ─────
-  // Only created and bound on frames where at least one active
-  // black hole is on screen. All other frames render directly
-  // to the default framebuffer — zero FBO overhead. When active,
-  // the scene goes to this texture and a fullscreen lensing
-  // composite pass reads it with UV distortion.
+  // Only created and bound on frames where at least one active black hole is on screen. All other
+  // frames render directly to the default framebuffer — zero FBO overhead. When active, the scene
+  // goes to this texture and a fullscreen lensing composite pass reads it with UV distortion.
   let sceneFbo = null;
   let sceneTex = null;
   let fboActive = false;
@@ -3238,10 +3219,9 @@ export function createRenderer(canvas) {
   ]), gl.STATIC_DRAW);
 
   // ── Circle VAO ─────────────────────────────────────────────
-  // Vertex 0 = quad corner attribute (static).
-  // Instance attributes come from a separate STREAM_DRAW buffer
-  // rebuilt each frame. Instance stride is 12 floats (48 bytes):
-  //   vec2 center, vec2 radius, vec4 color, vec4 animate
+  // Vertex 0 = quad corner attribute (static). Instance attributes come from a separate STREAM_DRAW
+  // buffer rebuilt each frame. Instance stride is 12 floats (48 bytes): vec2 center, vec2 radius,
+  // vec4 color, vec4 animate
   const circleInstanceBuf = gl.createBuffer();
   const CIRCLE_FLOATS_PER_INSTANCE = 12;
   const circleVao = gl.createVertexArray();
@@ -3267,8 +3247,8 @@ export function createRenderer(canvas) {
   gl.bindVertexArray(null);
 
   // ── Star VAO ──────────────────────────────────────────────
-  // Instance stride is 16 floats (64 bytes):
-  //   vec2 center, vec4 c1, vec4 c2, vec4 params, vec2 wobble
+  // Instance stride is 16 floats (64 bytes): vec2 center, vec4 c1, vec4 c2, vec4 params, vec2
+  // wobble
   const starInstanceBuf = gl.createBuffer();
   const STAR_FLOATS_PER_INSTANCE = 16;
   const starVao = gl.createVertexArray();
@@ -3297,8 +3277,7 @@ export function createRenderer(canvas) {
   gl.bindVertexArray(null);
 
   // ── Polyline VAO ──────────────────────────────────────────
-  // Vertex stride is 6 floats (24 bytes):
-  //   vec2 pos, vec2 normal, float side, float progress
+  // Vertex stride is 6 floats (24 bytes): vec2 pos, vec2 normal, float side, float progress
   const polylineBuf = gl.createBuffer();
   const POLYLINE_FLOATS_PER_VERTEX = 6;
   const polylineVao = gl.createVertexArray();
@@ -3315,12 +3294,12 @@ export function createRenderer(canvas) {
   gl.vertexAttribPointer(polylineProg.attribs.a_progress, 1, gl.FLOAT, false, pStride, 20);
   gl.bindVertexArray(null);
 
-  // ── Scratch typed-array pools. Grown on demand so the steady
-  //    state doesn't allocate. ──────────────────────────────
+  // ── Scratch typed-array pools. Grown on demand so the steady state doesn't allocate.
+  // ──────────────────────────────
   let circleScratch = new Float32Array(64 * CIRCLE_FLOATS_PER_INSTANCE);
   let starScratch = new Float32Array(32 * STAR_FLOATS_PER_INSTANCE);
-  // Separate scratch for the nebula sub-batch — same layout as
-  // starScratch, populated alongside it during partitioning.
+  // Separate scratch for the nebula sub-batch — same layout as starScratch, populated alongside it
+  // during partitioning.
   let nebulaScratch = new Float32Array(8 * STAR_FLOATS_PER_INSTANCE);
   let polylineScratch = new Float32Array(512 * POLYLINE_FLOATS_PER_VERTEX);
   function ensureCircleScratch(n) {
@@ -3357,22 +3336,18 @@ export function createRenderer(canvas) {
   }
 
   // ── Parallax background starfield ──────────────────────────
-  // Generated once at setViewport and uploaded as a static-ish
-  // instance buffer. The circle program handles parallax via
-  // per-instance depth + u_camY in the vertex shader, and twinkle
-  // via per-instance speed/phase + u_time.
+  // Generated once at setViewport and uploaded as a static-ish instance buffer. The circle program
+  // handles parallax via per-instance depth + u_camY in the vertex shader, and twinkle via
+  // per-instance speed/phase + u_time.
   let bgStars = null;
   function initBgStars(W, H) {
-    // Populated across a fixed 2400×1600 canonical space (~2× a
-    // typical laptop viewport). The power-law magnitude
-    // distribution puts ~65 % in the faint dust band, so the
-    // count drives perceived dust density without changing the
-    // hero/mid-mag balance.
+    // Populated across a fixed 2400×1600 canonical space (~2× a typical laptop viewport). The
+    // power-law magnitude distribution puts ~65 % in the faint dust band, so the count drives
+    // perceived dust density without changing the hero/mid-mag balance.
     const n = 700;
     ensureCircleScratch(n);
-    // Seeded PRNG (mulberry32). Produces the same sequence per
-    // session so bg stars stay in the same spots across resizes.
-    // Different sessions get different layouts via sessionSeed.
+    // Seeded PRNG (mulberry32). Produces the same sequence per session so bg stars stay in the same
+    // spots across resizes. Different sessions get different layouts via sessionSeed.
     let rngState = (sessionSeed * 1e6 + 1) >>> 0;
     function rand() {
       rngState = (rngState + 0x6D2B79F5) >>> 0;
@@ -3385,46 +3360,39 @@ export function createRenderer(canvas) {
     // warm ≈ G/K class. Neutral white sits at the midpoint.
     const COOL_R = 0.74, COOL_G = 0.83, COOL_B = 1.00;
     const WARM_R = 1.00, WARM_G = 0.88, WARM_B = 0.72;
-    // Distribute positions in a canonical fixed space so they
-    // stay anchored across resizes. 2400×1600 is larger than any
-    // common viewport; out-of-frame stars are just off-screen.
+    // Distribute positions in a canonical fixed space so they stay anchored across resizes.
+    // 2400×1600 is larger than any common viewport; out-of-frame stars are just off-screen.
     const CW = 2400, CH = 1600;
     for (let i = 0; i < n; i++) {
       const base = i * CIRCLE_FLOATS_PER_INSTANCE;
       const x = rand() * CW;
       const y = rand() * CH;
       const depth = 0.05 + rand() * 0.35;
-      // Magnitude axis: 0 = brightest, 1 = faintest. The
-      // distribution flows from this single sample so brightness,
-      // size, colour saturation and twinkle stay coherent.
+      // Magnitude axis: 0 = brightest, 1 = faintest. The distribution flows from this single sample
+      // so brightness, size, colour saturation and twinkle stay coherent.
       const mag = rand();
       const oneMinusMag = 1.0 - mag;
-      // Power-law brightness — many faint stars, few bright ones.
-      // Replaces the flat U[0.4, 0.8] that gave every star equal
-      // weight; now the eye gets a real apparent-magnitude
-      // hierarchy with hero stars that pop and dust that recedes.
+      // Power-law brightness — many faint stars, few bright ones. Replaces the flat U[0.4, 0.8]
+      // that gave every star equal weight; now the eye gets a real apparent-magnitude hierarchy
+      // with hero stars that pop and dust that recedes.
       const brightness = 0.06 + 0.55 * Math.pow(oneMinusMag, 3.0);
-      // Disc size correlates with magnitude — bright stars look
-      // larger because of their bloom envelope. Faint stars are
-      // sub-pixel points.
+      // Disc size correlates with magnitude — bright stars look larger because of their bloom
+      // envelope. Faint stars are sub-pixel points.
       const discR = 0.5 + Math.pow(oneMinusMag, 2.0) * 2.5;
-      // Continuous temperature axis. Faint stars (mag near 1)
-      // squash to neutral white because the bias term is scaled
-      // by sqrt(1 - mag); bright stars (mag near 0) span the full
-      // cool-to-warm range. tempRoll controls direction.
+      // Continuous temperature axis. Faint stars (mag near 1) squash to neutral white because the
+      // bias term is scaled by sqrt(1 - mag); bright stars (mag near 0) span the full cool-to-warm
+      // range. tempRoll controls direction.
       const tempRoll = rand();
       const t = 0.5 + (tempRoll - 0.5) * 0.6 * Math.sqrt(oneMinusMag);
       const r1 = COOL_R + (WARM_R - COOL_R) * t;
       const g1 = COOL_G + (WARM_G - COOL_G) * t;
       const b1 = COOL_B + (WARM_B - COOL_B) * t;
-      // Twinkle: faint stars dance more in the eye's noise floor,
-      // bright stars hold steadier. Phase still random so they
-      // don't all dim together.
+      // Twinkle: faint stars dance more in the eye's noise floor, bright stars hold steadier. Phase
+      // still random so they don't all dim together.
       const twinkleSpeed = (1.4 + rand() * 2.5) * (0.3 + mag * 1.2);
       const twinklePhase = rand() * Math.PI * 2;
-      // Top ~12 % of stars (brightest) become "hero" stars rendered
-      // with kind == 4 — solid disc plus a faint diffraction cross.
-      // outerR carries the spike-bound (quad size); innerR carries
+      // Top ~12 % of stars (brightest) become "hero" stars rendered with kind == 4 — solid disc
+      // plus a faint diffraction cross. outerR carries the spike-bound (quad size); innerR carries
       // the disc radius itself. Other kinds keep innerR = 0.
       const isHero = mag < 0.02;
       const outerR = isHero ? discR * 3.5 : discR;
@@ -3454,9 +3422,8 @@ export function createRenderer(canvas) {
   gl.bindBuffer(gl.ARRAY_BUFFER, bgStarsBuf);
   gl.bufferData(gl.ARRAY_BUFFER, 1, gl.STATIC_DRAW);
 
-  // bgStars draws through the same circle program. We build a
-  // dedicated VAO bound to bgStarsBuf so we don't re-upload on
-  // every frame.
+  // bgStars draws through the same circle program. We build a dedicated VAO bound to bgStarsBuf so
+  // we don't re-upload on every frame.
   const bgStarsVao = gl.createVertexArray();
   gl.bindVertexArray(bgStarsVao);
   gl.bindBuffer(gl.ARRAY_BUFFER, quadBuf);
@@ -3484,12 +3451,11 @@ export function createRenderer(canvas) {
   let frameTime = 0;
   let frameCamY = 0;
 
-  // Pooled scratch matrices for cameraMat's hot path. Pre-
-  // allocated once so per-frame camera math does zero GC.
+  // Pooled scratch matrices for cameraMat's hot path. Pre- allocated once so per-frame camera math
+  // does zero GC.
   // _camResult is the stable reference returned to callers;
-  // each cameraMat() invocation overwrites it in place and the
-  // caller consumes it within the same frame before the next
-  // call. Don't hold on to the returned reference across frames.
+  // each cameraMat() invocation overwrites it in place and the caller consumes it within the same
+  // frame before the next call. Don't hold on to the returned reference across frames.
   const _camT2 = new Float32Array(9);
   const _camT3 = new Float32Array(9);
   const _camS  = new Float32Array(9);
@@ -3521,18 +3487,15 @@ export function createRenderer(canvas) {
   }
 
   function cameraMat(camY, zoom, focusY, camX) {
-    // Matches Canvas2D's transform chain:
-    //   translate(W/2, H*focusY) * scale(zoom) * translate(-W/2, -H*focusY) * translate(camX, camY)
-    // applied to a world point — screen = T4 * S * T3 * T2 * world.
-    // `focusY` is the fraction of screen height where the current
+    // Matches Canvas2D's transform chain: translate(W/2, H*focusY) * scale(zoom) * translate(-W/2,
+    // -H*focusY) * translate(camX, camY) applied to a world point — screen = T4 * S * T3 * T2 *
+    // world. `focusY` is the fraction of screen height where the current
     // star sits. 0.55 is the default (slightly below center);
-    // portrait/mobile passes a larger value (e.g. 0.62) so the
-    // star sits lower, leaving more sky visible above.
-    // `camX` is an optional world-space horizontal pan (defaults
-    // to 0), used to keep oversized stars (ringworlds at 1.7×
-    // zoom) from extending beyond the viewport horizontally.
-    // Composed left-associatively into the pooled scratch so the
-    // whole chain runs without a single heap allocation.
+    // portrait/mobile passes a larger value (e.g. 0.62) so the star sits lower, leaving more sky
+    // visible above. `camX` is an optional world-space horizontal pan (defaults to 0), used to keep
+    // oversized stars (ringworlds at 1.7× zoom) from extending beyond the viewport horizontally.
+    // Composed left-associatively into the pooled scratch so the whole chain runs without a single
+    // heap allocation.
     if (focusY === undefined) focusY = 0.55;
     if (camX === undefined) camX = 0;
     mat3SetTranslate(_camT2, camX, camY);
@@ -3547,8 +3510,8 @@ export function createRenderer(canvas) {
   }
 
   function replayMat(scale, ox, oy) {
-    // Bounds-fit transform: world (x, y) → screen (x*scale + ox, y*scale + oy).
-    // Then compose with screen-to-clip to get world-to-clip in one matrix.
+    // Bounds-fit transform: world (x, y) → screen (x*scale + ox, y*scale + oy). Then compose with
+    // screen-to-clip to get world-to-clip in one matrix.
     const bounds = new Float32Array([
       scale, 0, ox,
       0, scale, oy,
@@ -3557,41 +3520,37 @@ export function createRenderer(canvas) {
     return mat3Multiply(screenMat, bounds);
   }
 
-  // Empty VAO for buffer-less fullscreen draws (the fullscreen
-  // vertex shader uses gl_VertexID to synthesize the quad). Bound
-  // explicitly by drawBackground so the GL state is unambiguous —
-  // "null VAO" works because WebGL2 has a default VAO, but it's
-  // a silent trap the moment someone adds an `in` to FULLSCREEN_VS.
+  // Empty VAO for buffer-less fullscreen draws (the fullscreen vertex shader uses gl_VertexID to
+  // synthesize the quad). Bound explicitly by drawBackground so the GL state is unambiguous — "null
+  // VAO" works because WebGL2 has a default VAO, but it's a silent trap the moment someone adds an
+  // `in` to FULLSCREEN_VS.
   const emptyVao = gl.createVertexArray();
 
-  // Persistent GL state — set once here and never touched in the
-  // hot path.
+  // Persistent GL state — set once here and never touched in the hot path.
   gl.clearColor(0.039, 0.039, 0.071, 1);
   gl.disable(gl.DEPTH_TEST);
   gl.enable(gl.BLEND);
   gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
 
   // ── Lost context handling ─────────────────────────────────
-  // Mobile Safari tears down the GL context when the tab
-  // backgrounds. preventDefault() tells the browser to try to
-  // restore us; on restore we ask for a reload since rebuilding
-  // every program and buffer mid-frame is not worth the code.
+  // Mobile Safari tears down the GL context when the tab backgrounds. preventDefault() tells the
+  // browser to try to restore us; on restore we ask for a reload since rebuilding every program and
+  // buffer mid-frame is not worth the code.
   canvas.addEventListener("webglcontextlost", (e) => {
     e.preventDefault();
   }, false);
   canvas.addEventListener("webglcontextrestored", () => {
-    // Simplest recovery path: force a page reload. The game is a
-    // single-screen web app so there's nothing to lose.
+    // Simplest recovery path: force a page reload. The game is a single-screen web app so there's
+    // nothing to lose.
     location.reload();
   }, false);
 
   // ── Draw API ──────────────────────────────────────────────
 
   function beginFrame(timeSec, useFbo) {
-    // If a black hole is visible this frame, route all draws
-    // through the scene FBO so the lensing composite can read
-    // them. Otherwise render directly to the default
-    // framebuffer — zero FBO overhead on ~95% of frames.
+    // If a black hole is visible this frame, route all draws through the scene FBO so the lensing
+    // composite can read them. Otherwise render directly to the default framebuffer — zero FBO
+    // overhead on ~95% of frames.
     frameTime = timeSec;
     fboActive = !!useFbo;
     if (fboActive) {
@@ -3600,11 +3559,9 @@ export function createRenderer(canvas) {
     gl.clear(gl.COLOR_BUFFER_BIT);
   }
 
-  // Fullscreen lensing composite — reads the scene FBO texture
-  // with UV distortion around each visible black hole and
-  // writes to the default framebuffer. Only called when the
-  // FBO was active (i.e. at least one BH on screen). If
-  // blackHoles is empty, this is a no-op.
+  // Fullscreen lensing composite — reads the scene FBO texture with UV distortion around each
+  // visible black hole and writes to the default framebuffer. Only called when the FBO was active
+  // (i.e. at least one BH on screen). If blackHoles is empty, this is a no-op.
   function finalizeFrame(blackHoles) {
     if (!fboActive) return;
     // Switch from FBO to the default framebuffer.
@@ -3657,11 +3614,9 @@ export function createRenderer(canvas) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, bgStars.count);
   }
 
-  // Generic per-frame circle batch. `instances` is an array of
-  // plain objects each with: x, y, outerR, innerR, r, g, b, a,
-  // kind (0=solid, 1=ring, 2=glow, 3=dashed ring). color is
-  // non-premultiplied — we premultiply here so the kind=2 glow
-  // falls off cleanly to transparent.
+  // Generic per-frame circle batch. `instances` is an array of plain objects each with: x, y,
+  // outerR, innerR, r, g, b, a, kind (0=solid, 1=ring, 2=glow, 3=dashed ring). color is
+  // non-premultiplied — we premultiply here so the kind=2 glow falls off cleanly to transparent.
   function drawCircleBatch(instances, viewMat) {
     const n = instances.length;
     if (n === 0) return;
@@ -3686,11 +3641,10 @@ export function createRenderer(canvas) {
     gl.useProgram(circleProg.program);
     gl.uniformMatrix3fv(circleProg.uniforms.u_view, true, viewMat);
     gl.uniform1f(circleProg.uniforms.u_time, frameTime);
-    // u_camY and u_resolution are only read inside the shader's
-    // `if (depth > 0.0)` branch, which is for bgStars parallax.
-    // Gameplay circles always pass depth = 0, so both uniforms
-    // are dead on this path. We leave whatever drawBgStars wrote
-    // last frame — the values don't matter, they're never sampled.
+    // u_camY and u_resolution are only read inside the shader's `if (depth > 0.0)` branch, which is
+    // for bgStars parallax. Gameplay circles always pass depth = 0, so both uniforms are dead on
+    // this path. We leave whatever drawBgStars wrote last frame — the values don't matter, they're
+    // never sampled.
     gl.bindVertexArray(circleVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, circleInstanceBuf);
     gl.bufferData(
@@ -3701,11 +3655,10 @@ export function createRenderer(canvas) {
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, n);
   }
 
-  // Star batch. `stars` is an array of plain objects with fields:
-  // x, y, r, colorIdx, pulse, hasRays, nGran, and optional
-  // isCurrent / isNext / isPast boolean overrides. viewMat is the
-  // world-to-clip transform. `seeds` is parallel if provided; if
-  // not, seed is derived from position.
+  // Star batch. `stars` is an array of plain objects with fields: x, y, r, colorIdx, pulse,
+  // hasRays, nGran, and optional isCurrent / isNext / isPast boolean overrides. viewMat is the
+  // world-to-clip transform. `seeds` is parallel if provided; if not, seed is derived from
+  // position.
   function drawStarBatch(stars, viewMat) {
     const n = stars.length;
     if (n === 0) return;
@@ -3715,8 +3668,8 @@ export function createRenderer(canvas) {
     // program (which keeps the heavy noise helpers + nebula path);
     // everything else goes to the common program (which drops them
     // for lower register pressure → better SIMT occupancy on
-    // mobile). Past nebulas route through the common program — the
-    // isPast early-out renders all variants as the same dim ember.
+    // mobile). Past nebulas route through the common program — the isPast early-out renders all
+    // variants as the same dim ember.
     let nCommon = 0;
     let nNebula = 0;
     for (let i = 0; i < n; i++) {
@@ -3726,8 +3679,8 @@ export function createRenderer(canvas) {
       const base = (useNebula ? nNebula : nCommon) * STAR_FLOATS_PER_INSTANCE;
       const c1 = c1Of(s.colorIdx);
       const c2 = c2Of(s.colorIdx);
-      // Same position-derived phase as drawStar used in Canvas2D,
-      // so every star stays out of sync with its neighbours.
+      // Same position-derived phase as drawStar used in Canvas2D, so every star stays out of sync
+      // with its neighbours.
       const seed = s.seed != null ? s.seed
         : (Math.sin(s.x * 0.0137 + s.y * 0.0191) * 0.5 + 0.5) * Math.PI * 2;
       let flags = 0;
@@ -3741,9 +3694,8 @@ export function createRenderer(canvas) {
       if (s.isNebula) flags |= 2048;
       if (s.isTeapot) flags |= 4096;
       if (s.isAzazel) flags |= 8192;
-      // Ring plate count packed in flag bits 8-10 (0-7). 0 means
-      // the ringworld has no shadow plates — shader skips all
-      // plate/shadow/city-light work in that case.
+      // Ring plate count packed in flag bits 8-10 (0-7). 0 means the ringworld has no shadow plates
+      // — shader skips all plate/shadow/city-light work in that case.
       if (s.isRingworld) {
         const pc = Math.max(0, Math.min(7, s.ringPlateCount | 0));
         flags |= pc << 8;
@@ -3767,9 +3719,8 @@ export function createRenderer(canvas) {
       if (useNebula) nNebula++;
       else nCommon++;
     }
-    // Both draws share the same VAO + instance buffer. bufferData
-    // overwrites between draws; the second draw's upload doesn't
-    // affect the already-issued first draw.
+    // Both draws share the same VAO + instance buffer. bufferData overwrites between draws; the
+    // second draw's upload doesn't affect the already-issued first draw.
     gl.bindVertexArray(starVao);
     gl.bindBuffer(gl.ARRAY_BUFFER, starInstanceBuf);
     if (nCommon > 0) {
@@ -3796,8 +3747,7 @@ export function createRenderer(canvas) {
     }
   }
 
-  // Polyline. `points` is an array of {x, y} in world space.
-  // Colors are premultiplied rgba tuples.
+  // Polyline. `points` is an array of {x, y} in world space. Colors are premultiplied rgba tuples.
   function drawPolyline(points, viewMat, halfWidth, colorTail, colorHead) {
     const n = points.length;
     if (n < 2) return;
@@ -3844,8 +3794,8 @@ export function createRenderer(canvas) {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, n * 2);
   }
 
-  // Convenience: multiple disconnected 2-point segments (connector
-  // hints, velocity arrow). Uses several small polyline draws.
+  // Convenience: multiple disconnected 2-point segments (connector hints, velocity arrow). Uses
+  // several small polyline draws.
   function drawSegments(segments, viewMat, halfWidth, colorTail, colorHead) {
     for (let i = 0; i < segments.length; i++) {
       drawPolyline(segments[i], viewMat, halfWidth, colorTail, colorHead);

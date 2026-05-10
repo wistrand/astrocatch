@@ -1,8 +1,6 @@
-// All physics + capture logic lives in physics.js (also used by
-// the node test runner). All rendering lives in renderer.js
-// (WebGL2, browser-only). This file owns DOM, canvas acquisition,
-// input, gameplay state, and orchestration. ES modules are strict
-// by default.
+// All physics + capture logic lives in physics.js (also used by the node test runner). All
+// rendering lives in renderer.js (WebGL2, browser-only). This file owns DOM, canvas acquisition,
+// input, gameplay state, and orchestration. ES modules are strict by default.
 import * as AC from "./physics.js";
 import { createRenderer, c1Of, c2Of } from "./renderer.js";
 import { createAudio, simplex2 } from "./audio.js";
@@ -24,14 +22,12 @@ import {
 } from "./challenge.js";
 
 // ── Incoming challenge (#…) ──────────────────────────────
-// Challenge codes ride in the URL fragment (uppercase base32) so
-// the QR can encode them in alphanumeric mode and stay small.
-// `_incomingChallenge` is recomputed from `location.hash` at
-// module load AND on every `hashchange`, so editing the URL in
-// the address bar (which the browser treats as a soft same-tab
-// navigation, not a reload) still surfaces the welcome card.
-// init() reads `_incomingChallenge` at the moment the player
-// clicks START, so any hash change before that point picks up.
+// Challenge codes ride in the URL fragment (uppercase base32) so the QR can encode them in
+// alphanumeric mode and stay small. `_incomingChallenge` is recomputed from `location.hash` at
+// module load AND on every `hashchange`, so editing the URL in the address bar (which the browser
+// treats as a soft same-tab navigation, not a reload) still surfaces the welcome card. init() reads
+// `_incomingChallenge` at the moment the player clicks START, so any hash change before that point
+// picks up.
 let _incomingChallenge = null;
 function recomputeIncomingChallenge() {
   const code = location.hash ? location.hash.replace(/^#/, "") : "";
@@ -42,8 +38,8 @@ function showChallengeCard() {
   const wrap = document.getElementById("challenge");
   if (!wrap) return;
   const c = _incomingChallenge;
-  // No (or invalid) hash → hide the card. This also handles the
-  // path where a hashchange wipes a previously-valid challenge.
+  // No (or invalid) hash → hide the card. This also handles the path where a hashchange wipes a
+  // previously-valid challenge.
   if (!c) {
     wrap.classList.add("hidden");
     return;
@@ -54,11 +50,10 @@ function showChallengeCard() {
   document.getElementById("challenge-line").textContent =
     `${c.starsVisited} stars · streak ×${c.streakPeak} · ${tierBits}` +
     (c.cometsCaught ? ` · ${c.cometsCaught} comets` : "");
-  // Variant census line — only mention variants the sender
-  // actually saw, with friendly labels. Keeps the card terse
-  // when the run was vanilla. Surprise variants (azazel, teapot)
-  // are aggregated under "special" so the public-facing card
-  // doesn't spoil what's out there to discover.
+  // Variant census line — only mention variants the sender actually saw, with friendly labels.
+  // Keeps the card terse when the run was vanilla. Surprise variants (azazel, teapot) are
+  // aggregated under "special" so the public-facing card doesn't spoil what's out there to
+  // discover.
   const labels = {
     blackHole: "black hole", ringworld: "ringworld",
     nebula: "nebula", pulsar: "pulsar",
@@ -81,16 +76,14 @@ showChallengeCard();
 window.addEventListener("hashchange", () => {
   recomputeIncomingChallenge();
   showChallengeCard();
-  // Hide RESUME when a challenge arrives, restore it when one
-  // is cleared (close-button → bare-page reload also handles
-  // this, but a same-tab hash flip needs the explicit refresh).
-  // updateResumeButtonVisibility is a function declaration so
-  // hoisting makes it callable here even though it lives below.
+  // Hide RESUME when a challenge arrives, restore it when one is cleared (close-button → bare-page
+  // reload also handles this, but a same-tab hash flip needs the explicit refresh).
+  // updateResumeButtonVisibility is a function declaration so hoisting makes it callable here even
+  // though it lives below.
   updateResumeButtonVisibility();
 });
-// Close button — strip the challenge fragment and ?seed= so the
-// run-seed roll goes back to fresh-random, then reload.
-// Equivalent to landing on the bare page from scratch.
+// Close button — strip the challenge fragment and ?seed= so the run-seed roll goes back to
+// fresh-random, then reload. Equivalent to landing on the bare page from scratch.
 {
   const closeBtn = document.getElementById("challenge-close");
   if (closeBtn) {
@@ -110,29 +103,23 @@ window.addEventListener("hashchange", () => {
 const canvas = document.getElementById("c");
 let renderer = null;
 let W = 0, H = 0, DPR = 1;
-// Touch/coarse-pointer detection — used by resize() to pick a
-// mobile-specific zoom, so it must be declared before resize().
+// Touch/coarse-pointer detection — used by resize() to pick a mobile-specific zoom, so it must be
+// declared before resize().
 const IS_TOUCH = typeof window !== "undefined"
   && window.matchMedia
   && window.matchMedia("(pointer: coarse)").matches;
-// Zoom is dynamic: on any wide screen (landscape aspect) we
 // Zoom is dynamic by viewport.
 //   Mobile portrait : 0.58 — original mobile value.
-//   Mobile landscape: 0.48 — pulled back so short vertical
-//                            space doesn't feel cramped.
-//   Desktop         : 0.52 — wider view than mobile portrait
-//                            since the mouse is more precise.
+//   Mobile landscape: 0.48 — pulled back so short vertical space doesn't feel cramped.
+//   Desktop         : 0.52 — wider view than mobile portrait since the mouse is more precise.
 let ZOOM = 0.58;
-// Extra zoom applied on top of ZOOM. Smoothly lerps toward
-// zoomMultTarget — bumped to 1.5 while the ship orbits a
-// ringworld, back to 1.0 otherwise.
+// Extra zoom applied on top of ZOOM. Smoothly lerps toward zoomMultTarget — bumped to 1.5 while the
+// ship orbits a ringworld, back to 1.0 otherwise.
 let zoomMult = 1.0;
 let zoomMultTarget = 1.0;
-// Target zoom multiplier for the star currently being orbited.
-// Ringworld and Nebula visuals are pulled in closer so the
-// detail stays legible; everything else sticks at the default
-// viewport zoom. Touch viewports use a slightly lower factor to
-// leave breathing room on smaller screens.
+// Target zoom multiplier for the star currently being orbited. Ringworld and Nebula visuals are
+// pulled in closer so the detail stays legible; everything else sticks at the default viewport
+// zoom. Touch viewports use a slightly lower factor to leave breathing room on smaller screens.
 function zoomTargetFor(star) {
   if (!star) return 1.0;
   if (star.isRingworld) return IS_TOUCH ? 1.5 : 1.7;
@@ -141,9 +128,8 @@ function zoomTargetFor(star) {
   if (star.isAzazel)    return IS_TOUCH ? 2.5 : 4.5;
   return 1.0;
 }
-// World-space horizontal camera pan. Normally 0; nudged when
-// the current star's visible extent would otherwise clip the
-// viewport (e.g. a ringworld at 1.7× zoom near a screen edge).
+// World-space horizontal camera pan. Normally 0; nudged when the current star's visible extent
+// would otherwise clip the viewport (e.g. a ringworld at 1.7× zoom near a screen edge).
 let camX = 0;
 let camXTarget = 0;
 function computeZoom() {
@@ -167,11 +153,9 @@ function resize() {
   if (renderer) renderer.setViewport(W, H, DPR);
 }
 window.addEventListener("resize", () => {
-  // Capture the current star's screen position BEFORE resize
-  // so we can preserve its on-screen fraction across the new
-  // viewport. Y always sits at H*CAM_FOCUS_Y by camY math; X
-  // is fixed by world cs.x and cameraMat, so we have to shift
-  // world coords to keep the same screen fraction.
+  // Capture the current star's screen position BEFORE resize so we can preserve its on-screen
+  // fraction across the new viewport. Y always sits at H*CAM_FOCUS_Y by camY math; X is fixed by
+  // world cs.x and cameraMat, so we have to shift world coords to keep the same screen fraction.
   let preXFrac = 0.5;
   const preW = W, preZoom = ZOOM * zoomMult;
   if (ball && stars[ball.currentStar] && preW > 0) {
@@ -187,10 +171,9 @@ window.addEventListener("resize", () => {
     const cy = -(cs.y - H * CAM_FOCUS_Y);
     camY = cy;
     camTargetY = cy;
-    // X: solve for the world cs.x that places the star at
-    // preXFrac of the new W when run through cameraMat:
-    //   sx = W/2 + ZOOM*(cs.x - W/2)
-    //   sx = preXFrac*W → cs.x_new = W*(0.5 + (preXFrac-0.5)/ZOOM)
+    // X: solve for the world cs.x that places the star at preXFrac of the new W when run through
+    // cameraMat: sx = W/2 + ZOOM*(cs.x - W/2) sx = preXFrac*W → cs.x_new = W*(0.5 +
+    // (preXFrac-0.5)/ZOOM)
     const newCsX = W * (0.5 + (preXFrac - 0.5) / (ZOOM * zoomMult));
     const dx = newCsX - cs.x;
     if (dx !== 0) {
@@ -201,32 +184,29 @@ window.addEventListener("resize", () => {
       for (let i = 0; i < replay.length; i++) replay[i].x += dx;
     }
   }
-  // While paused, loop() returns early and never calls draw(),
-  // so a resize would leave the canvas showing the old viewport.
-  // Force one draw so the new layout is visible immediately.
+  // While paused, loop() returns early and never calls draw(), so a resize would leave the canvas
+  // showing the old viewport. Force one draw so the new layout is visible immediately.
   if (paused && typeof draw === "function") draw();
 });
 resize();
 renderer = createRenderer(canvas);
 if (!renderer) {
-  // No WebGL2 → show the unsupported overlay and abort. The rest
-  // of this module still loads (nothing crashes) but the main loop
-  // will never actually render anything, and input is a no-op.
+  // No WebGL2 → show the unsupported overlay and abort. The rest of this module still loads
+  // (nothing crashes) but the main loop will never actually render anything, and input is a no-op.
   const el = document.getElementById("unsupported");
   if (el) el.classList.remove("hidden");
 } else {
-  // Viewport wasn't set on the very first resize() because the
-  // renderer didn't exist yet — seed it now.
+  // Viewport wasn't set on the very first resize() because the renderer didn't exist yet — seed it
+  // now.
   renderer.setViewport(W, H, DPR);
 }
 
-// Procedural sound effects (WebAudio). Lazy-initializes its
-// AudioContext on the first play call so we satisfy the browser
-// autoplay policy without a visible "enable audio" prompt.
+// Procedural sound effects (WebAudio). Lazy-initializes its AudioContext on the first play call so
+// we satisfy the browser autoplay policy without a visible "enable audio" prompt.
 const audio = createAudio();
 
-// Hook up the HUD mute button. Button state reflects the audio
-// module's muted flag, which persists to localStorage on toggle.
+// Hook up the HUD mute button. Button state reflects the audio module's muted flag, which persists
+// to localStorage on toggle.
 const muteBtn = document.getElementById("mute-btn");
 function syncMuteBtn() {
   if (!muteBtn) return;
@@ -243,9 +223,8 @@ if (muteBtn) {
   });
 }
 
-// HUD reload button — just forces a page reload. Useful when
-// stuck, when a visual gets weird, or when the player wants a
-// totally fresh state without hunting for the browser refresh.
+// HUD reload button — just forces a page reload. Useful when stuck, when a visual gets weird, or
+// when the player wants a totally fresh state without hunting for the browser refresh.
 const reloadBtn = document.getElementById("reload-btn");
 if (reloadBtn) {
   reloadBtn.addEventListener("click", (e) => {
@@ -255,9 +234,8 @@ if (reloadBtn) {
   });
 }
 
-// Fullscreen toggle. Uses the standard Fullscreen API on the
-// document root. Browsers that don't support it (older iOS Safari
-// quirks) silently no-op. Icon swaps via CSS class on the button.
+// Fullscreen toggle. Uses the standard Fullscreen API on the document root. Browsers that don't
+// support it (older iOS Safari quirks) silently no-op. Icon swaps via CSS class on the button.
 const fullscreenBtn = document.getElementById("fullscreen-btn");
 function syncFullscreenBtn() {
   if (!fullscreenBtn) return;
@@ -275,15 +253,15 @@ if (fullscreenBtn) {
     }
   });
   document.addEventListener("fullscreenchange", syncFullscreenBtn);
-  // Hide the button on iOS Safari, which doesn't support the
-  // standard Fullscreen API on document elements.
+  // Hide the button on iOS Safari, which doesn't support the standard Fullscreen API on document
+  // elements.
   if (!document.documentElement.requestFullscreen) {
     fullscreenBtn.style.display = "none";
   }
 }
 
-// Help overlay — toggled via the ? button, H key, Esc, or
-// tapping anywhere inside the overlay itself.
+// Help overlay — toggled via the ? button, H key, Esc, or tapping anywhere inside the overlay
+// itself.
 const helpBtn = document.getElementById("help-btn");
 const helpOverlay = document.getElementById("help");
 let pausedBeforeHelp = false;
@@ -292,8 +270,8 @@ function setHelpOpen(open) {
   const wasOpen = !helpOverlay.classList.contains("hidden");
   if (open) helpOverlay.classList.remove("hidden");
   else helpOverlay.classList.add("hidden");
-  // Pause on open / restore prior pause state on close, so a
-  // manually-paused game stays paused after closing help.
+  // Pause on open / restore prior pause state on close, so a manually-paused game stays paused
+  // after closing help.
   if (state === STATE.PLAY || state === STATE.DYING) {
     if (open && !wasOpen) { pausedBeforeHelp = paused; paused = true; }
     else if (!open && wasOpen) { paused = pausedBeforeHelp; }
@@ -321,46 +299,39 @@ const CRASH_MULT = AC.CRASH_MULT;
 const INITIAL_ORBIT_MULT = AC.INITIAL_ORBIT_MULT;
 const SAFE_SEP = AC.SAFE_SEP;
 
-// View / pacing tunables. IS_TOUCH and ZOOM live near the top
-// of the file because resize() reads them on first module load.
-// Vertical focus point — fraction of screen height where the
-// current star sits. On portrait (mobile) the star is pushed
-// lower so the player sees more upcoming stars above.
+// View / pacing tunables. IS_TOUCH and ZOOM live near the top of the file because resize() reads
+// them on first module load. Vertical focus point — fraction of screen height where the current
+// star sits. On portrait (mobile) the star is pushed lower so the player sees more upcoming stars
+// above.
 const CAM_FOCUS_Y = IS_TOUCH ? 0.62 : 0.55;
-// Fixed-timestep physics rate. Decoupled from requestAnimationFrame so a
-// 144 Hz monitor doesn't run the orbits at 240 Hz, and an RAF burst right
-// after page load can't sneak in extra physics work.
+// Fixed-timestep physics rate. Decoupled from requestAnimationFrame so a 144 Hz monitor doesn't run
+// the orbits at 240 Hz, and an RAF burst right after page load can't sneak in extra physics work.
 const PHYSICS_HZ = 120;
 const PHYSICS_DT_MS = 1000 / PHYSICS_HZ;
-// Clamps the per-loop time delta so a long pause (tab switch, init,
-// debugger break) can't queue a burst of physics ticks and warp the
-// game forward on resume.
+// Clamps the per-loop time delta so a long pause (tab switch, init, debugger break) can't queue a
+// burst of physics ticks and warp the game forward on resume.
 const MAX_FRAME_GAP_MS = 100;
-// Hard cap on physics ticks per loop iteration as a belt-and-braces
-// guard if the clamp ever fails.
+// Hard cap on physics ticks per loop iteration as a belt-and-braces guard if the clamp ever fails.
 const MAX_PHYSICS_PER_FRAME = 8;
-// In willHitAnyStar(): perp distance ≤ R * this counts as "might still
-// capture". Only used for unbound trajectories — closed orbits get an
-// explicit bound-energy fast path, so this can be tight without false
-// deaths.
+// In willHitAnyStar(): perp distance ≤ R * this counts as "might still capture". Only used for
+// unbound trajectories — closed orbits get an explicit bound-energy fast path, so this can be tight
+// without false deaths.
 const MISS_GRAVITY_MULT = 5;
 // Max forward distance considered for the linear miss check.
 const MISS_LOOKAHEAD = 1500;
 
 // ─────────────────────────────────────────────────────────────
-// Palette — the full RGB data lives in renderer.js as c1Of/c2Of.
-// Gameplay needs the count for random colorIdx; it's imported
-// from star-rendering.js so debug.js sees the same value.
+// Palette — the full RGB data lives in renderer.js as c1Of/c2Of. Gameplay needs the count for
+// random colorIdx; it's imported from star-rendering.js so debug.js sees the same value.
 // ─────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────
 // World state
 // ─────────────────────────────────────────────────────────────
-// DYING is an intermediate state where the death event has fired
-// (score frozen, high-score recorded, particle burst started) but
-// physics keeps running for a short wind-down before the game-over
-// screen appears. Collisions and further deaths don't re-trigger
-// during DYING, and the player can't boost.
+// DYING is an intermediate state where the death event has fired (score frozen, high-score
+// recorded, particle burst started) but physics keeps running for a short wind-down before the
+// game-over screen appears. Collisions and further deaths don't re-trigger during DYING, and the
+// player can't boost.
 const STATE = { MENU: 0, PLAY: 1, DYING: 2, DEAD: 3 };
 const DYING_FRAMES_MS = 1000;  // wind-down duration (ms)
 let state = STATE.MENU;
@@ -372,31 +343,26 @@ let particles = []; // [{x,y,vx,vy,life,decay,r,g,b,size}]
 let shockwaves = [];// [{x,y,r,mr,life,cr,cg,cb}]
 let menuStars = []; // 1–3 decorative animated stars on the welcome screen
 
-// Replay: a samples-per-render-frame log of ball positions during
-// the live run, replayed faded behind the game-over overlay so the
-// player can watch their last attempt while the RESTART button sits
-// in front of it.
+// Replay: a samples-per-render-frame log of ball positions during the live run, replayed faded
+// behind the game-over overlay so the player can watch their last attempt while the RESTART button
+// sits in front of it.
 const REPLAY_MAX = 6000;
 let replay = [];          // [{x, y, currentStar}, ...]
 let replayBounds = null;  // {lastStarIdx} computed once on death
 let replayIdx = 0;
-// Dynamic replay camera — smooth-follows the marker dot with
-// simplex-driven zoom variation for a cinematic replay feel.
+// Dynamic replay camera — smooth-follows the marker dot with simplex-driven zoom variation for a
+// cinematic replay feel.
 let replayCamX = 0;
 let replayCamY = 0;
-// Replay frames advanced per render frame. Replay was recorded at
-// 1 sample/render-frame, so 1 = real-time, 1.75 = ~1.75× fast,
-// 2 = 2× fast.
+// Replay frames advanced per render frame. Replay was recorded at 1 sample/render-frame, so 1 =
+// real-time, 1.75 = ~1.75× fast, 2 = 2× fast.
 const REPLAY_SPEED = 1.75;
 
-// Cinematic mode — Z cycles 0 → 1 → 2 → 3 → 0. Level 0 is the
-// regular camera; 1–3 are ship-following replayMat-style cams
-// with a simplex zoom breath, mirroring drawReplayGhost. Levels
-// 1 and 3 share the same zoom so the cycle reads as a palindrome:
-// normal → near → far → near → normal. Camera params are lerped
-// toward target each frame so transitions in either direction
-// (entering cinematic, switching levels, exiting) glide instead
-// of snapping.
+// Cinematic mode — Z cycles 0 → 1 → 2 → 3 → 0. Level 0 is the regular camera; 1–3 are
+// ship-following replayMat-style cams with a simplex zoom breath, mirroring drawReplayGhost. Levels
+// 1 and 3 share the same zoom so the cycle reads as a palindrome: normal → near → far → near →
+// normal. Camera params are lerped toward target each frame so transitions in either direction
+// (entering cinematic, switching levels, exiting) glide instead of snapping.
 const CINEMATIC_ZOOM_NEAR = IS_TOUCH ? 1.0 : 1.7;
 const CINEMATIC_ZOOM_FAR  = IS_TOUCH ? 1.4 : 2.6;
 const CINEMATIC_LEVELS = [
@@ -409,29 +375,24 @@ let cinematicLevelIdx = 0;
 let cinematicCamX = 0;
 let cinematicCamY = 0;
 let cinematicTime = 0;
-// Simplex zoom breath disabled — the oscillation read as motion
-// jaggedness on objects away from screen-center at high zoom.
-// Set > 0 to re-enable.
+// Simplex zoom breath disabled — the oscillation read as motion jaggedness on objects away from
+// screen-center at high zoom. Set > 0 to re-enable.
 const CINEMATIC_ZOOM_AMP = 0;
-// Time constants (ms) for the cam-follow and cam-param lerps.
-// Time-aware weighting: w = 1 - exp(-dt / tau). With per-render-
-// frame fixed weights, RAF jitter (14 ms vs 18 ms vs 16.67 ms)
-// shifted the effective time constant each frame, producing a
-// micro-jitter visible on objects at high zoom. Computing the
-// weight from real elapsed wall time eliminates that.
-//   FOLLOW_TAU 660 ms ≈ the old fixed weight 0.025/frame at 60 fps
-//   LERP_TAU   270 ms ≈ the old 0.06/frame at 60 fps
+// Time constants (ms) for the cam-follow and cam-param lerps. Time-aware weighting: w = 1 - exp(-dt
+// / tau). With per-render- frame fixed weights, RAF jitter (14 ms vs 18 ms vs 16.67 ms) shifted the
+// effective time constant each frame, producing a micro-jitter visible on objects at high zoom.
+// Computing the weight from real elapsed wall time eliminates that. FOLLOW_TAU 660 ms ≈ the old
+// fixed weight 0.025/frame at 60 fps LERP_TAU 270 ms ≈ the old 0.06/frame at 60 fps
 const CINEMATIC_FOLLOW_TAU_MS = 660;
 const CINEMATIC_LERP_TAU_MS = 270;
-// Current rendered camera params in replayMat (scale, ox, oy)
-// form. Both regular and cinematic targets are expressed in this
-// form and the rendered triple lerps toward them.
+// Current rendered camera params in replayMat (scale, ox, oy) form. Both regular and cinematic
+// targets are expressed in this form and the rendered triple lerps toward them.
 let camRenderScale = ZOOM;
 let camRenderOx = 0;
 let camRenderOy = 0;
 let camRenderInited = false;
-// Previous values for velocity estimation in the exact 1st-order
-// integrator (eliminates dt-jitter steady-state error).
+// Previous values for velocity estimation in the exact 1st-order integrator (eliminates dt-jitter
+// steady-state error).
 let _prevFollowX = 0, _prevFollowY = 0;
 let _prevTargetScale = ZOOM, _prevTargetOx = 0, _prevTargetOy = 0;
 let _camIntegratorInited = false;
@@ -439,9 +400,8 @@ let _camIntegratorInited = false;
 let score = 0;
 let starsVisited = 0;
 let best = +(localStorage.getItem("astrocatch_best") || 0);
-// Persist best if the current run beats it. Called at death
-// and also on tab close / visibility change so a high score
-// from an interrupted run doesn't get lost.
+// Persist best if the current run beats it. Called at death and also on tab close / visibility
+// change so a high score from an interrupted run doesn't get lost.
 function saveBest() {
   if (score > best) {
     best = score;
@@ -449,12 +409,10 @@ function saveBest() {
     catch (_) { /* quota / private mode — nothing to do */ }
   }
 }
-// On any exit path — tab close, refresh, navigation, or
-// backgrounding — persist both the high score and a resume
-// snapshot. The three events fire inconsistently across
-// browsers (beforeunload ignored on mobile; pagehide and
-// visibilitychange sometimes substitute), so all three are
-// wired. Writes are idempotent, so dedup isn't a concern.
+// On any exit path — tab close, refresh, navigation, or backgrounding — persist both the high score
+// and a resume snapshot. The three events fire inconsistently across browsers (beforeunload ignored
+// on mobile; pagehide and visibilitychange sometimes substitute), so all three are wired. Writes
+// are idempotent, so dedup isn't a concern.
 function saveSnapshotOnExit() {
   saveBest();
   if (state === STATE.PLAY && ball && ball.alive) saveGame();
@@ -465,13 +423,11 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "hidden") saveSnapshotOnExit();
 });
 // ── Save game (resume-after-reload) ──────────────────────────
-// Persisted on death. Stores enough state to rebuild the same
-// star field + ship orbit as the live continueRun() path, so
-// reloading and clicking RESUME behaves identically to hitting
-// CONTINUE on the death overlay. Past stars are stripped to
-// stubs (x, y, r, colorIdx, caught=true) to keep stars.length
-// correct for addNextStar's difficulty ramp while staying tiny.
-// Schema version bump invalidates older saves on load.
+// Persisted on death. Stores enough state to rebuild the same star field + ship orbit as the live
+// continueRun() path, so reloading and clicking RESUME behaves identically to hitting CONTINUE on
+// the death overlay. Past stars are stripped to stubs (x, y, r, colorIdx, caught=true) to keep
+// stars.length correct for addNextStar's difficulty ramp while staying tiny. Schema version bump
+// invalidates older saves on load.
 const SAVE_KEY = "astrocatch_savegame_v1";
 function serializeStar(s, full) {
   const stub = {
@@ -505,9 +461,8 @@ function saveGame() {
   const cur = ball.currentStar;
   const starsOut = new Array(stars.length);
   for (let i = 0; i < stars.length; i++) {
-    // Current + all future stars get full data; past stars are
-    // rendered as dim embers and have no live interaction, so a
-    // {x,y,r,colorIdx,caught} stub is enough.
+    // Current + all future stars get full data; past stars are rendered as dim embers and have no
+    // live interaction, so a {x,y,r,colorIdx,caught} stub is enough.
     const full = i >= cur;
     starsOut[i] = serializeStar(stars[i], full);
   }
@@ -540,8 +495,8 @@ function clearSave() {
   catch (_) { /* ignore */ }
 }
 
-// Number of gameplays started. Used to auto-show the launch
-// window hint during the first few runs as a tutorial.
+// Number of gameplays started. Used to auto-show the launch window hint during the first few runs
+// as a tutorial.
 const GAMEPLAYS_KEY = "astrocatch_gameplays";
 const TUTORIAL_GAMES = 3;
 const TUTORIAL_STARS = 15;
@@ -549,21 +504,17 @@ let gameplayCount = +(localStorage.getItem(GAMEPLAYS_KEY) || 0);
 let isTutorialRun = false;
 
 // ── Per-run seeded PRNG ───────────────────────────────────
-// Drives every spawn-time random decision (variant, position,
-// radius, planets, comets, binary phases). Each run captures
-// a 32-bit seed at init() — either lifted from the URL
-// (?seed=XYZ, base36) so a recipient can replay the sender's
-// run, or freshly random. The seed is exposed on
-// `currentRunSeed` for challenge-card payloads. Visual-flavor
-// randomness (particle bursts, death effects, comet wakes)
-// stays on Math.random() — those have no effect on the
-// challenge sequence and don't need to be reproducible.
+// Drives every spawn-time random decision (variant, position, radius, planets, comets, binary
+// phases). Each run captures a 32-bit seed at init() — either lifted from the URL (?seed=XYZ,
+// base36) so a recipient can replay the sender's run, or freshly random. The seed is exposed on
+// `currentRunSeed` for challenge-card payloads. Visual-flavor randomness (particle bursts, death
+// effects, comet wakes) stays on Math.random() — those have no effect on the challenge sequence and
+// don't need to be reproducible.
 let currentRunSeed = 0;
 let _runRngState = 0;
 function setRunSeed(s) {
   currentRunSeed = s >>> 0;
-  // mulberry32 init: any non-zero state works; mirrors
-  // renderer.js's bgStars init pattern.
+  // mulberry32 init: any non-zero state works; mirrors renderer.js's bgStars init pattern.
   _runRngState = (currentRunSeed * 0x9E3779B1 + 1) >>> 0;
 }
 function runRand() {
@@ -575,9 +526,8 @@ function runRand() {
 }
 
 // ── Per-run challenge-card stats ──────────────────────────
-// Updated incrementally by captureStar / die / comet-catch and
-// consumed by the death-screen challenge card. Reset on init,
-// continueRun, resumeFromSave so a fresh run starts clean.
+// Updated incrementally by captureStar / die / comet-catch and consumed by the death-screen
+// challenge card. Reset on init, continueRun, resumeFromSave so a fresh run starts clean.
 let runStats = {
   blazingCount: 0, quickCount: 0, slowCount: 0,
   cometsCaught: 0, streakPeak: 0,
@@ -595,46 +545,32 @@ function resetRunStats() {
   runStats.streakPeak = 0;
   runStats.deathCause = DEATH_CAUSES.unknown;
   for (const k of Object.keys(runStats.variants)) runStats.variants[k] = 0;
-  // If we're resuming a save where the score already exceeds the
-  // incoming challenge, treat the milestone as already crossed so
-  // the flash doesn't re-fire on the resumed frame. Fresh-start
-  // and continueRun paths set score=0 first, so this evaluates
-  // false there.
+  // If we're resuming a save where the score already exceeds the incoming challenge, treat the
+  // milestone as already crossed so the flash doesn't re-fire on the resumed frame. Fresh-start and
+  // continueRun paths set score=0 first, so this evaluates false there.
   challengeBeaten = !!(_incomingChallenge && score > _incomingChallenge.score);
 }
-// Once-per-run flag: flips true the first frame `score` exceeds
-// the incoming challenge's score, fires showChallengeBeatFlash().
-// Reset by resetRunStats() based on current score (see above).
+// Once-per-run flag: flips true the first frame `score` exceeds the incoming challenge's score,
+// fires showChallengeBeatFlash(). Reset by resetRunStats() based on current score (see above).
 let challengeBeaten = false;
-// Tracked ball speed, normalized to [0, 1] against MAX_SPEED,
-// fed to audio.setIntensity() each render frame so the music's
-// chord progression escalates as the player boosts faster.
-// Uses a decay-max tracker: each frame, either bump up to the
-// current instantaneous normalized speed (if higher) or decay
-// the previous value by SPEED_DECAY. This latches onto peaks
-// instead of averaging them away — the EMA approach we tried
-// first smoothed away the very boosts that should have been
+// Tracked ball speed, normalized to [0, 1] against MAX_SPEED, fed to audio.setIntensity() each
+// render frame so the music's chord progression escalates as the player boosts faster. Uses a
+// decay-max tracker: each frame, either bump up to the current instantaneous normalized speed (if
+// higher) or decay the previous value by SPEED_DECAY. This latches onto peaks instead of averaging
+// them away — the EMA approach we tried first smoothed away the very boosts that should have been
 // driving the intensity upward.
 let trackedSpeed = 0;
 const SPEED_DECAY = 0.992; // ~1.4 s half-life on a 60 Hz loop
-// Fast-launch streak: consecutive captures with a Quick or Blazing
-// bonus (i.e. bonus >= 2). Earns a multiplier on the per-capture
-// bonus — gentle ramp (half a step per streak increment) so the
-// high end stays rewarding without inflating scores to absurd
-// levels. Resets on a regular (non-fast) capture and on death.
+// Fast-launch streak: consecutive captures with a Quick or Blazing bonus (i.e. bonus >= 2). Earns a
+// multiplier on the per-capture bonus — gentle ramp (half a step per streak increment) so the high
+// end stays rewarding without inflating scores to absurd levels. Resets on a regular (non-fast)
+// capture and on death.
 let fastStreak = 0;
 const FAST_STREAK_CAP = 7;
-// Streak multiplier applied to the per-capture bonus:
-//   streak 0 → ×1  (no active streak)
-//   streak 1 → ×1  (first fast capture, unchanged from no-streak)
-//   streak 2 → ×1.5
-//   streak 3 → ×2
-//   streak 4 → ×2.5
-//   streak 5 → ×3
-//   streak 6 → ×3.5
-//   streak 7 → ×4  (cap)
-// Shared between captureStar scoring and the HUD so both always
-// agree on what "streak" means in user-facing numbers.
+// Streak multiplier applied to the per-capture bonus: streak 0 → ×1 (no active streak) streak 1 →
+// ×1 (first fast capture, unchanged from no-streak) streak 2 → ×1.5 streak 3 → ×2 streak 4 → ×2.5
+// streak 5 → ×3 streak 6 → ×3.5 streak 7 → ×4 (cap) Shared between captureStar scoring and the HUD
+// so both always agree on what "streak" means in user-facing numbers.
 function streakMultiplier(streak) {
   return streak >= 1 ? 1 + (streak - 1) * 0.5 : 1;
 }
@@ -648,11 +584,9 @@ let hasBoosted = false; // for the hint
 // ─────────────────────────────────────────────────────────────
 // Star generation — spawn probability table
 // ─────────────────────────────────────────────────────────────
-// Each row is a star-index control point; each column is a
-// weight for one variant. Weights linearly interpolate between
-// rows and plateau past the last row. Normalized at sample time,
-// so weights don't need to sum to 100. Tweak freely — add or
-// remove rows/columns, the code adapts.
+// Each row is a star-index control point; each column is a weight for one variant. Weights linearly
+// interpolate between rows and plateau past the last row. Normalized at sample time, so weights
+// don't need to sum to 100. Tweak freely — add or remove rows/columns, the code adapts.
 
 const SPAWN_TABLE_DEBUG = [
   { at: 0, plain: 1, binary: 0, bh: 0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
@@ -660,7 +594,7 @@ const SPAWN_TABLE_DEBUG = [
 ];
 
 const SPAWN_TABLE_GAME = [
-  //          plain  binary   bh  bhBinary  monolith  ringworld  pulsar  nebula  teapot  azazel
+  // plain binary bh bhBinary monolith ringworld pulsar nebula teapot azazel
   { at:  0,   plain: 100, binary:  0, bh:  0, bhBinary: 0, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
   { at:  5,   plain:  85, binary:  2, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 0, nebula: 0, teapot: 0, azazel: 0 },
   { at: 10,   plain:  83, binary:  3, bh:  2, bhBinary: 1, monolith: 0, ringworld: 0, pulsar: 2, nebula: 0, teapot: 0, azazel: 0 },
@@ -671,9 +605,8 @@ const SPAWN_TABLE_GAME = [
 
 const SPAWN_TABLE = SPAWN_TABLE_GAME;
 
-// Planets and comets are orthogonal to the variant roll.
-// Planets ramp in over the first PLANET_RAMP_STARS stars and only
-// attach to plain or BH variants — binaries' moving sub-stars
+// Planets and comets are orthogonal to the variant roll. Planets ramp in over the first
+// PLANET_RAMP_STARS stars and only attach to plain or BH variants — binaries' moving sub-stars
 // already occupy the orbit volume. Comets decorate any variant.
 const PLANET_PROB_MAX = 0.75;
 const PLANET_RAMP_STARS = 50;
@@ -725,60 +658,50 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     colorIdx,
     caught: false,
     pulse: 0,
-    // Visual variety: only ~half the stars get coronal streamers,
-    // so the ones that do stand out instead of every star looking
-    // identically spiky. The renderer reads these per instance.
+    // Visual variety: only ~half the stars get coronal streamers, so the ones that do stand out
+    // instead of every star looking identically spiky. The renderer reads these per instance.
     hasRays: runRand() < 0.5,
-    // Per-star granule count in [5, 8]. The coronal streamers
-    // (when hasRays is true) reuse this count since each streamer
-    // is rooted to a granule in the star fragment shader.
+    // Per-star granule count in [5, 8]. The coronal streamers (when hasRays is true) reuse this
+    // count since each streamer is rooted to a granule in the star fragment shader.
     nGran: 5 + Math.floor(runRand() * 4),
-    // Optional planets — see assignPlanets below. Most stars get
-    // none; the ones that do get 1–2. Planets perturb the ship
-    // orbit slightly via AC.physicsStep, but have no collision.
-    // starIdx < 0 signals "decorative star, never has planets"
-    // (used for the welcome-screen menu stars).
+    // Optional planets — see assignPlanets below. Most stars get none; the ones that do get 1–2.
+    // Planets perturb the ship orbit slightly via AC.physicsStep, but have no collision. starIdx <
+    // 0 signals "decorative star, never has planets" (used for the welcome-screen menu stars).
     planets: null,
-    // Optional comet — see assignComets. A highly eccentric
-    // Kepler orbit that's purely visual + a scoring opportunity.
+    // Optional comet — see assignComets. A highly eccentric Kepler orbit that's purely visual + a
+    // scoring opportunity.
     comets: null,
-    // Black hole flag — same gameplay as a normal star (orbit,
-    // capture, boost) but rendered with an event horizon,
-    // accretion disk, and gravitational lensing.
+    // Black hole flag — same gameplay as a normal star (orbit, capture, boost) but rendered with an
+    // event horizon, accretion disk, and gravitational lensing.
     isBlackHole: false,
-    // Binary flag — two sub-stars orbiting the COM. Physics uses
-    // the COM; crash detection checks both sub-stars.
+    // Binary flag — two sub-stars orbiting the COM. Physics uses the COM; crash detection checks
+    // both sub-stars.
     isBinary: false,
     binary: null,
-    // Monolith flag — classic 2001 3D slab rendered via
-    // raymarched box. Same physics as a normal star.
+    // Monolith flag — classic 2001 3D slab rendered via raymarched box. Same physics as a normal
+    // star.
     isMonolith: false,
     // Ringworld flag — sun with a tumbling earth-textured band.
     isRingworld: false,
-    // Number of shadow-plate/night sectors (0-7). 0 = no plates,
-    // no shadows, no night-side city lights. Only meaningful
-    // when isRingworld is true.
+    // Number of shadow-plate/night sectors (0-7). 0 = no plates, no shadows, no night-side city
+    // lights. Only meaningful when isRingworld is true.
     ringPlateCount: 0,
-    // Pulsar flag — neutron-star body with two opposed lighthouse
-    // beams sweeping a magnetic axis. Same physics as a normal star.
+    // Pulsar flag — neutron-star body with two opposed lighthouse beams sweeping a magnetic axis.
+    // Same physics as a normal star.
     isPulsar: false,
-    // nebula flag — supernova remnant: bright pulsar core
-    // surrounded by procedural synchrotron filaments. Same physics
-    // as a normal star.
+    // nebula flag — supernova remnant: bright pulsar core surrounded by procedural synchrotron
+    // filaments. Same physics as a normal star.
     isNebula: false,
-    // Teapot flag — Russell's china teapot, sphere-traced SDF.
-    // Same physics as a normal star. Rare Easter-egg variant
-    // gated to deep runs (star index >= ~50).
+    // Teapot flag — Russell's china teapot, sphere-traced SDF. Same physics as a normal star. Rare
+    // Easter-egg variant gated to deep runs (star index >= ~50).
     isTeapot: false,
-    // Azazel flag — demon manifesting through a rip in space.
-    // Body silhouette + radial spikes + 3 face tiers. Same
-    // physics as a normal star. Rare deep-run variant.
+    // Azazel flag — demon manifesting through a rip in space. Body silhouette + radial spikes + 3
+    // face tiers. Same physics as a normal star. Rare deep-run variant.
     isAzazel: false,
   };
   if (starIdx !== undefined && starIdx >= 0) {
-    // If addNextStar already rolled the variant (so it could
-    // claim a larger r-min for pulsars), reuse that decision
-    // instead of rolling a fresh — and possibly different — one.
+    // If addNextStar already rolled the variant (so it could claim a larger r-min for pulsars),
+    // reuse that decision instead of rolling a fresh — and possibly different — one.
     const variant = presetVariant !== undefined
       ? presetVariant
       : pickVariant(starIdx);
@@ -793,8 +716,8 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
       s.isMonolith = true;
     } else if (variant === "ringworld") {
       s.isRingworld = true;
-      // Random 0-7 plates. 0 means no night/day sectors —
-      // roughly 1 in 8 ringworlds is plate-free for variety.
+      // Random 0-7 plates. 0 means no night/day sectors — roughly 1 in 8 ringworlds is plate-free
+      // for variety.
       s.ringPlateCount = Math.floor(runRand() * 8);
     } else if (variant === "pulsar") {
       s.isPulsar = true;
@@ -805,9 +728,8 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
     } else if (variant === "azazel") {
       s.isAzazel = true;
     }
-    // Planets: orthogonal roll, allowed on plain and bh variants
-    // only. Ramps up with star index. Skipped on variants whose
-    // visual or physical setup already occupies the orbit volume.
+    // Planets: orthogonal roll, allowed on plain and bh variants only. Ramps up with star index.
+    // Skipped on variants whose visual or physical setup already occupies the orbit volume.
     if (!s.isBinary && !s.isMonolith && !s.isRingworld
         && !s.isPulsar && !s.isNebula && !s.isTeapot
         && !s.isAzazel) {
@@ -816,11 +738,9 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
         assignPlanets(s);
       }
     }
-    // Comet: orthogonal roll, applied to any variant except
-    // monoliths (keeps them alien/alone) and teapots (the Russell
-    // gag reads cleanest with the teapot solo on screen). Pulsars
-    // and nebulae are fine — comets weaving through filaments /
-    // past a pulsar reads naturally.
+    // Comet: orthogonal roll, applied to any variant except monoliths (keeps them alien/alone) and
+    // teapots (the Russell gag reads cleanest with the teapot solo on screen). Pulsars and nebulae
+    // are fine — comets weaving through filaments / past a pulsar reads naturally.
     if (!s.isMonolith && !s.isTeapot && !s.isAzazel
         && starIdx >= COMET_MIN_STAR
         && runRand() < COMET_PROB) {
@@ -830,35 +750,26 @@ function makeStar(x, y, r, colorIdx, starIdx, presetVariant) {
   return s;
 }
 
-// Planet probability ramps linearly from 0% at star 0 to
-// PLANET_MAX_PROB at PLANET_RAMP_STARS and beyond. The first
-// star never has a planet (probability is exactly 0), the
-// ramp is gentle so early captures stay clean, and by the
-// time a player has threaded their way through ~30 stars the
-// chance levels off at the steady-state rate. Each star that
-// passes the probability check gets 1–2 planets. Planets
-// orbit the parent at a constant angular velocity (positions
-// are a pure function of physics frame) and exert weak
-// gravity — ~1.5% of the parent's GM — so the ship wobbles
-// noticeably on close passes but the star is always the
-// dominant body. Planets have no collision; Plummer softening
-// in the physics integrator keeps the 1/r² accel from
-// diverging inside the planet, so prediction stays stable
-// even on a near-hit.
+// Planet probability ramps linearly from 0% at star 0 to PLANET_MAX_PROB at PLANET_RAMP_STARS and
+// beyond. The first star never has a planet (probability is exactly 0), the ramp is gentle so early
+// captures stay clean, and by the time a player has threaded their way through ~30 stars the chance
+// levels off at the steady-state rate. Each star that passes the probability check gets 1–2
+// planets. Planets orbit the parent at a constant angular velocity (positions are a pure function
+// of physics frame) and exert weak gravity — ~1.5% of the parent's GM — so the ship wobbles
+// noticeably on close passes but the star is always the dominant body. Planets have no collision;
+// Plummer softening in the physics integrator keeps the 1/r² accel from diverging inside the
+// planet, so prediction stays stable even on a near-hit.
 function assignPlanets(s) {
   const nPlanets = 1 + (runRand() < 0.25 ? 1 : 0);
   const planets = [];
   for (let i = 0; i < nPlanets; i++) {
-    // Orbit radius: 1.9–2.8 R of the parent plus a small
-    // per-planet stagger, so two planets on the same star
-    // don't overlap. That keeps planets inside the ship's
-    // likely orbit band so they're visible AND dynamically
-    // relevant on most captures.
+    // Orbit radius: 1.9–2.8 R of the parent plus a small per-planet stagger, so two planets on the
+    // same star don't overlap. That keeps planets inside the ship's likely orbit band so they're
+    // visible AND dynamically relevant on most captures.
     const orbitR = s.r * (1.9 + runRand() * 0.9 + i * 0.4);
-    // Period in physics frames. At PHYSICS_HZ = 120 this is
-    // roughly 5–12 seconds per revolution — slow enough to
-    // feel graceful, fast enough to see movement across one
-    // capture's worth of orbit time.
+    // Period in physics frames. At PHYSICS_HZ = 120 this is roughly 5–12 seconds per revolution —
+    // slow enough to feel graceful, fast enough to see movement across one capture's worth of orbit
+    // time.
     const periodFrames = 600 + runRand() * 840;
     const spin = runRand() < 0.5 ? 1 : -1;
     const planetR = 3 + runRand() * 3;
@@ -870,10 +781,8 @@ function assignPlanets(s) {
       colorIdx: Math.floor(runRand() * PALETTE_LEN),
       // 1.5% of the parent's GM — a perturbation, not a body.
       gm: s.gm * 0.015,
-      // Plummer softening length squared. At ~2× planet radius
-      // the force is already significantly softened; inside
-      // the planet it's effectively capped. No divergence on
-      // a direct hit.
+      // Plummer softening length squared. At ~2× planet radius the force is already significantly
+      // softened; inside the planet it's effectively capped. No divergence on a direct hit.
       softR2: (planetR * 2) * (planetR * 2),
     });
   }
@@ -881,39 +790,32 @@ function assignPlanets(s) {
 }
 
 // ─── Comets ──────────────────────────────────────────────
-// ~25% of stars (from index 5+) get a comet — a small body
-// on a highly eccentric Kepler orbit around its parent star.
-// Comets do NOT affect ship physics at all; they're purely
-// visual + a scoring opportunity. The orbit direction is
-// chosen by scanning 8 directions to find the biggest gap
-// between neighboring stars, so the comet's apoapsis always
-// extends into free space rather than toward another star.
+// ~25% of stars (from index 5+) get a comet — a small body on a highly eccentric Kepler orbit
+// around its parent star. Comets do NOT affect ship physics at all; they're purely visual + a
+// scoring opportunity. The orbit direction is chosen by scanning 8 directions to find the biggest
+// gap between neighboring stars, so the comet's apoapsis always extends into free space rather than
+// toward another star.
 
-// Kepler equation solver: given mean anomaly M and eccentricity
-// e, returns eccentric anomaly E via Newton's method. 8
-// iterations handles e up to ~0.93 reliably; a convergence
-// guard breaks early if |ΔE| < 1e-8 so low-e orbits don't
-// waste cycles. Called once per visible comet per render frame
-// — negligible cost.
-// solveKepler + cometPosition + appendCometBatch live in
-// star-rendering.js so debug.js shares the same code.
+// Kepler equation solver: given mean anomaly M and eccentricity e, returns eccentric anomaly E via
+// Newton's method. 8 iterations handles e up to ~0.93 reliably; a convergence guard breaks early if
+// |ΔE| < 1e-8 so low-e orbits don't waste cycles. Called once per visible comet per render frame —
+// negligible cost. solveKepler + cometPosition + appendCometBatch live in star-rendering.js so
+// debug.js shares the same code.
 
 const COMET_SCORE_RADIUS = 22; // px — close-pass threshold
 const COMET_BONUS = 2;
 
-// Black holes use the same GM as a normal star of the same r,
-// but visually the event horizon is smaller — a compact object
-// with a big gravity well. This scale applies to the rendered
-// event horizon, accretion disk, clumps, and lensing radius.
-// Physics (collision, capture, gravity) still uses the full r.
+// Black holes use the same GM as a normal star of the same r, but visually the event horizon is
+// smaller — a compact object with a big gravity well. This scale applies to the rendered event
+// horizon, accretion disk, clumps, and lensing radius. Physics (collision, capture, gravity) still
+// uses the full r.
 const BH_VISUAL_SCALE = 0.5;
 
 function assignComets(s, starIdx) {
 
-  // Scan 8 directions to find the one with the most room — the
-  // deepest gap between neighboring stars. That's where the
-  // comet's apoapsis will extend. A 60° half-cone per sample
-  // gives overlapping coverage of the full circle.
+  // Scan 8 directions to find the one with the most room — the deepest gap between neighboring
+  // stars. That's where the comet's apoapsis will extend. A 60° half-cone per sample gives
+  // overlapping coverage of the full circle.
   const NUM_DIRS = 8;
   const CONE_HALF = Math.PI / 3;
   let bestAngle = 0;
@@ -939,11 +841,10 @@ function assignComets(s, starIdx) {
     }
   }
 
-  // Apoapsis extends into the best direction, capped at 45% of
-  // the clearance (or 600 px hard cap). Periapsis just outside
-  // the star's visual disk. Require apo:peri > 2.5 for a
-  // properly eccentric orbit — if no direction has enough room,
-  // skip the comet rather than drawing a near-circular one.
+  // Apoapsis extends into the best direction, capped at 45% of the clearance (or 600 px hard cap).
+  // Periapsis just outside the star's visual disk. Require apo:peri > 2.5 for a properly eccentric
+  // orbit — if no direction has enough room, skip the comet rather than drawing a near-circular
+  // one.
   const maxApo = Math.min(bestClearance * 0.45, 600);
   const peri = s.r * (1.05 + runRand() * 0.2);
   if (maxApo < peri * 2.5) return; // not eccentric enough
@@ -951,8 +852,7 @@ function assignComets(s, starIdx) {
   const a = (maxApo + peri) / 2;
   const e = (maxApo - peri) / (maxApo + peri);
 
-  // omega: apoapsis at bestAngle → omega = bestAngle - π,
-  // plus a small random spread.
+  // omega: apoapsis at bestAngle → omega = bestAngle - π, plus a small random spread.
   const omega = bestAngle - Math.PI + (runRand() - 0.5) * 0.3;
   // Period via Kepler's third law in physics-frame units.
   const T = Math.PI * 2 * Math.sqrt(a * a * a / s.gm);
@@ -964,9 +864,8 @@ function assignComets(s, starIdx) {
     phase: runRand() * Math.PI * 2,
     radius: 2 + runRand() * 2,
     tailLength: 25 + runRand() * 25,
-    // 1–3 syndynes (dust-size populations) per comet. More
-    // syndynes = wider, richer fan-shaped tail. Fewer = a
-    // thinner, simpler streak.
+    // 1–3 syndynes (dust-size populations) per comet. More syndynes = wider, richer fan-shaped
+    // tail. Fewer = a thinner, simpler streak.
     numSyndynes: 1 + Math.floor(runRand() * 3),
     scored: false,
   }];
@@ -977,8 +876,8 @@ function minSeparation(ra, rb) {
   return SAFE_SEP * Math.max(ra, rb);
 }
 
-// True iff a candidate position (x,y,r) respects the separation
-// invariant against every existing star.
+// True iff a candidate position (x,y,r) respects the separation invariant against every existing
+// star.
 function separationOk(x, y, r) {
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
@@ -991,8 +890,8 @@ function separationOk(x, y, r) {
   return true;
 }
 
-// Binary star helpers (assignBinary, binaryPositions) live in
-// star-rendering.js so debug.js shares the same code.
+// Binary star helpers (assignBinary, binaryPositions) live in star-rendering.js so debug.js shares
+// the same code.
 
 function addNextStar() {
   const prev = stars[stars.length - 1];
@@ -1000,20 +899,17 @@ function addNextStar() {
   // Difficulty ramps over the first ~60 captures, then plateaus.
   const difficulty = Math.min(n / 60, 1);
 
-  // Pre-roll the variant so pulsars can claim a larger minimum
-  // radius — their visible core is only 0.32× v_baseR, so the
-  // default r-min of 18 produced ~6 px bodies that vanished
-  // against the surrounding lens flare. The decided variant is
-  // passed into makeStar to avoid rolling pickVariant twice.
+  // Pre-roll the variant so pulsars can claim a larger minimum radius — their visible core is only
+  // 0.32× v_baseR, so the default r-min of 18 produced ~6 px bodies that vanished against the
+  // surrounding lens flare. The decided variant is passed into makeStar to avoid rolling
+  // pickVariant twice.
   const variant = pickVariant(n);
-  // Pulsars and nebulae need a bigger minimum radius — pulsars
-  // because the body is only 0.32× v_baseR, nebulae because the
-  // shell network needs room to develop visible structure (the
-  // nebula extends to ~3× v_baseR). Teapots get the biggest min
-  // because they're a rare Easter-egg feature: when one shows up
-  // it should read clearly as a porcelain teapot, with spout +
-  // handle + lid all legible. At r=40 the bounding sphere is
-  // ~70 px and the spout tip (0.05 × r ≈ 2 px) reads cleanly.
+  // Pulsars and nebulae need a bigger minimum radius — pulsars because the body is only 0.32×
+  // v_baseR, nebulae because the shell network needs room to develop visible structure (the nebula
+  // extends to ~3× v_baseR). Teapots get the biggest min because they're a rare Easter-egg feature:
+  // when one shows up it should read clearly as a porcelain teapot, with spout + handle + lid all
+  // legible. At r=40 the bounding sphere is ~70 px and the spout tip (0.05 × r ≈ 2 px) reads
+  // cleanly.
   const minR =
     (variant === "azazel")                         ? 56 :
     (variant === "teapot")                         ? 40 :
@@ -1026,28 +922,24 @@ function addNextStar() {
   const sizeMul = variant === "azazel" ? 1.5 : 1.0;
   const r = Math.max(minR, ((34 + runRand() * 24) - difficulty * 14) * sizeMul);
 
-  // Base distance range. As difficulty grows we push the next star
-  // further away (harder to reach) AND widen the angle cone (harder
-  // to aim). The hard minimum from the separation invariant still
-  // applies as a safety floor so neighbouring orbits can't steal
-  // each other, but the base values are now set high enough that
-  // they consistently dominate hardMin even at idx 1 (where the
-  // initial big star pushes hardMin to ~310). This makes distance
-  // grow monotonically with `difficulty` instead of being clamped
-  // by the radius-driven floor early game.
+  // Base distance range. As difficulty grows we push the next star further away (harder to reach)
+  // AND widen the angle cone (harder to aim). The hard minimum from the separation invariant still
+  // applies as a safety floor so neighbouring orbits can't steal each other, but the base values
+  // are now set high enough that they consistently dominate hardMin even at idx 1 (where the
+  // initial big star pushes hardMin to ~310). This makes distance grow monotonically with
+  // `difficulty` instead of being clamped by the radius-driven floor early game.
   const hardMin = minSeparation(r, prev.r) + 8;
   const baseMin = 320 + difficulty * 240;  // 320 → 560
   const baseMax = 400 + difficulty * 280;  // 400 → 680
   const minD = Math.max(baseMin, hardMin);
   const maxD = Math.max(minD + 80, baseMax);
 
-  // Try several candidate positions in the upward cone; accept the
-  // first that respects the separation invariant against every star.
+  // Try several candidate positions in the upward cone; accept the first that respects the
+  // separation invariant against every star.
   for (let tries = 0; tries < 40; tries++) {
     const dist = minD + runRand() * (maxD - minD);
-    // 45° half-cone early → ~85° at max difficulty. On landscape
-    // screens, widen the cone so stars use the horizontal space
-    // instead of clustering in a narrow vertical column.
+    // 45° half-cone early → ~85° at max difficulty. On landscape screens, widen the cone so stars
+    // use the horizontal space instead of clustering in a narrow vertical column.
     const aspectBoost = W > H ? (W / H - 1) * 0.3 : 0;
     const halfSpread = Math.PI * 0.25 + difficulty * Math.PI * 0.22 + aspectBoost;
     const angle = -Math.PI / 2 + (runRand() - 0.5) * 2 * halfSpread;
@@ -1070,17 +962,14 @@ function addNextStar() {
 // ─────────────────────────────────────────────────────────────
 // Init / reset
 // ─────────────────────────────────────────────────────────────
-// The parallax background starfield lives entirely inside
-// renderer.js — it's generated once per setViewport and drawn
-// via the circle program with per-instance depth + twinkle.
-// Nothing gameplay-side to maintain.
+// The parallax background starfield lives entirely inside renderer.js — it's generated once per
+// setViewport and drawn via the circle program with per-instance depth + twinkle. Nothing
+// gameplay-side to maintain.
 
-// 1–3 decorative stars scattered around the welcome overlay.
-// They use the same makeStar() shape as gameplay stars, so they
-// animate identically through the same WebGL `star` shader —
-// corona, streamers, granules, pulse, all live. Positions avoid
-// a rectangle centered on the overlay text so the glow doesn't
-// fight the title/button.
+// 1–3 decorative stars scattered around the welcome overlay. They use the same makeStar() shape as
+// gameplay stars, so they animate identically through the same WebGL `star` shader — corona,
+// streamers, granules, pulse, all live. Positions avoid a rectangle centered on the overlay text so
+// the glow doesn't fight the title/button.
 function initMenuStars() {
   menuStars = [];
   const n = 1 + Math.floor(Math.random() * 3); // 1..3
@@ -1116,8 +1005,8 @@ function initMenuStars() {
 function init() {
   paused = false;
   syncPausedIndicator();
-  // Tutorial: auto-show the launch window hint on the first
-  // few gameplays. Player can still toggle it off mid-run.
+  // Tutorial: auto-show the launch window hint on the first few gameplays. Player can still toggle
+  // it off mid-run.
   isTutorialRun = gameplayCount < TUTORIAL_GAMES;
   if (isTutorialRun) showLaunchWindow = true;
   gameplayCount++;
@@ -1126,8 +1015,8 @@ function init() {
   //   1. #… challenge code with embedded seed (full challenge URL).
   //   2. ?seed=XYZ legacy/explicit seed param.
   //   3. Fresh random — one per run, ready to send.
-  // (1) and (2) stick across retries so the player can re-attempt
-  // the same challenge without manipulating the URL.
+  // (1) and (2) stick across retries so the player can re-attempt the same challenge without
+  // manipulating the URL.
   if (_incomingChallenge && _incomingChallenge.seed != null) {
     setRunSeed(_incomingChallenge.seed || 1);
   } else {
@@ -1156,9 +1045,8 @@ function init() {
   audio.setDemonMode(false);
   resetRunStats();
 
-  // First star: intentionally larger than later stars so the
-  // player's starting orbit has a longer period (period scales
-  // with orbitR) — gentler pace for the first tap.
+  // First star: intentionally larger than later stars so the player's starting orbit has a longer
+  // period (period scales with orbitR) — gentler pace for the first tap.
   stars.push(makeStar(W / 2, H * 0.7, 58, 0, 0));
   for (let i = 0; i < 6; i++) addNextStar();
 
@@ -1183,21 +1071,18 @@ function init() {
     captureMinVy: 0,
     framesInOrbit: 0,       // physics frames spent in the current orbit (reset on capture)
     pendingBonus: 1,        // multiplier earned at boost time, applied at capture
-    // Monotonic physics frame counter, incremented inside
-    // AC.physicsStep. Shared between live physics and the
-    // prediction integrator so planet positions at the same
-    // simulated moment agree exactly, which is what keeps the
-    // "clean capture never crashes" invariant intact under
-    // planet gravity perturbation.
+    // Monotonic physics frame counter, incremented inside AC.physicsStep. Shared between live
+    // physics and the prediction integrator so planet positions at the same simulated moment agree
+    // exactly, which is what keeps the "clean capture never crashes" invariant intact under planet
+    // gravity perturbation.
     frame: 0,
   };
-  // Reset projected-launch-window throttle — module-scope state
-  // persists across runs even though `ball` is rebuilt fresh.
+  // Reset projected-launch-window throttle — module-scope state persists across runs even though
+  // `ball` is rebuilt fresh.
   lastProjectedLaunchWindowFrame = -1;
   computeLaunchWindow();
-  // Rolling-mean FPS counter (debug, ?fps=1) — clear the sample
-  // queue so a long welcome-screen idle doesn't carry into the
-  // first seconds of gameplay.
+  // Rolling-mean FPS counter (debug, ?fps=1) — clear the sample queue so a long welcome-screen idle
+  // doesn't carry into the first seconds of gameplay.
   _fpsSamples.length = 0;
   _fpsWindowMs = 0;
   _fpsLastDisplayMs = 0;
@@ -1206,35 +1091,30 @@ function init() {
   updateSub();
   document.getElementById("score-display").style.display = "block";
   document.getElementById("hint").classList.add("on");
-  // Fire up the generative music layer. Scheduler runs until
-  // die() turns it back off. Idempotent — calling startMusic
-  // again mid-run is a no-op.
+  // Fire up the generative music layer. Scheduler runs until die() turns it back off. Idempotent —
+  // calling startMusic again mid-run is a no-op.
   audio.startMusic();
 }
 
-// Resume after death from the last captured star. Preserves
-// the star field and the ship's position; resets score, streak,
-// and all transient visual buffers so the run feels like a
-// fresh attempt against the same terrain.
+// Resume after death from the last captured star. Preserves the star field and the ship's position;
+// resets score, streak, and all transient visual buffers so the run feels like a fresh attempt
+// against the same terrain.
 function continueRun() {
   paused = false;
   syncPausedIndicator();
-  // Anchor on the star the ball was orbiting at death. If the
-  // index points off the end (shouldn't happen), fall back to
-  // the last star.
+  // Anchor on the star the ball was orbiting at death. If the index points off the end (shouldn't
+  // happen), fall back to the last star.
   let anchorIdx = ball ? ball.currentStar : 0;
   if (anchorIdx < 0 || anchorIdx >= stars.length) {
     anchorIdx = stars.length - 1;
   }
-  // Preserve the physics frame counter — comets, binary sub-
-  // stars, and planets all advance via `frame * omega + phase`,
-  // so resetting it would snap every orbital body back to its
-  // phase-zero position, which looks like a jump.
+  // Preserve the physics frame counter — comets, binary sub- stars, and planets all advance via
+  // `frame * omega + phase`, so resetting it would snap every orbital body back to its phase-zero
+  // position, which looks like a jump.
   const priorFrame = ball ? ball.frame : 0;
   const s = stars[anchorIdx];
-  // Clear the caught flag so the anchor star renders/plays as
-  // the active one again, and revive any stripped systems are
-  // left as-is (caught past stars stay dim — that's fine).
+  // Clear the caught flag so the anchor star renders/plays as the active one again, and revive any
+  // stripped systems are left as-is (caught past stars stay dim — that's fine).
   s.caught = false;
   trail = [];
   particles = [];
@@ -1247,23 +1127,19 @@ function continueRun() {
   trackedSpeed = 0;
   audio.setStreak(0);
   resetRunStats();
-  // Re-establish demon mode based on the anchor star — `die()`
-  // cleared it but if we're respawning around an Azazel the
-  // dark progression should resume.
+  // Re-establish demon mode based on the anchor star — `die()` cleared it but if we're respawning
+  // around an Azazel the dark progression should resume.
   audio.setDemonMode(!!stars[anchorIdx].isAzazel);
   hasBoosted = false;
-  // Make sure there's enough runway of stars ahead; init() seeds
-  // 6, replicate that buffer past the anchor if trimmed.
+  // Make sure there's enough runway of stars ahead; init() seeds 6, replicate that buffer past the
+  // anchor if trimmed.
   while (stars.length - anchorIdx - 1 < 6) addNextStar();
-  // Re-orbit the ball around the anchor star. Pick a radius
-  // that clears the variant's visible structure with comfortable
-  // margin against crash:
+  // Re-orbit the ball around the anchor star. Pick a radius that clears the variant's visible
+  // structure with comfortable margin against crash:
   //   - Binaries (including BH binaries): worst-case sub-star
-  //     reach is ~2.4 × r (low q, small sep), so 3.0 × r gives
-  //     roughly one sub-star-radius of clearance on a circular
-  //     orbit. The physics peri floor of 2.2 × r is for eccentric
-  //     capture orbits, not circular respawn orbits — don't
-  //     conflate the two.
+  // reach is ~2.4 × r (low q, small sep), so 3.0 × r gives roughly one sub-star-radius of clearance
+  // on a circular orbit. The physics peri floor of 2.2 × r is for eccentric capture orbits, not
+  // circular respawn orbits — don't conflate the two.
   //   - Ringworlds render a band at 2.6 × r; sit outside it.
   //   - Plain / BH / monolith: 2.5 × r is a comfortable default.
   let orbitMult = 2.5;
@@ -1305,14 +1181,13 @@ function continueRun() {
   audio.startMusic();
 }
 
-// Rebuild live state from a saved game and then hand off to the
-// same re-orbit path continueRun uses.
+// Rebuild live state from a saved game and then hand off to the same re-orbit path continueRun
+// uses.
 function resumeFromSave(data) {
   paused = false;
   syncPausedIndicator();
-  // Rehydrate stars. Past stars are {x,y,r,colorIdx,caught}
-  // stubs; fill in sensible defaults so draw() doesn't choke on
-  // missing fields.
+  // Rehydrate stars. Past stars are {x,y,r,colorIdx,caught} stubs; fill in sensible defaults so
+  // draw() doesn't choke on missing fields.
   stars = data.stars.map((raw) => ({
     x: raw.x, y: raw.y, r: raw.r,
     gm: raw.gm != null ? raw.gm : AC.starGM(raw.r),
@@ -1334,14 +1209,12 @@ function resumeFromSave(data) {
     isTeapot: !!raw.isTeapot,
     isAzazel: !!raw.isAzazel,
   }));
-  // Re-orbit the ball around the saved anchor star with a fresh
-  // circular orbit — same math as continueRun. The saved x/y/vx/
-  // vy were the crash-moment values; reusing them would respawn
-  // the ship inside the crash site.
+  // Re-orbit the ball around the saved anchor star with a fresh circular orbit — same math as
+  // continueRun. The saved x/y/vx/ vy were the crash-moment values; reusing them would respawn the
+  // ship inside the crash site.
   const bd = data.ball;
-  // Defensive clamp — a corrupted or schema-skewed save could
-  // have currentStar out of range. Without this, stars[bd.cs]
-  // would be undefined and the next flag read crashes.
+  // Defensive clamp — a corrupted or schema-skewed save could have currentStar out of range.
+  // Without this, stars[bd.cs] would be undefined and the next flag read crashes.
   const anchorIdx = Math.max(
     0, Math.min(bd.currentStar | 0, stars.length - 1)
   );
@@ -1369,25 +1242,23 @@ function resumeFromSave(data) {
     pendingBonus: 1,
     frame: bd.frame || 0,
   };
-  // The anchor star is now the ship's orbit target again, so
-  // unmark it as caught (it might have been the last captured
-  // star and therefore flagged as caught=true for the past-
-  // ember render path).
+  // The anchor star is now the ship's orbit target again, so unmark it as caught (it might have
+  // been the last captured star and therefore flagged as caught=true for the past- ember render
+  // path).
   anchor.caught = false;
   score = data.score || 0;
   starsVisited = data.starsVisited || 0;
   fastStreak = data.fastStreak || 0;
   trackedSpeed = data.trackedSpeed || 0;
   hasBoosted = !!data.hasBoosted;
-  // Snap camera to the anchor, not the saved camY (which was
-  // captured at death and may be scrolled to a bad spot).
+  // Snap camera to the anchor, not the saved camY (which was captured at death and may be scrolled
+  // to a bad spot).
   camY = -(anchor.y - H * CAM_FOCUS_Y);
   camTargetY = camY;
   audio.setStreak(fastStreak);
   audio.setDemonMode(!!anchor.isAzazel);
   resetRunStats();
-  // Clear all transient buffers (trail/particles/shockwaves/
-  // replay) that we don't save.
+  // Clear all transient buffers (trail/particles/shockwaves/ replay) that we don't save.
   trail = [];
   particles = [];
   shockwaves = [];
@@ -1406,8 +1277,8 @@ function resumeFromSave(data) {
   document.getElementById("score-display").style.display = "block";
   document.getElementById("hint").classList.add("on");
   audio.startMusic();
-  // One-shot: consume the save so a later death-during-resume
-  // writes a fresh snapshot rather than stacking atop the old one.
+  // One-shot: consume the save so a later death-during-resume writes a fresh snapshot rather than
+  // stacking atop the old one.
   clearSave();
 }
 
@@ -1422,14 +1293,12 @@ function updateSub() {
   document.getElementById("sub").textContent = text;
 }
 
-// All gravitational physics + capture logic is in physics.js.
-// We keep the existing function names below as thin wrappers so
-// the rest of the file (drawing, input, etc.) doesn't have to
-// change. Both modules read/write the same `stars` and `ball`
-// objects, so calling AC.* directly is fine.
+// All gravitational physics + capture logic is in physics.js. We keep the existing function names
+// below as thin wrappers so the rest of the file (drawing, input, etc.) doesn't have to change.
+// Both modules read/write the same `stars` and `ball` objects, so calling AC.* directly is fine.
 
-// One physics frame: free flight (always) + capture-burn check.
-// Both live in physics.js and operate on `stars` and `ball`.
+// One physics frame: free flight (always) + capture-burn check. Both live in physics.js and operate
+// on `stars` and `ball`.
 function physicsStep() {
   const wasInTransit = ball.pendingCapture >= 0;
   AC.physicsStep(stars, ball);
@@ -1439,20 +1308,18 @@ function physicsStep() {
     // Burn just landed the ball on a circular orbit at peri.
     captureStar(ball.pendingCapture);
   } else if (wasInTransit && ball.pendingCapture < 0) {
-    // Transfer timed out (TRANSFER_TIMEOUT) without crossing peri:
-    // physics cleared pendingCapture but captureStar never ran. Drop
-    // any queued in-transit boost so it can't fire on a future capture
-    // the player may make many seconds later.
+    // Transfer timed out (TRANSFER_TIMEOUT) without crossing peri: physics cleared pendingCapture
+    // but captureStar never ran. Drop any queued in-transit boost so it can't fire on a future
+    // capture the player may make many seconds later.
     ball.queuedBoost = false;
     ball.projectedLaunchWindow = null;
   }
 }
 
-// Current orbit's natural period (frames). Computed from energy
-// E = v²/2 − GM/r and Kepler's third law T = 2π√(a³/GM) where
-// a = -GM/(2E). Returns Infinity for unbound orbits, so an
-// energetic transfer trajectory is treated as "no period" and
-// any boost during it is "more than one rotation" (no bonus).
+// Current orbit's natural period (frames). Computed from energy E = v²/2 − GM/r and Kepler's third
+// law T = 2π√(a³/GM) where a = -GM/(2E). Returns Infinity for unbound orbits, so an energetic
+// transfer trajectory is treated as "no period" and any boost during it is "more than one rotation"
+// (no bonus).
 function currentOrbitPeriod() {
   if (!ball || !stars[ball.currentStar]) return Infinity;
   const s = stars[ball.currentStar];
@@ -1471,12 +1338,10 @@ function currentOrbitPeriod() {
 // Collision / capture / death checks
 // ─────────────────────────────────────────────────────────────
 function checkCollisions() {
-  // Crash into any star surface. Scoring no longer fires from
-  // radius proximity — it fires from captureStar() at the end of
-  // the retrograde burn, which prediction armed on the tap.
-  // Skip past stars (i < ball.currentStar) — the ship has already
-  // captured them and shouldn't crash into one if a perturbed
-  // trajectory swings back near it.
+  // Crash into any star surface. Scoring no longer fires from radius proximity — it fires from
+  // captureStar() at the end of the retrograde burn, which prediction armed on the tap. Skip past
+  // stars (i < ball.currentStar) — the ship has already captured them and shouldn't crash into one
+  // if a perturbed trajectory swings back near it.
   const frame = ball ? ball.frame || 0 : 0;
   const fromIdx = ball ? ball.currentStar : 0;
   for (let i = fromIdx; i < stars.length; i++) {
@@ -1511,18 +1376,15 @@ function checkCollisions() {
   }
 }
 
-// Scoring the capture. Called from physicsStep when the burn
-// completes: the ball is already on its new circular orbit, so
-// we only handle scoring, visuals, and promoting the primary.
+// Scoring the capture. Called from physicsStep when the burn completes: the ball is already on its
+// new circular orbit, so we only handle scoring, visuals, and promoting the primary.
 function captureStar(idx) {
   const s = stars[idx];
   ball.pendingCapture = -1;
 
-  // Strip planets from the star we're leaving. Past stars no
-  // longer contribute to gravity or render — the ship never
-  // orbits back to them, so their planetary systems can be
-  // discarded. computePlanetPositions and the draw loop both
-  // short-circuit on a null `planets` field.
+  // Strip planets from the star we're leaving. Past stars no longer contribute to gravity or render
+  // — the ship never orbits back to them, so their planetary systems can be discarded.
+  // computePlanetPositions and the draw loop both short-circuit on a null `planets` field.
   const leavingIdx = ball.currentStar;
   if (leavingIdx !== idx && stars[leavingIdx]) {
     stars[leavingIdx].planets = null;
@@ -1536,10 +1398,9 @@ function captureStar(idx) {
     stars[leavingIdx].isNebula = false;
     stars[leavingIdx].isTeapot = false;
     stars[leavingIdx].isAzazel = false;
-    // Mark the leaving star as caught so it renders as a dim
-    // past ember. Normally already true (captureStar set it
-    // when we arrived), but not for star 0, which was never
-    // captured — just the initial spawn.
+    // Mark the leaving star as caught so it renders as a dim past ember. Normally already true
+    // (captureStar set it when we arrived), but not for star 0, which was never captured — just the
+    // initial spawn.
     stars[leavingIdx].caught = true;
   }
 
@@ -1548,11 +1409,10 @@ function captureStar(idx) {
   ball.currentStar = idx;
   // Apply the quick-launch bonus that was locked in at boost time.
   const bonus = ball.pendingBonus || 1;
-  // Fast-launch streak — consecutive Quick/Blazing captures stack
-  // a multiplier on top of the per-capture bonus (see
-  // streakMultiplier comment block for the ramp). A regular
-  // (non-fast) capture breaks the streak. Earned score is always
-  // rounded to an integer so players see whole numbers tick up.
+  // Fast-launch streak — consecutive Quick/Blazing captures stack a multiplier on top of the
+  // per-capture bonus (see streakMultiplier comment block for the ramp). A regular (non-fast)
+  // capture breaks the streak. Earned score is always rounded to an integer so players see whole
+  // numbers tick up.
   if (bonus >= 2) {
     fastStreak = Math.min(fastStreak + 1, FAST_STREAK_CAP);
   } else {
@@ -1561,9 +1421,8 @@ function captureStar(idx) {
   const streakMult = streakMultiplier(fastStreak);
   score += Math.round(bonus * streakMult);
   starsVisited += 1;
-  // Challenge-card stats: bonus tier (3=Blazing/2=Quick/1=Slow),
-  // variant census, peak streak. Bonus 0/no-multiplier still
-  // counts as a "slow" capture for the histogram.
+  // Challenge-card stats: bonus tier (3=Blazing/2=Quick/1=Slow), variant census, peak streak. Bonus
+  // 0/no-multiplier still counts as a "slow" capture for the histogram.
   if (bonus >= 3) runStats.blazingCount++;
   else if (bonus >= 2) runStats.quickCount++;
   else runStats.slowCount++;
@@ -1576,30 +1435,27 @@ function captureStar(idx) {
   if (s.isPulsar)     runStats.variants.pulsar++;
   if (s.isBinary)     runStats.variants.binary++;
   if (s.isMonolith)   runStats.variants.monolith++;
-  // Tutorial assist auto-off at the boundary. One-shot — the
-  // player can still re-enable with W and their preference
-  // will stick from here on.
+  // Tutorial assist auto-off at the boundary. One-shot — the player can still re-enable with W and
+  // their preference will stick from here on.
   if (isTutorialRun && starsVisited === TUTORIAL_STARS) {
     showLaunchWindow = false;
   }
   // Reset orbit timer + bonus for the new orbit.
   ball.framesInOrbit = 0;
   ball.pendingBonus = 1;
-  // Skip the capture SFX if it was already pre-scheduled at
-  // boost time (Bluetooth latency compensation).
+  // Skip the capture SFX if it was already pre-scheduled at boost time (Bluetooth latency
+  // compensation).
   if (!ball.capturePreScheduled) audio.capture(bonus, fastStreak);
   ball.capturePreScheduled = false;
   audio.setStreak(fastStreak);
-  // Demon mode music while orbiting an Azazel — Phrygian-ish
-  // chord progression overrides the regular tier-based one.
-  // The audio scheduler applies the swap at the next bar
-  // boundary so the transition lands musically.
+  // Demon mode music while orbiting an Azazel — Phrygian-ish chord progression overrides the
+  // regular tier-based one. The audio scheduler applies the swap at the next bar boundary so the
+  // transition lands musically.
   audio.setDemonMode(!!s.isAzazel);
   updateScoreUI(true, bonus, fastStreak);
 
-  // Visuals. Colors go into particle / shockwave storage as RGB
-  // floats in [0, 1]; the WebGL renderer reads them straight into
-  // instance attributes.
+  // Visuals. Colors go into particle / shockwave storage as RGB floats in [0, 1]; the WebGL
+  // renderer reads them straight into instance attributes.
   const c1 = c1Of(s.colorIdx);
   const c2 = c2Of(s.colorIdx);
   shockwaves.push({
@@ -1625,8 +1481,7 @@ function captureStar(idx) {
   // Keep the star buffer populated
   while (stars.length < idx + 8) addNextStar();
 
-  // Projected window was for THIS just-arrived star — drop it
-  // before recomputing the live one.
+  // Projected window was for THIS just-arrived star — drop it before recomputing the live one.
   ball.projectedLaunchWindow = null;
   // Recompute the launch-window indicator for the new orbit.
   computeLaunchWindow();
@@ -1642,16 +1497,14 @@ function captureStar(idx) {
 // for keyboard users):
 //   - Tap (short press) → toggle launch window (W).
 //   - Long press (≥ 500 ms) → cycle cinematic zoom level (Z).
-// Long-press fires on the threshold so the player gets immediate
-// camera feedback rather than waiting for release; the tap path
-// is gated on no-long-press-having-fired so the same pointer
+// Long-press fires on the threshold so the player gets immediate camera feedback rather than
+// waiting for release; the tap path is gated on no-long-press-having-fired so the same pointer
 // stroke can't trigger both.
 //
-// The toggle state persists across sessions — explicit user
-// toggles (W key, score tap) write to localStorage so the next
-// run starts with the same preference. Tutorial-driven
-// assignments (force-on at init for the first 3 runs, auto-off
-// at 15 stars) bypass the setter; they're transient overrides
+// The toggle state persists across sessions — explicit user toggles (W key, score tap) write to
+// localStorage so the next run starts with the same preference. Tutorial-driven assignments
+// (force-on at init for the first 3 runs, auto-off at 15 stars) bypass the setter; they're
+// transient overrides
 // for new players, not user preferences.
 const LAUNCH_WINDOW_KEY = "astrocatch_launch_window";
 let showLaunchWindow = localStorage.getItem(LAUNCH_WINDOW_KEY) === "1";
@@ -1706,41 +1559,32 @@ if (scoreToggleEl) {
 }
 
 // ─── Launch-window indicator ────────────────────────────
-// Sample positions along the ship's ACTUAL trajectory (an
-// ellipse after arrow-key nudges, otherwise the starting
-// circular orbit) by forward-simulating one orbital period,
-// then test each sample with predictCapture. Each sample
-// carries its world position + tangent direction.
+// Sample positions along the ship's ACTUAL trajectory (an ellipse after arrow-key nudges, otherwise
+// the starting circular orbit) by forward-simulating one orbital period, then test each sample with
+// predictCapture. Each sample carries its world position + tangent direction.
 const LAUNCH_WINDOW_SAMPLES = 36;
-// Indicator boost-factor grid resolution. Half the live
-// applyBoostAndArm grid (48 steps) — the indicator only needs
-// to know *whether* a clean capture exists at each slot, not
-// the smallest viable Δv, so we can afford a coarser sweep.
-// Halves the worst-case predictCapture call count per
-// recompute (was ~1700, now ~860) which removes the visible
-// stutter when the indicator is on while the game is also
-// recomputing the projected window during transit.
+// Indicator boost-factor grid resolution. Half the live applyBoostAndArm grid (48 steps) — the
+// indicator only needs to know *whether* a clean capture exists at each slot, not the smallest
+// viable Δv, so we can afford a coarser sweep. Halves the worst-case predictCapture call count per
+// recompute (was ~1700, now ~860) which removes the visible stutter when the indicator is on while
+// the game is also recomputing the projected window during transit.
 const LAUNCH_WINDOW_BOOST_STEPS = 24;
-// Throttle state for periodic recompute under planet/binary
-// perturbation. Updated inside computeLaunchWindow().
+// Throttle state for periodic recompute under planet/binary perturbation. Updated inside
+// computeLaunchWindow().
 const LAUNCH_WINDOW_RECOMPUTE_FRAMES = 12; // ~0.1 s at 120 Hz
 let lastLaunchWindowFrame = -1;
 let lastProjectedLaunchWindowFrame = -1;
-// Pre-allocated scratch for sample states + result entries.
-// Reused across recomputes to avoid GC churn on long sessions.
-// The `used` flag replaces the null-slot pattern.
-// Two buffer pairs for the live indicator (ping-pong). The
-// time-sliced build writes into the back pair across multiple
-// frames; ball.launchWindow stays mounted on the previously-
-// completed front pair so old ticks keep drawing during the
-// build. On completion we swap.
+// Pre-allocated scratch for sample states + result entries. Reused across recomputes to avoid GC
+// churn on long sessions. The `used` flag replaces the null-slot pattern. Two buffer pairs for the
+// live indicator (ping-pong). The time-sliced build writes into the back pair across multiple
+// frames; ball.launchWindow stays mounted on the previously- completed front pair so old ticks keep
+// drawing during the build. On completion we swap.
 const _lwSamplesA = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwSamplesB = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwWindowA = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwWindowB = new Array(LAUNCH_WINDOW_SAMPLES);
-// Two-pair ping-pong for the projected window — same pattern
-// as the regular indicator so the build is also time-sliced
-// across multiple frames during transit.
+// Two-pair ping-pong for the projected window — same pattern as the regular indicator so the build
+// is also time-sliced across multiple frames during transit.
 const _lwProjSamplesA = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwProjSamplesB = new Array(LAUNCH_WINDOW_SAMPLES);
 const _lwProjWindowA = new Array(LAUNCH_WINDOW_SAMPLES);
@@ -1761,25 +1605,22 @@ let _lwProjBuildWindow = _lwProjWindowA;
 let _lwProjBuildSlot = -1;
 let _lwProjBuildTargetIdx = -1;
 let _lwProjBuildStartFrame = 0;
-// Build state for the time-sliced regular indicator.
-// _lwBuildSlot < 0 means no build in progress.
+// Build state for the time-sliced regular indicator. _lwBuildSlot < 0 means no build in progress.
 let _lwBuildIdx = 0;       // 0 → A is back, 1 → B is back
 let _lwBuildSamples = _lwSamplesA;
 let _lwBuildWindow = _lwWindowA;
 let _lwBuildSlot = -1;
 let _lwBuildCsIdx = -1;
 let _lwBuildStartFrame = 0;
-// Phase 2 cost is dominated by failing slots (each pays a full
-// fSteps × predictCapture sweep). Splitting 36 slots across 6
-// frames keeps each tick's contribution to ~1/6 of a build's
-// total compute — well under a frame budget.
+// Phase 2 cost is dominated by failing slots (each pays a full fSteps × predictCapture sweep).
+// Splitting 36 slots across 6 frames keeps each tick's contribution to ~1/6 of a build's total
+// compute — well under a frame budget.
 const LW_SLOTS_PER_FRAME = 6;
 const _LW_STEP = (Math.PI * 2) / LAUNCH_WINDOW_SAMPLES;
-// Scratch object reused across all predictCapture calls from
-// the launch-window hotpath. Avoids ~100 small allocations per
-// recompute. Includes peri position/velocity fields populated
-// by predictCapture so the projected-window path can read the
-// post-capture state without an extra forward sim.
+// Scratch object reused across all predictCapture calls from the launch-window hotpath. Avoids ~100
+// small allocations per recompute. Includes peri position/velocity fields populated by
+// predictCapture so the projected-window path can read the post-capture state without an extra
+// forward sim.
 const _lwPredictOut = {
   periFrame: 0, periDist: 0, vMagAtPeri: 0,
   periX: 0, periY: 0, periVx: 0, periVy: 0,
@@ -1791,11 +1632,9 @@ function slotForTheta(theta) {
   return Math.floor(t / _LW_STEP);
 }
 
-// Phase 1: forward-sim around the star and fill `samplesArr`
-// with one state per angular slot. Returns the number of slots
-// filled (>=4 = enough to draw something useful). Synchronous,
-// runs once per build trigger. Cheap (~1-2ms) so doesn't need
-// time-slicing itself.
+// Phase 1: forward-sim around the star and fill `samplesArr` with one state per angular slot.
+// Returns the number of slots filled (>=4 = enough to draw something useful). Synchronous, runs
+// once per build trigger. Cheap (~1-2ms) so doesn't need time-slicing itself.
 function runLaunchWindowPhase1(
   x0, y0, vx0, vy0, csIdx, samplesArr,
 ) {
@@ -1859,11 +1698,10 @@ function runLaunchWindowPhase1(
   return filled;
 }
 
-// Phase 2: process ONE slot's predict-sweep. The dominant cost
-// in each launch-window build is here (failing slots run all
-// LAUNCH_WINDOW_BOOST_STEPS predictCapture calls). Splitting per
-// slot is what lets the regular indicator time-slice the build
-// across frames; projected calls all 36 in a row.
+// Phase 2: process ONE slot's predict-sweep. The dominant cost in each launch-window build is here
+// (failing slots run all LAUNCH_WINDOW_BOOST_STEPS predictCapture calls). Splitting per slot is
+// what lets the regular indicator time-slice the build across frames; projected calls all 36 in a
+// row.
 function runLaunchWindowPhase2Slot(
   slot, samplesArr, windowArr, csIdx, startFrame,
 ) {
@@ -1889,11 +1727,10 @@ function runLaunchWindowPhase2Slot(
   w.ok = success; w.used = true;
 }
 
-// Convenience wrapper: full synchronous build (phase 1 + all
-// slots in phase 2). Used by the projected window only — that
-// path fires rarely (once every 12 frames during transit with a
-// queued boost) and finishes in one frame so a partial result
-// would make the projection look worse than no result.
+// Convenience wrapper: full synchronous build (phase 1 + all slots in phase 2). Used by the
+// projected window only — that path fires rarely (once every 12 frames during transit with a queued
+// boost) and finishes in one frame so a partial result would make the projection look worse than no
+// result.
 function runLaunchWindowSim(
   x0, y0, vx0, vy0, csIdx, samplesArr, windowArr, startFrame,
 ) {
@@ -1909,12 +1746,10 @@ function runLaunchWindowSim(
   return filled;
 }
 
-// Start a (possibly time-sliced) build of the regular launch
-// window. Phase 1 runs synchronously here; phase 2 is advanced
-// per render frame by tickLaunchWindowBuild(). On completion
-// the back buffer is swapped in. ball.launchWindow keeps
-// pointing to whatever was last completed during the build, so
-// the indicator never flickers off mid-update.
+// Start a (possibly time-sliced) build of the regular launch window. Phase 1 runs synchronously
+// here; phase 2 is advanced per render frame by tickLaunchWindowBuild(). On completion the back
+// buffer is swapped in. ball.launchWindow keeps pointing to whatever was last completed during the
+// build, so the indicator never flickers off mid-update.
 function computeLaunchWindow() {
   if (!ball) return;
   if (ball.pendingCapture >= 0) {
@@ -1922,9 +1757,8 @@ function computeLaunchWindow() {
     _lwBuildSlot = -1;
     return;
   }
-  // Pick the back buffer (the one not currently mounted on
-  // ball.launchWindow). On the very first build both buffers
-  // are unused — the front pointer is null — so just take A.
+  // Pick the back buffer (the one not currently mounted on ball.launchWindow). On the very first
+  // build both buffers are unused — the front pointer is null — so just take A.
   const useB = ball.launchWindow === _lwWindowB;
   _lwBuildIdx = useB ? 0 : 1;
   _lwBuildSamples = useB ? _lwSamplesA : _lwSamplesB;
@@ -1943,11 +1777,9 @@ function computeLaunchWindow() {
   lastLaunchWindowFrame = _lwBuildStartFrame;
 }
 
-// Advance the in-progress build by LW_SLOTS_PER_FRAME slots.
-// Cost per call: ~1/6 of a full build at LW_SLOTS_PER_FRAME=6.
-// Aborts if game state changed (capture started, currentStar
-// rotated) so we don't commit results computed against stale
-// state.
+// Advance the in-progress build by LW_SLOTS_PER_FRAME slots. Cost per call: ~1/6 of a full build at
+// LW_SLOTS_PER_FRAME=6. Aborts if game state changed (capture started, currentStar rotated) so we
+// don't commit results computed against stale state.
 function tickLaunchWindowBuild() {
   if (_lwBuildSlot < 0) return;
   if (!ball || ball.pendingCapture >= 0
@@ -1971,19 +1803,16 @@ function tickLaunchWindowBuild() {
   }
 }
 
-// Projected launch window for a queued in-transit boost. Predicts
-// the post-capture state around the target star (peri snapshot +
-// burn clamp into the safe v-band, mirroring `burnStep`), then
-// runs the same launch-window sim from there toward the next-next
-// star. Lets the player see *before* capture whether their queued
-// tap will land on a valid launch position.
-// Start a (time-sliced) build of the projected launch window.
-// The expensive parts are: (a) one predictCapture from the ball
-// in transit to find the peri snapshot, then (b) phase 1 of the
-// launch-window sim around the target, then (c) per-slot phase
+// Projected launch window for a queued in-transit boost. Predicts the post-capture state around the
+// target star (peri snapshot + burn clamp into the safe v-band, mirroring `burnStep`), then runs
+// the same launch-window sim from there toward the next-next star. Lets the player see *before*
+// capture whether their queued tap will land on a valid launch position. Start a (time-sliced)
+// build of the projected launch window. The expensive parts are: (a) one predictCapture from the
+// ball in transit to find the peri snapshot, then (b) phase 1 of the launch-window sim around the
+// target, then (c) per-slot phase
 // 2. (a) and (b) run synchronously here (~2-4 ms together);
-// (c) is sliced across frames by tickProjectedLaunchWindowBuild
-// so no single frame pays the full ~26 ms cost.
+// (c) is sliced across frames by tickProjectedLaunchWindowBuild so no single frame pays the full
+// ~26 ms cost.
 function computeProjectedLaunchWindow() {
   if (!ball) return;
   if (ball.pendingCapture < 0) {
@@ -2027,9 +1856,8 @@ function computeProjectedLaunchWindow() {
   const pvx = _lwPredictOut.periVx * k;
   const pvy = _lwPredictOut.periVy * k;
   const projStartFrame = startFrame + _lwPredictOut.periFrame;
-  // Pick the back buffer (the one not currently mounted on
-  // ball.projectedLaunchWindow). On first build front is null
-  // → either pair is fine.
+  // Pick the back buffer (the one not currently mounted on ball.projectedLaunchWindow). On first
+  // build front is null → either pair is fine.
   const useB = ball.projectedLaunchWindow === _lwProjWindowB;
   _lwProjBuildSamples = useB ? _lwProjSamplesA : _lwProjSamplesB;
   _lwProjBuildWindow  = useB ? _lwProjWindowA  : _lwProjWindowB;
@@ -2081,8 +1909,8 @@ function updateScoreUI(bump, bonus, streak) {
   if (bonus && bonus > 1) {
     showBonusFlash(bonus, streak);
   }
-  // Challenge milestone: only fires the first time the player
-  // crosses the sender's score during this run.
+  // Challenge milestone: only fires the first time the player crosses the sender's score during
+  // this run.
   if (_incomingChallenge && !challengeBeaten
       && score > _incomingChallenge.score) {
     challengeBeaten = true;
@@ -2095,10 +1923,9 @@ function showChallengeBeatFlash() {
   if (!el) {
     el = document.createElement("div");
     el.id = "challenge-beat-flash";
-    // Sits above the bonus-flash row so the two don't overlap
-    // when the milestone-crossing capture also earns a tier
-    // bonus. Larger + warmer-glowing than bonus-flash to read
-    // as a once-per-run event rather than a per-capture beat.
+    // Sits above the bonus-flash row so the two don't overlap when the milestone-crossing capture
+    // also earns a tier bonus. Larger + warmer-glowing than bonus-flash to read as a once-per-run
+    // event rather than a per-capture beat.
     el.style.cssText =
       "position:absolute;top:90px;left:0;right:0;text-align:center;" +
       "font-size:26px;font-weight:800;letter-spacing:5px;text-transform:uppercase;" +
@@ -2166,32 +1993,29 @@ function showCometFlash() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Boost: prograde impulse + capture-prediction. AC.applyBoostAndArm
-// applies the impulse, runs the prediction, and (on success) sets
-// up pendingCapture so AC.burnStep can fire at the actual periapsis.
+// Boost: prograde impulse + capture-prediction. AC.applyBoostAndArm applies the impulse, runs the
+// prediction, and (on success) sets up pendingCapture so AC.burnStep can fire at the actual
+// periapsis.
 // ─────────────────────────────────────────────────────────────
 function boost() {
   if (!ball || !ball.alive) return;
   if (ball.pendingCapture >= 0) {
-    // In-transit tap: queue the boost intent. If a clean capture
-    // lands, captureStar replays it immediately on the new orbit
-    // — letting the player gamble that the arrival angle around
-    // the target star is a valid launch position. Quick-launch
-    // bonus auto-tiers to Blazing (framesInOrbit = 0 at replay).
+    // In-transit tap: queue the boost intent. If a clean capture lands, captureStar replays it
+    // immediately on the new orbit — letting the player gamble that the arrival angle around the
+    // target star is a valid launch position. Quick-launch bonus auto-tiers to Blazing
+    // (framesInOrbit = 0 at replay).
     ball.queuedBoost = true;
-    // If the launch-window indicator is on, immediately compute
-    // a projected window for the post-capture orbit around the
-    // target. The player can then see whether their gamble has
-    // a tick at the predicted arrival angle. Recomputed on a
-    // throttled cadence in the main update loop too.
+    // If the launch-window indicator is on, immediately compute a projected window for the
+    // post-capture orbit around the target. The player can then see whether their gamble has a tick
+    // at the predicted arrival angle. Recomputed on a throttled cadence in the main update loop
+    // too.
     if (showLaunchWindow) {
       computeProjectedLaunchWindow();
       lastProjectedLaunchWindowFrame = ball.frame || 0;
     }
-    // Subtle visual cue — small symmetric ring in the target
-    // star's colour so the player can tell their tap registered
-    // and what they're primed for. Distinct from a normal
-    // boost's directional exhaust trail.
+    // Subtle visual cue — small symmetric ring in the target star's colour so the player can tell
+    // their tap registered and what they're primed for. Distinct from a normal boost's directional
+    // exhaust trail.
     const target = stars[ball.pendingCapture];
     if (target) {
       const tc = c1Of(target.colorIdx);
@@ -2211,9 +2035,8 @@ function boost() {
 
   audio.boost();
 
-  // Exhaust particles (visual only — record direction BEFORE
-  // the impulse). Slightly beefier than before for clearer tap
-  // feedback, especially under Bluetooth audio lag.
+  // Exhaust particles (visual only — record direction BEFORE the impulse). Slightly beefier than
+  // before for clearer tap feedback, especially under Bluetooth audio lag.
   const c1 = c1Of(stars[ball.currentStar].colorIdx);
   for (let i = 0; i < 14; i++) {
     const a = Math.atan2(-ball.vy, -ball.vx) + (Math.random() - 0.5) * 0.20;
@@ -2227,13 +2050,10 @@ function boost() {
     });
   }
 
-  // Capture quick-launch bonus BEFORE the boost: read the orbital
-  // period of the current orbit and compare it to how long the ball
-  // has been there. The bonus is locked in now (at the moment of
-  // tap) and applied later in captureStar(). Tiers:
-  //   < 0.5 rotation → 3× points (very quick)
-  //   < 1.0 rotation → 2× points (quick)
-  //   else           → 1× points
+  // Capture quick-launch bonus BEFORE the boost: read the orbital period of the current orbit and
+  // compare it to how long the ball has been there. The bonus is locked in now (at the moment of
+  // tap) and applied later in captureStar(). Tiers: < 0.5 rotation → 3× points (very quick) < 1.0
+  // rotation → 2× points (quick) else → 1× points
   const period = currentOrbitPeriod();
   const orbitFraction = period > 0 ? ball.framesInOrbit / period : Infinity;
   let bonus = 1;
@@ -2244,9 +2064,8 @@ function boost() {
   // Only commit the bonus if the boost actually armed a capture.
   if (ball.pendingCapture >= 0) ball.pendingBonus = bonus;
 
-  // Bluetooth audio can lag 100–300 ms behind; on high-latency
-  // output, pre-schedule the capture chime so it reaches the
-  // ears at the visual moment. We know periFrame from prediction.
+  // Bluetooth audio can lag 100–300 ms behind; on high-latency output, pre-schedule the capture
+  // chime so it reaches the ears at the visual moment. We know periFrame from prediction.
   ball.capturePreScheduled = false;
   if (pred && pred.periFrame) {
     const outLatency = audio.getOutputLatency();
@@ -2270,8 +2089,8 @@ function boost() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Death. We mark the run as over immediately (score frozen,
-// high-score recorded, particle burst) but physics keeps running
+// Death. We mark the run as over immediately (score frozen, high-score recorded, particle burst)
+// but physics keeps running
 // for DYING_FRAMES_MS so the ball drifts a bit before the game
 // over screen appears — much less abrupt than a hard freeze.
 // ─────────────────────────────────────────────────────────────
@@ -2280,10 +2099,9 @@ function die(crash, crashedStar) {
   state = STATE.DYING;
   syncPausedIndicator();
   ball.pendingCapture = -1; // cancel any in-flight transfer
-  // Death-cause categorisation for the challenge card. Crashing
-  // into a binary's sub-star or BH gets its own enum so the
-  // challenge narrative can read the right way ("hit by donor"
-  // is more interesting than the generic "starCrash").
+  // Death-cause categorisation for the challenge card. Crashing into a binary's sub-star or BH gets
+  // its own enum so the challenge narrative can read the right way ("hit by donor" is more
+  // interesting than the generic "starCrash").
   if (crash) {
     if (crashedStar && crashedStar.isBlackHole) {
       runStats.deathCause = DEATH_CAUSES.blackHoleCrash;
@@ -2296,12 +2114,10 @@ function die(crash, crashedStar) {
     runStats.deathCause = DEATH_CAUSES.escape;
   }
   if (crash) audio.deathCrash(); else audio.death();
-  // Music keeps playing through DYING → DEAD → next PLAY.
-  // The retry's startMusic() is idempotent, so the loop
-  // stitches across runs without a chord jump or seam.
-  // Any live fast-launch streak ends with the run, and demon
-  // mode resets so a death on an Azazel doesn't carry into the
-  // next run's music.
+  // Music keeps playing through DYING → DEAD → next PLAY. The retry's startMusic() is idempotent,
+  // so the loop stitches across runs without a chord jump or seam. Any live fast-launch streak ends
+  // with the run, and demon mode resets so a death on an Azazel doesn't carry into the next run's
+  // music.
   fastStreak = 0;
   audio.setStreak(0);
   audio.setDemonMode(false);
@@ -2331,20 +2147,18 @@ function die(crash, crashedStar) {
     document.getElementById("best").textContent = best;
     document.getElementById("gameover").classList.remove("hidden");
     document.getElementById("hint").classList.remove("on");
-    // Hide the live HUD score so it doesn't duplicate the #final on
-    // the game-over overlay. init() re-shows it on the next run.
+    // Hide the live HUD score so it doesn't duplicate the #final on the game-over overlay. init()
+    // re-shows it on the next run.
     document.getElementById("score-display").style.display = "none";
     renderChallengeCard();
   }, DYING_FRAMES_MS);
 }
 
-// Build the challenge URL from the current run's stats and
-// render its QR onto the overlay's canvas. Stash the URL on
-// the copy-button so the click handler can read it.
+// Build the challenge URL from the current run's stats and render its QR onto the overlay's canvas.
+// Stash the URL on the copy-button so the click handler can read it.
 function renderChallengeCard() {
-  // Reset the flip-card to its front face for each new death,
-  // so a player who flipped, played again, then died re-sees
-  // the "get challenge link" text rather than the prior QR.
+  // Reset the flip-card to its front face for each new death, so a player who flipped, played
+  // again, then died re-sees the "get challenge link" text rather than the prior QR.
   const card = document.getElementById("challenge-out");
   if (card) card.classList.remove("flipped");
   const url = buildChallengeUrl({
@@ -2361,22 +2175,19 @@ function renderChallengeCard() {
   const canvas = document.getElementById("challenge-out-qr");
   const copyBtn = document.getElementById("challenge-out-copy");
   if (!canvas || !copyBtn) return;
-  // Encode the URL as uppercase so the host + path + fragment
-  // payload all qualify for QR alphanumeric mode (5.5 bits/char
-  // vs 8). Browsers normalise scheme + host case so the link
-  // still resolves; the fragment stays uppercase, which our
-  // base32 decoder accepts. EC level M gives ~15% damage
-  // tolerance — enough to overlay the centred sun logo.
+  // Encode the URL as uppercase so the host + path + fragment payload all qualify for QR
+  // alphanumeric mode (5.5 bits/char vs 8). Browsers normalise scheme + host case so the link still
+  // resolves; the fragment stays uppercase, which our base32 decoder accepts. EC level M gives ~15%
+  // damage tolerance — enough to overlay the centred sun logo.
   const qrText = url.toUpperCase();
   const matrix = makeQrMatrix(qrText, "M");
-  // Backing-store scale 6 → 33-module v3 = 198 px native; CSS
-  // displays at native size for crisp scanner-friendly cells.
+  // Backing-store scale 6 → 33-module v3 = 198 px native; CSS displays at native size for crisp
+  // scanner-friendly cells.
   const SCALE = 6, QUIET = 2;
   renderQrToCanvas(matrix, canvas, SCALE, QUIET);
   drawSunLogo(canvas, matrix.size, SCALE, QUIET);
-  // QR also acts as a clickable link to the same challenge URL
-  // (opens in a new tab). Useful for pasting into a chat or
-  // verifying the encoded URL by eye.
+  // QR also acts as a clickable link to the same challenge URL (opens in a new tab). Useful for
+  // pasting into a chat or verifying the encoded URL by eye.
   const qrLink = document.getElementById("challenge-out-link");
   if (qrLink) qrLink.href = url;
   copyBtn.dataset.url = url;
@@ -2385,28 +2196,23 @@ function renderChallengeCard() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Fast miss detection. Returns true if the ball might still be
-// captured (or is already in a closed orbit), false if it's on
-// a trajectory clearly heading into the void.
+// Fast miss detection. Returns true if the ball might still be captured (or is already in a closed
+// orbit), false if it's on a trajectory clearly heading into the void.
 //
 // We do two checks:
 //   1. Bound-orbit test against the nearest star. If the ball's
-//      specific orbital energy w.r.t. its primary is negative,
-//      it's in a closed Kepler orbit — by definition safe, no
-//      matter how eccentric. This is the only correct way to
-//      handle apoapsis of high-e orbits where a linear "is the
-//      star ahead?" check fails.
+// specific orbital energy w.r.t. its primary is negative, it's in a closed Kepler orbit — by
+// definition safe, no matter how eccentric. This is the only correct way to handle apoapsis of
+// high-e orbits where a linear "is the star ahead?" check fails.
 //   2. Linear forward-ray miss check. Only used when the ball
-//      is unbound — i.e. on an actual escape trajectory after a
-//      bad-timing fallback boost.
+// is unbound — i.e. on an actual escape trajectory after a bad-timing fallback boost.
 // ─────────────────────────────────────────────────────────────
 function willHitAnyStar() {
   if (!ball || ball.pendingCapture >= 0) return true;
 
-  // 1 ── bound-orbit test against the ball's gravitational primary
-  // (which under nearest-star physics is the nearest star).
-  // Past stars are excluded — they no longer exert gravity in
-  // the live physics, so they shouldn't qualify as "primary" here.
+  // 1 ── bound-orbit test against the ball's gravitational primary (which under nearest-star
+  // physics is the nearest star). Past stars are excluded — they no longer exert gravity in the
+  // live physics, so they shouldn't qualify as "primary" here.
   const fromIdx = ball.currentStar;
   let nearestIdx = fromIdx, nearestD2 = Infinity;
   for (let i = fromIdx; i < stars.length; i++) {
@@ -2421,10 +2227,9 @@ function willHitAnyStar() {
   const E = v2 / 2 - primary.gm / r;
   if (E < 0) return true; // bound → closed orbit → safe
 
-  // 2 ── unbound trajectory: linear forward-ray miss check.
-  // Same past-star skip as above; a past star can never be ahead
-  // of a forward-going trajectory's velocity vector anyway, but
-  // the explicit start gates the projection check correctly.
+  // 2 ── unbound trajectory: linear forward-ray miss check. Same past-star skip as above; a past
+  // star can never be ahead of a forward-going trajectory's velocity vector anyway, but the
+  // explicit start gates the projection check correctly.
   const v = Math.sqrt(v2);
   if (v < 0.5) return true;
   const ux = ball.vx / v;
@@ -2445,18 +2250,16 @@ function willHitAnyStar() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Physics tick — runs at fixed PHYSICS_HZ regardless of monitor
-// refresh rate or browser RAF cadence. Driven by a time
-// accumulator in loop() (see bottom of file). One call = one
-// physicsStep() + collision and miss checks. Per-render-frame
-// concerns (trail, camera, off-screen) live in renderTick().
+// Physics tick — runs at fixed PHYSICS_HZ regardless of monitor refresh rate or browser RAF
+// cadence. Driven by a time accumulator in loop() (see bottom of file). One call = one
+// physicsStep() + collision and miss checks. Per-render-frame concerns (trail, camera, off-screen)
+// live in renderTick().
 // ─────────────────────────────────────────────────────────────
 function physicsTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
 
-  // During DYING, freeze the ball if it has drifted into a star's
-  // crash radius so it doesn't bounce around inside the photosphere.
-  // Past stars no longer exert gravity in live physics, so they
+  // During DYING, freeze the ball if it has drifted into a star's crash radius so it doesn't bounce
+  // around inside the photosphere. Past stars no longer exert gravity in live physics, so they
   // can't pull the dying ship in — also skip them here.
   if (state === STATE.DYING) {
     const frame = ball.frame || 0;
@@ -2491,24 +2294,21 @@ function physicsTick() {
   }
 }
 
-// Per-render-frame work: trail/replay sampling, camera follow,
-// and the off-screen death check. Runs once per RAF callback.
+// Per-render-frame work: trail/replay sampling, camera follow, and the off-screen death check. Runs
+// once per RAF callback.
 // ─── Binary ejecta — live particle simulation ──────────
-// Particles continuously spawn on the donor's surface facing
-// the accretor with a gentle push. The accretor pulls them in
-// with an inflated GM (visual-only, not the game's physics GM)
-// so they arc naturally and spiral inward. Runs every frame in
-// renderTick; purely visual, no gameplay effect.
+// Particles continuously spawn on the donor's surface facing the accretor with a gentle push. The
+// accretor pulls them in with an inflated GM (visual-only, not the game's physics GM) so they arc
+// naturally and spiral inward. Runs every frame in renderTick; purely visual, no gameplay effect.
 // updateEjecta + EJECTA_* constants live in star-rendering.js.
 
 function renderTick() {
   if (state !== STATE.PLAY && state !== STATE.DYING) return;
   updateEjecta(stars, ball ? ball.frame || 0 : 0);
 
-  // Throttled launch-window recompute when under planet
-  // perturbation. Only runs if the hint is currently visible
-  // so we don't burn CPU on invisible state. The build itself
-  // is time-sliced (see tickLaunchWindowBuild below).
+  // Throttled launch-window recompute when under planet perturbation. Only runs if the hint is
+  // currently visible so we don't burn CPU on invisible state. The build itself is time-sliced (see
+  // tickLaunchWindowBuild below).
   if (ball && ball.pendingCapture < 0) {
     const cs0 = stars[ball.currentStar];
     const visible = showLaunchWindow || (cs0 && cs0.isAzazel);
@@ -2519,13 +2319,11 @@ function renderTick() {
       computeLaunchWindow();
     }
   }
-  // Advance any in-progress launch-window build. Splits the
-  // per-slot predict sweep across multiple render frames so
-  // a single build can't blow the frame budget.
+  // Advance any in-progress launch-window build. Splits the per-slot predict sweep across multiple
+  // render frames so a single build can't blow the frame budget.
   tickLaunchWindowBuild();
-  // Throttled projected-launch-window recompute while a queued
-  // in-transit boost is pending. Same gate as the regular path:
-  // don't start a new build while one is in progress.
+  // Throttled projected-launch-window recompute while a queued in-transit boost is pending. Same
+  // gate as the regular path: don't start a new build while one is in progress.
   if (showLaunchWindow && ball && ball.queuedBoost
       && ball.pendingCapture >= 0) {
     const frame = ball.frame || 0;
@@ -2538,38 +2336,35 @@ function renderTick() {
   tickProjectedLaunchWindowBuild();
 
   const cs = stars[ball.currentStar];
-  // Sample the trail at the interpolated render position so the
-  // trail tip stays glued to the ball visual. Trail is drawn as
-  // a single stroked polyline in draw() via the renderer —
-  // colors are stored as RGB floats that get passed straight
-  // into the shader uniforms.
+  // Sample the trail at the interpolated render position so the trail tip stays glued to the ball
+  // visual. Trail is drawn as a single stroked polyline in draw() via the renderer — colors are
+  // stored as RGB floats that get passed straight into the shader uniforms.
   const tc = c1Of(cs.colorIdx);
   trail.push({ x: ballRenderX, y: ballRenderY, r: tc[0], g: tc[1], b: tc[2] });
   if (trail.length > 100) trail.shift();
 
-  // Replay sample (only during PLAY, not the DYING wind-down).
-  // Same rationale as trail — replay is a render-rate visual.
+  // Replay sample (only during PLAY, not the DYING wind-down). Same rationale as trail — replay is
+  // a render-rate visual.
   if (state === STATE.PLAY) {
     replay.push({ x: ballRenderX, y: ballRenderY, currentStar: ball.currentStar });
     if (replay.length > REPLAY_MAX) replay.shift();
   }
 
-  // Camera: follow upward progress (even while DYING, so the wind-down
-  // pan matches the ball's drift).
+  // Camera: follow upward progress (even while DYING, so the wind-down pan matches the ball's
+  // drift).
   const desired = -(stars[ball.currentStar].y - H * CAM_FOCUS_Y);
   if (desired > camTargetY) camTargetY = desired;
   camY += (camTargetY - camY) * 0.08;
 
-  // Ringworld zoom-in: target 1.7x while orbiting a ringworld,
-  // back to 1.0 otherwise. Same easing rate as camY.
+  // Ringworld zoom-in: target 1.7x while orbiting a ringworld, back to 1.0 otherwise. Same easing
+  // rate as camY.
   const cs0 = stars[ball.currentStar];
   zoomMultTarget = zoomTargetFor(cs0);
   zoomMult += (zoomMultTarget - zoomMult) * 0.05;
 
-  // Horizontal camera nudge — keep the current star's visible
-  // extent inside the viewport. Only matters at elevated zooms,
-  // where ringworld bands (3.6 · r) or Nebula outer shells
-  // (~2.7 · r) can push the silhouette past the screen edge.
+  // Horizontal camera nudge — keep the current star's visible extent inside the viewport. Only
+  // matters at elevated zooms, where ringworld bands (3.6 · r) or Nebula outer shells (~2.7 · r)
+  // can push the silhouette past the screen edge.
   const effZoom = ZOOM * zoomMult;
   const visualR = cs0.isRingworld ? cs0.r * 3.6
                 : cs0.isNebula      ? cs0.r * 2.7
@@ -2579,9 +2374,8 @@ function renderTick() {
   const screenXNoPan = W / 2 + (cs0.x - W / 2) * effZoom;
   const visualRpx = visualR * effZoom;
   const margin = 8;
-  // Required camX (world units) so that screenX ± visualRpx
-  // falls inside [margin, W - margin]. If the star is bigger
-  // than the viewport, center it.
+  // Required camX (world units) so that screenX ± visualRpx falls inside [margin, W - margin]. If
+  // the star is bigger than the viewport, center it.
   if (visualRpx * 2 > W - 2 * margin) {
     camXTarget = (W / 2 - screenXNoPan) / effZoom;
   } else {
@@ -2593,36 +2387,28 @@ function renderTick() {
     camXTarget = shiftPx / effZoom;
   }
   camX += (camXTarget - camX) * 0.08;
-  // Safety clamp — if the eased camX is still leaving the
-  // star partially clipped (e.g. the current star changed
-  // abruptly and easing hasn't caught up), snap hard enough
-  // to keep the silhouette fully on screen this frame. Keeps
-  // the soft easing for the common case where camXTarget
-  // barely changes, and only locks when clipping would
-  // otherwise be visible.
+  // Safety clamp — if the eased camX is still leaving the star partially clipped (e.g. the current
+  // star changed abruptly and easing hasn't caught up), snap hard enough to keep the silhouette
+  // fully on screen this frame. Keeps the soft easing for the common case where camXTarget barely
+  // changes, and only locks when clipping would otherwise be visible.
   const livePanScreenX = screenXNoPan + camX * effZoom;
   const clipLeft  = margin - (livePanScreenX - visualRpx);
   const clipRight = (livePanScreenX + visualRpx) - (W - margin);
   if (clipLeft > 0 || clipRight > 0) camX = camXTarget;
 
-  // Off-screen death check — only while still PLAYing. Uses the
-  // regular-camera frame even in cinematic mode, since cinematic
-  // is purely a render-time visual.
+  // Off-screen death check — only while still PLAYing. Uses the regular-camera frame even in
+  // cinematic mode, since cinematic is purely a render-time visual.
   if (state === STATE.PLAY) {
     const sy = ball.y + camY;
     const m = 260 / ZOOM;
     if (sy > H + m || sy < -m * 2 || ball.x < -m || ball.x > W + m) die();
   }
 
-  // Cinematic camera follow. Uses the *exact* 1st-order
-  // integrator for the lag y = target - cam:
-  //   dy/dt = v_target - y / tau
-  //   y_{n+1} = y_n * e + v_target * tau * (1 - e)
-  // where v_target is estimated from the change in target since
-  // the last frame. Plain `cam += (target - cam) * (1-e)` has a
-  // dt-dependent steady-state error proportional to v*dt — small
-  // per frame, but with RAF jitter the error oscillates
-  // frame-to-frame and (at zoom 2+) reads as visible ship/star
+  // Cinematic camera follow. Uses the *exact* 1st-order integrator for the lag y = target - cam:
+  // dy/dt = v_target - y / tau y_{n+1} = y_n * e + v_target * tau * (1 - e) where v_target is
+  // estimated from the change in target since the last frame. Plain `cam += (target - cam) * (1-e)`
+  // has a dt-dependent steady-state error proportional to v*dt — small per frame, but with RAF
+  // jitter the error oscillates frame-to-frame and (at zoom 2+) reads as visible ship/star
   // micro-jitter. The exact form makes lag = v*tau under any dt.
   if (ball) {
     if (!_camIntegratorInited) {
@@ -2636,10 +2422,9 @@ function renderTick() {
     const vy = dt > 0 ? (ballRenderY - _prevFollowY) / dt : 0;
     const e = Math.exp(-dt / CINEMATIC_FOLLOW_TAU_MS);
     const oneMinusE = 1 - e;
-    // y_n is lag at the START of the [t_n, t_n+dt] interval:
-    // target_n - cam_n = _prevFollowX - cinematicCamX.
-    // Using ballRenderX (= target_{n+1}) here would mix time
-    // indices and roughly double the steady-state lag.
+    // y_n is lag at the START of the [t_n, t_n+dt] interval: target_n - cam_n = _prevFollowX -
+    // cinematicCamX. Using ballRenderX (= target_{n+1}) here would mix time indices and roughly
+    // double the steady-state lag.
     const yx = _prevFollowX - cinematicCamX;
     const yy = _prevFollowY - cinematicCamY;
     const yxNew = yx * e + vx * CINEMATIC_FOLLOW_TAU_MS * oneMinusE;
@@ -2651,15 +2436,12 @@ function renderTick() {
   }
   if (cinematicLevelIdx > 0) cinematicTime++;
 
-  // Compute the *target* camera params for this frame (regular
-  // cam at level 0; cinematic ship-follow with simplex breath at
-  // 1-3) in replayMat (scale, ox, oy) form. Then lerp the
-  // rendered triple toward the target so mode entry / exit /
-  // level changes all glide instead of snap. Both forms agree:
-  //   regular cam → screen = (world + cam - focus) * zoom + focus
-  //   replayMat   → screen = world * scale + offset
-  // so ox = camX*zoom + W/2 * (1-zoom),
-  //    oy = camY*zoom + H*focusY * (1-zoom).
+  // Compute the *target* camera params for this frame (regular cam at level 0; cinematic
+  // ship-follow with simplex breath at 1-3) in replayMat (scale, ox, oy) form. Then lerp the
+  // rendered triple toward the target so mode entry / exit / level changes all glide instead of
+  // snap. Both forms agree: regular cam → screen = (world + cam - focus) * zoom + focus replayMat →
+  // screen = world * scale + offset so ox = camX*zoom + W/2 * (1-zoom), oy = camY*zoom + H*focusY *
+  // (1-zoom).
   const levelZoom = CINEMATIC_LEVELS[cinematicLevelIdx];
   let targetScale, targetOx, targetOy;
   if (levelZoom === 0) {
@@ -2683,9 +2465,8 @@ function renderTick() {
     _prevTargetOy = targetOy;
     camRenderInited = true;
   } else {
-    // Same exact 1st-order integrator as the follow lerp. y_n
-    // uses the *previous* target (_prevTarget*) so we don't mix
-    // time indices and double the steady-state lag.
+    // Same exact 1st-order integrator as the follow lerp. y_n uses the *previous* target
+    // (_prevTarget*) so we don't mix time indices and double the steady-state lag.
     const dt = renderFrameDt;
     const vS = dt > 0 ? (targetScale - _prevTargetScale) / dt : 0;
     const vOx = dt > 0 ? (targetOx - _prevTargetOx) / dt : 0;
@@ -2705,24 +2486,19 @@ function renderTick() {
   _prevTargetOy = targetOy;
   _camIntegratorInited = true;
 
-  // Feed peak-held ball speed to the music layer so it can
-  // escalate the chord progression at high velocity. Decay-
-  // max: each frame the tracker either jumps to the current
-  // instantaneous speed (if higher) or decays the previous
-  // value. Peaks latch, valleys are ignored, so a boost
-  // pushes the intensity up immediately and holds it for
-  // about a second and a half.
+  // Feed peak-held ball speed to the music layer so it can escalate the chord progression at high
+  // velocity. Decay- max: each frame the tracker either jumps to the current instantaneous speed
+  // (if higher) or decays the previous value. Peaks latch, valleys are ignored, so a boost pushes
+  // the intensity up immediately and holds it for about a second and a half.
   const rawSpeed = Math.hypot(ball.vx, ball.vy);
   const normalized = Math.min(1, rawSpeed / AC.MAX_SPEED);
   const decayed = trackedSpeed * SPEED_DECAY;
   trackedSpeed = normalized > decayed ? normalized : decayed;
   audio.setIntensity(trackedSpeed);
 
-  // Comet close-pass scoring. Check distance from ball to
-  // each active comet on the current + next star. If within
-  // COMET_SCORE_RADIUS, award COMET_BONUS points and mark the
-  // comet so it doesn't re-award. The comet position uses the
-  // same ball.frame as the draw loop so visual and scoring
+  // Comet close-pass scoring. Check distance from ball to each active comet on the current + next
+  // star. If within COMET_SCORE_RADIUS, award COMET_BONUS points and mark the comet so it doesn't
+  // re-award. The comet position uses the same ball.frame as the draw loop so visual and scoring
   // agree on where the comet is.
   if (state === STATE.PLAY) {
     const fr = ball.frame || 0;
@@ -2743,10 +2519,9 @@ function renderTick() {
           updateScoreUI(true, 0, 0);
           showCometFlash();
           audio.comet();
-          // Sparkle burst at the comet's position — small
-          // bright particles in the star's color, radiating
-          // outward. Lighter and smaller than capture particles
-          // to feel "celestial" rather than "explosive".
+          // Sparkle burst at the comet's position — small bright particles in the star's color,
+          // radiating outward. Lighter and smaller than capture particles to feel "celestial"
+          // rather than "explosive".
           const cc = c1Of(s.colorIdx);
           for (let p = 0; p < 14; p++) {
             const pa = Math.random() * Math.PI * 2;
@@ -2759,9 +2534,8 @@ function renderTick() {
               size: 1.5 + Math.random() * 2,
             });
           }
-          // Remove the comet from the star entirely — it's
-          // been "collected". Break the inner loop since
-          // s.comets is now null.
+          // Remove the comet from the star entirely — it's been "collected". Break the inner loop
+          // since s.comets is now null.
           s.comets = null;
           break;
         }
@@ -2771,24 +2545,22 @@ function renderTick() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Replay rendering. Once the player dies, computeReplayBounds
-// figures out the world-coordinate AABB of the recorded path
-// (plus the stars that were touched) and stores a fit transform.
-// drawReplay then renders, every frame, a faded ghost of the
-// run inside the canvas, animating a marker dot along the path
-// at REPLAY_SPEED frames per render. The game-over overlay sits
-// on top with reduced opacity so the replay shows through.
+// Replay rendering. Once the player dies, computeReplayBounds figures out the world-coordinate AABB
+// of the recorded path (plus the stars that were touched) and stores a fit transform. drawReplay
+// then renders, every frame, a faded ghost of the run inside the canvas, animating a marker dot
+// along the path at REPLAY_SPEED frames per render. The game-over overlay sits on top with reduced
+// opacity so the replay shows through.
 // ─────────────────────────────────────────────────────────────
 function computeReplayBounds() {
   if (replay.length < 2) { replayBounds = null; return; }
-  // We only need lastStarIdx from the bounds now — the dynamic
-  // camera in drawReplayGhost does its own zoom/offset per frame.
+  // We only need lastStarIdx from the bounds now — the dynamic camera in drawReplayGhost does its
+  // own zoom/offset per frame.
   const lastIdx = ball ? Math.min(stars.length, ball.currentStar + 2) : stars.length;
   replayBounds = {
     lastStarIdx: lastIdx,
   };
-  // Seed the replay camera at the start of the trajectory so
-  // the smooth-follow doesn't have to pan from (0, 0).
+  // Seed the replay camera at the start of the trajectory so the smooth-follow doesn't have to pan
+  // from (0, 0).
   replayCamX = replay[0].x;
   replayCamY = replay[0].y;
 }
@@ -2802,34 +2574,30 @@ function drawReplayGhost() {
   // Current marker position (the "ship").
   const p = replay[upTo];
 
-  // Smooth-follow camera: ease toward the marker. At 60 fps
-  // with 0.06 weight, the camera responds in ~300 ms — fast
-  // enough to track sharp turns, slow enough to give the
-  // replay a cinematic glide instead of a locked follow.
+  // Smooth-follow camera: ease toward the marker. At 60 fps with 0.06 weight, the camera responds
+  // in ~300 ms — fast enough to track sharp turns, slow enough to give the replay a cinematic glide
+  // instead of a locked follow.
   replayCamX += (p.x - replayCamX) * 0.005;
   replayCamY += (p.y - replayCamY) * 0.005;
 
-  // Simplex-driven zoom variation. The noise makes the camera
-  // slowly breathe in and out, giving the replay depth and
-  // preventing the "locked zoom" look. Base zoom is slightly
-  // wider on mobile so the smaller screen doesn't feel cramped.
+  // Simplex-driven zoom variation. The noise makes the camera slowly breathe in and out, giving the
+  // replay depth and preventing the "locked zoom" look. Base zoom is slightly wider on mobile so
+  // the smaller screen doesn't feel cramped.
   const zoomBase = IS_TOUCH ? 0.42 : 0.52;
   const zoomAmplitude = 0.16;
   const zoomNoise = simplex2(replayIdx * 0.0004, 50.0);
   const currentZoom = zoomBase + zoomNoise * zoomAmplitude;
 
-  // Build a dynamic camera matrix: center at (camX, camY),
-  // scale = currentZoom. Reuses renderer.replayMat which
-  // wants (scale, ox, oy) where screen = world*scale + offset.
+  // Build a dynamic camera matrix: center at (camX, camY), scale = currentZoom. Reuses
+  // renderer.replayMat which wants (scale, ox, oy) where screen = world*scale + offset.
   const scale = currentZoom;
   const ox = -replayCamX * scale + W / 2;
   const oy = -replayCamY * scale + H / 2;
   const mat = renderer.replayMat(scale, ox, oy);
 
-  // Star markers: halo + center for each star the trajectory
-  // passed. Most will be off-screen with the close follow
-  // camera, but the GPU culls them at rasterization so no
-  // performance hit from submitting the full list.
+  // Star markers: halo + center for each star the trajectory passed. Most will be off-screen with
+  // the close follow camera, but the GPU culls them at rasterization so no performance hit from
+  // submitting the full list.
   if (b.lastStarIdx > 0) {
     const markers = [];
     for (let i = 0; i < b.lastStarIdx; i++) {
@@ -2851,11 +2619,9 @@ function drawReplayGhost() {
     renderer.drawCircleBatch(markers, mat);
   }
 
-  // Trajectory polyline — capped to a trailing window of 2000
-  // points instead of the full replay. The close-follow camera
-  // only shows a portion of the trajectory at any zoom, so
-  // rendering all 6000 points would waste vertex work and
-  // allocate a large slice array every frame for no visible
+  // Trajectory polyline — capped to a trailing window of 2000 points instead of the full replay.
+  // The close-follow camera only shows a portion of the trajectory at any zoom, so rendering all
+  // 6000 points would waste vertex work and allocate a large slice array every frame for no visible
   // gain.
   if (upTo > 1) {
     const headA = 0.85;
@@ -2866,8 +2632,8 @@ function drawReplayGhost() {
     renderer.drawPolyline(points, mat, 0.8 / scale, tail, head);
   }
 
-  // Marker dot — white glow + core, sized relative to current
-  // zoom so the dot stays a constant screen size.
+  // Marker dot — white glow + core, sized relative to current zoom so the dot stays a constant
+  // screen size.
   const dotR = 5 / scale;
   renderer.drawCircleBatch([
     { x: p.x, y: p.y, outerR: dotR * 4, innerR: 0, r: 1, g: 1, b: 1, a: 0.9, kind: 2 },
@@ -2875,33 +2641,28 @@ function drawReplayGhost() {
   ], mat);
 }
 
-// Star rendering lives in the `star` shader program in renderer.js.
-// This file no longer touches the canvas pixel-by-pixel — it just
-// orchestrates the game state and hands arrays off to the renderer.
+// Star rendering lives in the `star` shader program in renderer.js. This file no longer touches the
+// canvas pixel-by-pixel — it just orchestrates the game state and hands arrays off to the renderer.
 
 // ─────────────────────────────────────────────────────────────
-// Drawing — this is entirely orchestration now. All actual pixel
-// work happens in renderer.js (WebGL2). draw() advances per-entity
-// state (particle positions, shockwave radii, star pulse decay)
+// Drawing — this is entirely orchestration now. All actual pixel work happens in renderer.js
+// (WebGL2). draw() advances per-entity state (particle positions, shockwave radii, star pulse
+// decay)
 // while building the instance batches the renderer consumes.
 // ─────────────────────────────────────────────────────────────
-// Wrap period for the shader/CPU animation clock. Kept at a
-// multiple of 2π so sin(nowSec * k + seed) is bit-identical
-// across the wrap boundary for every k used in the code
-// (all k are decimals with up to 2 fractional digits, so
-// W * k is an integer multiple of 2π whenever N ≥ 100). At
-// N = 10000, W ≈ 17.4 hours — long enough that we essentially
-// never hit it during a session, but small enough that float32
-// precision on `u_time` never degrades.
+// Wrap period for the shader/CPU animation clock. Kept at a multiple of 2π so sin(nowSec * k +
+// seed) is bit-identical across the wrap boundary for every k used in the code (all k are decimals
+// with up to 2 fractional digits, so W * k is an integer multiple of 2π whenever N ≥ 100). At N =
+// 10000, W ≈ 17.4 hours — long enough that we essentially never hit it during a session, but small
+// enough that float32 precision on `u_time` never degrades.
 const TIME_WRAP = Math.PI * 2 * 10000;
 function draw() {
   if (!renderer) return;
   const nowSec = (performance.now() / 1000) % TIME_WRAP;
 
-  // Quick pre-scan: any active black hole near the screen?
-  // If so, route all draws through the scene FBO so the
-  // lensing composite can distort them. Otherwise render
-  // directly to the default framebuffer — zero FBO overhead.
+  // Quick pre-scan: any active black hole near the screen? If so, route all draws through the scene
+  // FBO so the lensing composite can distort them. Otherwise render directly to the default
+  // framebuffer — zero FBO overhead.
   let hasVisibleBH = false;
   if (state === STATE.PLAY || state === STATE.DYING) {
     for (let i = 0; i < stars.length; i++) {
@@ -2938,17 +2699,15 @@ function draw() {
     return;
   }
 
-  // PLAY / DYING: world-to-clip matrix from the lerped camera
-  // params computed in renderTick. Routing the regular cam
-  // through replayMat too (rather than cameraMat) lets one set
-  // of values drive both modes and the transitions between.
+  // PLAY / DYING: world-to-clip matrix from the lerped camera params computed in renderTick.
+  // Routing the regular cam through replayMat too (rather than cameraMat) lets one set of values
+  // drive both modes and the transitions between.
   const cam = renderer.replayMat(camRenderScale, camRenderOx, camRenderOy);
   const drawZoom = camRenderScale;
 
   // Trail — single stroked polyline. Half-width 1.2 world units;
-  // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen.
-  // Alpha baked into colors so the renderer passes it straight
-  // through as uniforms.
+  // at ZOOM 0.65 that's ≈ 1.6 px per side, 3.2 px total on screen. Alpha baked into colors so the
+  // renderer passes it straight through as uniforms.
   if (trail.length > 1) {
     const last = trail[trail.length - 1];
     const headA = 0.55;
@@ -2957,13 +2716,10 @@ function draw() {
     renderer.drawPolyline(trail, cam, 1.3, tail, head);
   }
 
-  // Launch-window indicator — short tangent ticks on the orbit
-  // where a tap would land a clean capture. Player watches the
-  // bright zone approach as they orbit.
-  // Azazel always shows the launch window. Its capture zoom
-  // (set in `zoomTargetFor`) is steep enough to push the next
-  // star off-screen most of the time, so without the indicator
-  // the player can't see when to tap.
+  // Launch-window indicator — short tangent ticks on the orbit where a tap would land a clean
+  // capture. Player watches the bright zone approach as they orbit. Azazel always shows the launch
+  // window. Its capture zoom (set in `zoomTargetFor`) is steep enough to push the next star
+  // off-screen most of the time, so without the indicator the player can't see when to tap.
   const csCur = ball ? stars[ball.currentStar] : null;
   const lwForced = csCur && csCur.isAzazel;
   if ((showLaunchWindow || lwForced) && ball && ball.launchWindow
@@ -2972,21 +2728,18 @@ function draw() {
     const cs = stars[ball.currentStar];
     if (cs) {
       const lw = ball.launchWindow;
-      // Same white + alpha-pulse as the next-star capture hint
-      // ring, a touch brighter so the ticks read clearly inside
-      // the orbit.
+      // Same white + alpha-pulse as the next-star capture hint ring, a touch brighter so the ticks
+      // read clearly inside the orbit.
       const pulse = 0.85 + 0.30 * Math.sin(nowSec * 2.4);
       const a = 0.5 * pulse;
       const headCol = [a, a, a, a];
       const tickLen = 5;
-      // Stroke half-width is expressed in screen-space pixels
-      // and divided by drawZoom — without this it grows with
-      // zoom and the ticks turn into thick bars at the steeper
-      // captured-zooms. tickLen stays world-space so the marks
-      // visibly scale with the orbit they're attached to.
+      // Stroke half-width is expressed in screen-space pixels and divided by drawZoom — without
+      // this it grows with zoom and the ticks turn into thick bars at the steeper captured-zooms.
+      // tickLen stays world-space so the marks visibly scale with the orbit they're attached to.
       const halfWidth = 0.9 / drawZoom;
-      // Draw the ticks 10% inboard of the ship's orbit so they
-      // sit cleanly inside the trajectory instead of on top of it.
+      // Draw the ticks 10% inboard of the ship's orbit so they sit cleanly inside the trajectory
+      // instead of on top of it.
       const inset = 0.9;
       for (let i = 0; i < lw.length; i++) {
         const s = lw[i];
@@ -3001,10 +2754,9 @@ function draw() {
     }
   }
 
-  // Projected launch-window — drawn around the target star while
-  // a queued in-transit boost is pending. Same tick style but
-  // dimmer + slightly faster pulse so the player can tell it's
-  // a *prediction* rather than the live indicator.
+  // Projected launch-window — drawn around the target star while a queued in-transit boost is
+  // pending. Same tick style but dimmer + slightly faster pulse so the player can tell it's a
+  // *prediction* rather than the live indicator.
   if (showLaunchWindow && ball && ball.queuedBoost
       && ball.projectedLaunchWindow
       && ball.pendingCapture >= 0
@@ -3032,12 +2784,10 @@ function draw() {
     }
   }
 
-  // Active stars — frustum-cull against the camera vertical band,
-  // decay catch pulses, tag role flags, build the instance batch.
-  // Drop past stars more than PAST_STAR_KEEP captures behind
-  // the current one — they've been off-camera for a while and
-  // carry no gameplay information. Saves JS push + star-shader
-  // fragment cost at late-game star counts.
+  // Active stars — frustum-cull against the camera vertical band, decay catch pulses, tag role
+  // flags, build the instance batch. Drop past stars more than PAST_STAR_KEEP captures behind the
+  // current one — they've been off-camera for a while and carry no gameplay information. Saves JS
+  // push + star-shader fragment cost at late-game star counts.
   const PAST_STAR_KEEP = 6;
   const minDrawIdx = ball ? Math.max(0, ball.currentStar - PAST_STAR_KEEP) : 0;
   const starBatch = [];
@@ -3046,9 +2796,8 @@ function draw() {
     const sY = s.y + camY;
     if (sY < -240 || sY > H + 240) continue;
     if (s.pulse > 0) s.pulse -= 0.03;
-    // Crash wobble — soft decaying squeeze into an ellipse along
-    // the impact direction. Decays over ~1.5 s with a gentle
-    // oscillation so the star settles back to round.
+    // Crash wobble — soft decaying squeeze into an ellipse along the impact direction. Decays over
+    // ~1.5 s with a gentle oscillation so the star settles back to round.
     if (s.wobble > 0) {
       s.wobble *= 0.97;
       if (s.wobble < 0.01) s.wobble = 0;
@@ -3056,9 +2805,8 @@ function draw() {
     const isCurrent = ball && i === ball.currentStar;
     const isNext = ball && i === ball.currentStar + 1;
     const isPast = s.caught && !isCurrent;
-    // Compute oscillating wobble for the shader — the star
-    // squeezes flat on the impact side, then relaxes with a
-    // soft bounce.
+    // Compute oscillating wobble for the shader — the star squeezes flat on the impact side, then
+    // relaxes with a soft bounce.
     const wob = s.wobble || 0;
     const wobbleVis = wob > 0
       ? Math.sin(wob * 18) * wob : 0;
@@ -3067,19 +2815,15 @@ function draw() {
       const frame = ball ? ball.frame || 0 : 0;
       const subs = binaryPositions(s, frame);
       const b = s.binary;
-      // Tidal lock: set seed = orbitalAngle - nowSec so that
-      // tp = u_time + seed = orbitalAngle. Each sub-star's
-      // features rotate exactly once per orbit.
+      // Tidal lock: set seed = orbitalAngle - nowSec so that tp = u_time + seed = orbitalAngle.
+      // Each sub-star's features rotate exactly once per orbit.
       const orbAngle = frame * b.omega + b.phase;
       for (let j = 0; j < 2; j++) {
         const subBH = j === 1 && b.accretorIsBH;
-        // Each sub-star faces the other: offset by π for the
-        // second so its "front" points at the first.
-        // Wrap at TIME_WRAP (same multiple-of-2π period used for
-        // nowSec) so the seed uniform doesn't drift out of
-        // float32 precision over long sessions or many
-        // continues. Lossless because every shader k is a clean
-        // decimal — W·k is always an integer multiple of 2π.
+        // Each sub-star faces the other: offset by π for the second so its "front" points at the
+        // first. Wrap at TIME_WRAP (same multiple-of-2π period used for nowSec) so the seed uniform
+        // doesn't drift out of float32 precision over long sessions or many continues. Lossless
+        // because every shader k is a clean decimal — W·k is always an integer multiple of 2π.
         const tidalSeed = (orbAngle + j * Math.PI - nowSec) % TIME_WRAP;
         starBatch.push({
           x: subs[j].x, y: subs[j].y,
@@ -3137,12 +2881,10 @@ function draw() {
   }
   if (ejectaBatch.length) renderer.drawCircleBatch(ejectaBatch, cam);
 
-  // Planets — rendered at their current physics frame so their
-  // visual position exactly matches what the physics integrator
-  // sees. Each planet is a glow halo + a solid core, pushed
-  // through the circle program. A faint orbital ring is also
-  // drawn to suggest the path. Planets are cosmetic-plus-gravity:
-  // the ship flies through them and does NOT crash.
+  // Planets — rendered at their current physics frame so their visual position exactly matches what
+  // the physics integrator sees. Each planet is a glow halo + a solid core, pushed through the
+  // circle program. A faint orbital ring is also drawn to suggest the path. Planets are
+  // cosmetic-plus-gravity: the ship flies through them and does NOT crash.
   const frame = ball ? (ball.frame || 0) : 0;
   const planetBatch = [];
   for (let i = 0; i < stars.length; i++) {
@@ -3178,14 +2920,11 @@ function draw() {
   }
   if (planetBatch.length) renderer.drawCircleBatch(planetBatch, cam);
 
-  // Comets — eccentric Kepler orbits with a fading particle
-  // trail. Each trail particle is a past orbital position
-  // computed by solving the Kepler equation at (frame - t*step),
-  // so the trail naturally follows the comet's curved path and
-  // stretches at periapsis (fast) / compresses at apoapsis
-  // (slow), matching real dust-tail behavior. 20 samples at 6
-  // physics-frame intervals ≈ 1 second of trail. Rendered as
-  // glow circles that shrink and fade, batched into a single
+  // Comets — eccentric Kepler orbits with a fading particle trail. Each trail particle is a past
+  // orbital position computed by solving the Kepler equation at (frame - t*step), so the trail
+  // naturally follows the comet's curved path and stretches at periapsis (fast) / compresses at
+  // apoapsis (slow), matching real dust-tail behavior. 20 samples at 6 physics-frame intervals ≈ 1
+  // second of trail. Rendered as glow circles that shrink and fade, batched into a single
   // drawCircleBatch call per comet.
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
@@ -3197,8 +2936,8 @@ function draw() {
       const comet = s.comets[j];
       const cometBatch = [];
       const pos = appendCometBatch(s, comet, frame, cometBatch);
-      // Coma activity drives the outgassing-particle wake too —
-      // recompute it here for the gameplay-only spawn logic.
+      // Coma activity drives the outgassing-particle wake too — recompute it here for the
+      // gameplay-only spawn logic.
       const periDist = comet.a * (1 - comet.e);
       const apoDist = comet.a * (1 + comet.e);
       const activity = Math.max(
@@ -3227,11 +2966,9 @@ function draw() {
     }
   }
 
-  // Orbiting accretion clumps + scattered field stars around
-  // each active black hole. Drawn to the FBO before the
-  // lensing composite pass, so the lensing shader warps them
-  // into visible arcs — making the gravitational distortion
-  // dramatically apparent. Inner clumps orbit faster (Kepler-
+  // Orbiting accretion clumps + scattered field stars around each active black hole. Drawn to the
+  // FBO before the lensing composite pass, so the lensing shader warps them into visible arcs —
+  // making the gravitational distortion dramatically apparent. Inner clumps orbit faster (Kepler-
   // ish), outer field stars are stationary landmarks.
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
@@ -3242,11 +2979,9 @@ function draw() {
 
     const bhBatch = [];
 
-    // Orbiting gas clumps in the accretion disk. Golden-angle
-    // spread + Kepler-speed orbiting gives a natural-looking
-    // swirl of hot debris. Radii scaled by BH_VISUAL_SCALE so
-    // the clumps orbit close to the visually smaller event
-    // horizon, not at the (larger) physics radius.
+    // Orbiting gas clumps in the accretion disk. Golden-angle spread + Kepler-speed orbiting gives
+    // a natural-looking swirl of hot debris. Radii scaled by BH_VISUAL_SCALE so the clumps orbit
+    // close to the visually smaller event horizon, not at the (larger) physics radius.
     const vr = s.r * BH_VISUAL_SCALE;
     for (let c = 0; c < 16; c++) {
       const cr = vr * (1.3 + c * 0.18);
@@ -3263,8 +2998,8 @@ function draw() {
       });
     }
 
-    // Scattered field stars — deterministic positions that act
-    // as visual reference for the lensing distortion.
+    // Scattered field stars — deterministic positions that act as visual reference for the lensing
+    // distortion.
     const seedBase = s.x * 0.137 + s.y * 0.191;
     for (let f = 0; f < 12; f++) {
       const h = Math.sin(seedBase + f * 127.1) * 43758.5453;
@@ -3286,14 +3021,13 @@ function draw() {
     renderer.drawCircleBatch(bhBatch, cam);
   }
 
-  // Dashed hint ring around the next star — drawn via the circle
-  // program with kind=3.
+  // Dashed hint ring around the next star — drawn via the circle program with kind=3.
   if (ball && ball.currentStar + 1 < stars.length
       && !stars[ball.currentStar + 1].isBlackHole) {
     const nx = stars[ball.currentStar + 1];
     const ringR = nx.r * CAPTURE_MULT;
-    // Slight alpha pulse so the hint ring draws the eye without
-    // being distracting — roughly 0.14..0.26 over a ~2.6 s period.
+    // Slight alpha pulse so the hint ring draws the eye without being distracting — roughly
+    // 0.14..0.26 over a ~2.6 s period.
     const pulse = 0.85 + 0.30 * Math.sin(nowSec * 2.4);
     renderer.drawCircleBatch([{
       x: nx.x, y: nx.y,
@@ -3304,8 +3038,8 @@ function draw() {
     }], cam);
   }
 
-  // Shockwaves — advance state and collect into a circle batch
-  // (kind=1 ring). lineWidth becomes an inner/outer radius gap.
+  // Shockwaves — advance state and collect into a circle batch (kind=1 ring). lineWidth becomes an
+  // inner/outer radius gap.
   const shockBatch = [];
   for (let i = shockwaves.length - 1; i >= 0; i--) {
     const w = shockwaves[i];
@@ -3341,9 +3075,8 @@ function draw() {
   }
   if (partBatch.length) renderer.drawCircleBatch(partBatch, cam);
 
-  // Ball: velocity arrow + glow halo + bright core. Velocity uses
-  // the raw physics velocity so direction reacts instantly to a
-  // boost; position uses the interpolated render coords.
+  // Ball: velocity arrow + glow halo + bright core. Velocity uses the raw physics velocity so
+  // direction reacts instantly to a boost; position uses the interpolated render coords.
   if (ball && ball.alive) {
     const cs = stars[ball.currentStar];
     const bc = c1Of(cs.colorIdx);
@@ -3361,8 +3094,8 @@ function draw() {
       renderer.drawPolyline([p0, p1], cam, 1.3, tail, head);
     }
 
-    // Ball rendering: glow halo + solid white core + velocity tip dot
-    // (when direction is valid). All in one circle batch.
+    // Ball rendering: glow halo + solid white core + velocity tip dot (when direction is valid).
+    // All in one circle batch.
     const ballBatch = [
       // Glow halo
       { x: bx, y: by, outerR: 22, innerR: 0, r: bc[0], g: bc[1], b: bc[2], a: 0.53, kind: 2 },
@@ -3381,10 +3114,9 @@ function draw() {
     renderer.drawCircleBatch(ballBatch, cam);
   }
 
-  // Collect on-screen black holes for the lensing composite.
-  // Transform their world positions through the camera matrix
-  // to framebuffer-pixel coords so the lensing shader knows
-  // where to distort.
+  // Collect on-screen black holes for the lensing composite. Transform their world positions
+  // through the camera matrix to framebuffer-pixel coords so the lensing shader knows where to
+  // distort.
   const bhData = [];
   const fbW = Math.round(W * DPR);
   const fbH = Math.round(H * DPR);
@@ -3420,49 +3152,41 @@ function draw() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Main loop. Fixed-timestep physics + variable-rate rendering.
-// We accumulate elapsed wall-clock time between RAF callbacks
-// and run as many PHYSICS_DT_MS-sized physicsTick() calls as
-// fit, so the game advances at exactly PHYSICS_HZ regardless of
-// monitor refresh rate or RAF irregularity. The accumulator is
-// clamped at MAX_FRAME_GAP_MS so a tab switch / debugger pause
-// can't queue up a multi-second burst of physics on resume.
+// Main loop. Fixed-timestep physics + variable-rate rendering. We accumulate elapsed wall-clock
+// time between RAF callbacks and run as many PHYSICS_DT_MS-sized physicsTick() calls as fit, so the
+// game advances at exactly PHYSICS_HZ regardless of monitor refresh rate or RAF irregularity. The
+// accumulator is clamped at MAX_FRAME_GAP_MS so a tab switch / debugger pause can't queue up a
+// multi-second burst of physics on resume.
 //
 // Two things about this loop matter for mobile smoothness:
 //
 //   1. Use the RAF-provided timestamp, NOT performance.now().
-//      The RAF timestamp is aligned to the frame the browser is
-//      preparing; performance.now() gives the moment the JS
-//      callback actually ran, which jitters relative to vsync
-//      (especially on mobile after compositor handoff). That
-//      jitter poisons `elapsed` and makes a steady 60 Hz display
-//      fire 1 / 2 / 3 physics ticks per frame in an uneven
-//      pattern. At 120 Hz physics / 60 Hz rendering that reads
-//      as visible stutter even though the display is solid.
+// The RAF timestamp is aligned to the frame the browser is preparing; performance.now() gives the
+// moment the JS callback actually ran, which jitters relative to vsync (especially on mobile after
+// compositor handoff). That jitter poisons `elapsed` and makes a steady 60 Hz display fire 1 / 2 /
+// 3 physics ticks per frame in an uneven pattern. At 120 Hz physics / 60 Hz rendering that reads as
+// visible stutter even though the display is solid.
 //
 //   2. Render interpolation between the two most recent physics
-//      states. A fixed-step sim committed in discrete chunks
-//      only happens to produce the same number of ticks per
-//      frame when the accumulator grid aligns with the refresh
-//      grid, which it rarely does for long. Lerping the rendered
-//      ball position by `alpha = accumulator / PHYSICS_DT_MS`
-//      makes the visual advance at display rate regardless, and
-//      is the standard Glenn-Fiedler "Fix Your Timestep" fix.
+// states. A fixed-step sim committed in discrete chunks only happens to produce the same number of
+// ticks per frame when the accumulator grid aligns with the refresh grid, which it rarely does for
+// long. Lerping the rendered ball position by `alpha = accumulator / PHYSICS_DT_MS` makes the
+// visual advance at display rate regardless, and is the standard Glenn-Fiedler "Fix Your Timestep"
+// fix.
 // ─────────────────────────────────────────────────────────────
 let physicsAccumulator = 0;
-// Sentinel: set on the first RAF callback so we don't compute
-// a bogus elapsed from module-load time to first vsync.
+// Sentinel: set on the first RAF callback so we don't compute a bogus elapsed from module-load time
+// to first vsync.
 let lastFrameTime = -1;
 let paused = false;
-// Paused indicator in the HUD. Call syncPausedIndicator() after
-// any mutation of `paused` to keep the text in/out of the DOM.
+// Paused indicator in the HUD. Call syncPausedIndicator() after any mutation of `paused` to keep
+// the text in/out of the DOM.
 const pausedEl = document.getElementById("paused-indicator");
 function syncPausedIndicator() {
   if (!pausedEl) return;
-  // Indicator visibility is gated on PLAY (no "paused" text on
-  // the menu / death screen), but music pause must follow the
-  // raw `paused` flag — otherwise a state transition (e.g.
-  // dying while paused) would silently un-pause the music.
+  // Indicator visibility is gated on PLAY (no "paused" text on the menu / death screen), but music
+  // pause must follow the raw `paused` flag — otherwise a state transition (e.g. dying while
+  // paused) would silently un-pause the music.
   const showIndicator = paused && state === STATE.PLAY;
   if (showIndicator) pausedEl.classList.add("on");
   else pausedEl.classList.remove("on");
@@ -3476,20 +3200,17 @@ if (pausedEl) {
     syncPausedIndicator();
   });
 }
-// Interpolated render position for the ball. Equal to ball.x/y
-// only at alpha = 1 (end of a physics tick); otherwise lerped
-// between the state before the most recent tick and the current
-// state. draw() and renderTick() use these for anything visual.
+// Interpolated render position for the ball. Equal to ball.x/y only at alpha = 1 (end of a physics
+// tick); otherwise lerped between the state before the most recent tick and the current state.
+// draw() and renderTick() use these for anything visual.
 let ballRenderX = 0, ballRenderY = 0;
-// Real wall-clock elapsed since the last render frame (ms).
-// Updated by the main loop and read by renderTick's time-aware
-// camera lerps so frame-to-frame RAF jitter doesn't translate
-// into cam-velocity jitter.
+// Real wall-clock elapsed since the last render frame (ms). Updated by the main loop and read by
+// renderTick's time-aware camera lerps so frame-to-frame RAF jitter doesn't translate into
+// cam-velocity jitter.
 let renderFrameDt = 16.67;
 
-// Rolling-mean FPS counter — opt-in via ?fps=1 URL param.
-// Drops samples older than FPS_WINDOW_MS so the readout
-// reflects current performance, not the run average.
+// Rolling-mean FPS counter — opt-in via ?fps=1 URL param. Drops samples older than FPS_WINDOW_MS so
+// the readout reflects current performance, not the run average.
 const _fpsEnabled = new URLSearchParams(location.search).get("fps") === "1";
 const _fpsEl = _fpsEnabled ? document.getElementById("fps") : null;
 if (_fpsEl) _fpsEl.style.display = "block";
@@ -3518,21 +3239,17 @@ function loop(rafTime) {
     physicsAccumulator -= PHYSICS_DT_MS;
     ticks++;
   }
-  // If the cap fired, shed any leftover accumulator so we don't
-  // try to "catch up" forever after a long stall.
+  // If the cap fired, shed any leftover accumulator so we don't try to "catch up" forever after a
+  // long stall.
   if (ticks >= MAX_PHYSICS_PER_FRAME) physicsAccumulator = 0;
 
-  // Render-position extrapolation. ball.x is the post-last-tick
-  // sim state; we project forward by the leftover accumulator
-  // using the post-tick velocity (vx/vy are world units PER
-  // tick, so accFrac is the fraction of a tick to advance). On
-  // a K=0 frame (high-refresh displays where elapsed < dt) the
-  // sim doesn't tick but accFrac still grows continuously —
-  // the previous interpolation collapsed in that case (ballPrev
-  // == ball.x), freezing the ship for one frame and then
-  // jumping when the next K=2 frame caught up. Extrapolation
-  // makes the rendered position a smooth function of wall time
-  // regardless of how ticks are distributed across frames.
+  // Render-position extrapolation. ball.x is the post-last-tick sim state; we project forward by
+  // the leftover accumulator using the post-tick velocity (vx/vy are world units PER tick, so
+  // accFrac is the fraction of a tick to advance). On a K=0 frame (high-refresh displays where
+  // elapsed < dt) the sim doesn't tick but accFrac still grows continuously — the previous
+  // interpolation collapsed in that case (ballPrev == ball.x), freezing the ship for one frame and
+  // then jumping when the next K=2 frame caught up. Extrapolation makes the rendered position a
+  // smooth function of wall time regardless of how ticks are distributed across frames.
   if (ball) {
     const accFrac = physicsAccumulator / PHYSICS_DT_MS;
     ballRenderX = ball.x + ball.vx * accFrac;
@@ -3547,9 +3264,8 @@ function loop(rafTime) {
     replayIdx += REPLAY_SPEED;
     if (replayIdx >= replay.length + 30) replayIdx = 0; // brief hold then loop
   }
-  // Rolling-mean FPS counter — push the current frame's elapsed
-  // onto the sample queue, drop anything older than the window,
-  // and refresh the readout at most every 250 ms.
+  // Rolling-mean FPS counter — push the current frame's elapsed onto the sample queue, drop
+  // anything older than the window, and refresh the readout at most every 250 ms.
   if (_fpsEl && (state === STATE.PLAY || state === STATE.DYING)) {
     _fpsSamples.push(elapsed);
     _fpsWindowMs += elapsed;
@@ -3565,20 +3281,18 @@ function loop(rafTime) {
   }
   requestAnimationFrame(loop);
 }
-// Populate the welcome-screen menu stars before the first draw.
-// All top-level `let` declarations have run by this point, so
-// initMenuStars can touch menuStars without TDZ issues. The
-// renderer seeds its own parallax bgStars inside setViewport().
+// Populate the welcome-screen menu stars before the first draw. All top-level `let` declarations
+// have run by this point, so initMenuStars can touch menuStars without TDZ issues. The renderer
+// seeds its own parallax bgStars inside setViewport().
 initMenuStars();
 if (best > 0) {
   const el = document.getElementById("start-best");
   el.textContent = "best " + best;
   el.style.visibility = "visible";
 }
-// Kick off via RAF. Do NOT call loop() synchronously — the first
-// elapsed needs to be measured against a real vsync timestamp
-// (see the sentinel in loop()), and any catchup ticks fired
-// from module-load time would run before init() has a ball.
+// Kick off via RAF. Do NOT call loop() synchronously — the first elapsed needs to be measured
+// against a real vsync timestamp (see the sentinel in loop()), and any catchup ticks fired from
+// module-load time would run before init() has a ball.
 requestAnimationFrame(loop);
 
 // ─────────────────────────────────────────────────────────────
@@ -3588,18 +3302,15 @@ function handleTap() {
   if (state === STATE.PLAY) boost();
 }
 
-// All three of these preventDefaults are scoped to gameplay.
-// On the start / game-over screens we let the browser handle
-// touches normally so pull-to-refresh (and any other native
-// gesture) still works. touch-action on body + canvas already
-// permits the pan gesture at the CSS layer; these handlers
-// just need to stop swallowing it at the JS layer.
+// All three of these preventDefaults are scoped to gameplay. On the start / game-over screens we
+// let the browser handle touches normally so pull-to-refresh (and any other native gesture) still
+// works. touch-action on body + canvas already permits the pan gesture at the CSS layer; these
+// handlers just need to stop swallowing it at the JS layer.
 //
-// Focus-click suppression: when the browser window is behind
-// another window and the user clicks to bring it forward, the
-// click also fires as a pointerdown on the canvas. We detect
-// this by comparing against the last window.focus timestamp —
-// the browser fires focus → pointerdown within a few ms.
+// Focus-click suppression: when the browser window is behind another window and the user clicks to
+// bring it forward, the click also fires as a pointerdown on the canvas. We detect this by
+// comparing against the last window.focus timestamp — the browser fires focus → pointerdown within
+// a few ms.
 let lastWindowFocusTime = 0;
 window.addEventListener("focus", () => { lastWindowFocusTime = performance.now(); });
 
@@ -3607,9 +3318,8 @@ document.addEventListener("pointerdown", (e) => {
   const t = e.target;
   if (e.button && e.button !== 0) return;
   if (t.closest("button")) return;
-  // Pointerdown while help is open: close help (and unpause),
-  // don't boost. Fires before the click handler, so the boost
-  // is suppressed in time.
+  // Pointerdown while help is open: close help (and unpause), don't boost. Fires before the click
+  // handler, so the boost is suppressed in time.
   if (helpOverlay && !helpOverlay.classList.contains("hidden")) {
     e.preventDefault();
     setHelpOpen(false);
@@ -3617,8 +3327,8 @@ document.addEventListener("pointerdown", (e) => {
   }
   if (state !== STATE.PLAY) return;
   if (performance.now() - lastWindowFocusTime < 150) return;
-  // Suppressed while paused so a stray tap can't boost.
-  // Unpause via P, the paused indicator, or the help overlay.
+  // Suppressed while paused so a stray tap can't boost. Unpause via P, the paused indicator, or the
+  // help overlay.
   if (paused) { e.preventDefault(); return; }
   e.preventDefault();
   handleTap();
@@ -3633,8 +3343,8 @@ document.addEventListener("gesturestart", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  // M toggles the mute state across all states. It never
-  // interacts with gameplay, so it's safe to handle anywhere.
+  // M toggles the mute state across all states. It never interacts with gameplay, so it's safe to
+  // handle anywhere.
   if (e.key === "m" || e.key === "M") {
     if (e.repeat) return;
     e.preventDefault();
@@ -3674,11 +3384,9 @@ document.addEventListener("keydown", (e) => {
     syncPausedIndicator();
     return;
   }
-  // Arrow keys nudge orbital velocity while in orbit.
-  // Unclamped — extreme nudging can make the orbit eccentric
-  // enough to crash (fine) or escape / cross into another
-  // star's Voronoi zone (triggers normal death). Could cap at
-  // ~1.25× / 0.75× v_circ if this becomes a problem.
+  // Arrow keys nudge orbital velocity while in orbit. Unclamped — extreme nudging can make the
+  // orbit eccentric enough to crash (fine) or escape / cross into another star's Voronoi zone
+  // (triggers normal death). Could cap at ~1.25× / 0.75× v_circ if this becomes a problem.
   if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
     if (state !== STATE.PLAY || !ball || ball.pendingCapture >= 0) return;
     e.preventDefault();
@@ -3686,12 +3394,11 @@ document.addEventListener("keydown", (e) => {
     const scale = isBrake ? 0.98 : 1.02;
     ball.vx *= scale;
     ball.vy *= scale;
-    // The orbit changed shape; the cached launch window was
-    // computed from a circular orbit and is now stale.
+    // The orbit changed shape; the cached launch window was computed from a circular orbit and is
+    // now stale.
     computeLaunchWindow();
-    // Exhaust puff — same params as a boost so the nudge is
-    // clearly visible. Right arrow (accel): retrograde puff.
-    // Left arrow (brake): prograde puff.
+    // Exhaust puff — same params as a boost so the nudge is clearly visible. Right arrow (accel):
+    // retrograde puff. Left arrow (brake): prograde puff.
     const sp = Math.hypot(ball.vx, ball.vy);
     if (sp > 0.001) {
       const dirSign = isBrake ? 1 : -1;
@@ -3711,8 +3418,7 @@ document.addEventListener("keydown", (e) => {
     }
     return;
   }
-  // Enter on the game-over overlay: continue (desktop shortcut,
-  // complements Space = restart).
+  // Enter on the game-over overlay: continue (desktop shortcut, complements Space = restart).
   if ((e.code === "Enter" || e.key === "Enter") && state === STATE.DEAD) {
     if (e.repeat) return;
     e.preventDefault();
@@ -3751,11 +3457,10 @@ document.getElementById("retry-btn").addEventListener("click", (e) => {
   clearSave();
   init();
 });
-// Challenge card flip toggle. The .flipped class lives on
-// #challenge-out itself so its CSS transitions (width/height)
-// glide with the inner's rotateY at the same time. Clicking the
-// front-face "get challenge link" text flips it open; clicking
-// the description line on the back flips it back closed.
+// Challenge card flip toggle. The .flipped class lives on #challenge-out itself so its CSS
+// transitions (width/height) glide with the inner's rotateY at the same time. Clicking the
+// front-face "get challenge link" text flips it open; clicking the description line on the back
+// flips it back closed.
 document.getElementById("challenge-out-flip").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   const card = document.getElementById("challenge-out");
@@ -3772,9 +3477,8 @@ document.getElementById("challenge-out-flip").addEventListener("click", (e) => {
     });
   }
 }
-// Challenge card: copy the current run's URL to clipboard. Falls
-// back to a textarea + execCommand on browsers without async
-// clipboard access (older Safari, http origins).
+// Challenge card: copy the current run's URL to clipboard. Falls back to a textarea + execCommand
+// on browsers without async clipboard access (older Safari, http origins).
 document.getElementById("challenge-out-copy").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   const btn = e.currentTarget;
@@ -3804,11 +3508,10 @@ document.getElementById("continue-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
   document.getElementById("gameover").classList.add("hidden");
   state = STATE.PLAY;
-  // Continuing replaces the death snapshot — any future reload
-  // will offer RESUME only if the player dies again (at which
-  // point a fresh snapshot is written). Without this clear, a
-  // reload after a successful continue would send the player
-  // back to the original death point, losing intervening progress.
+  // Continuing replaces the death snapshot — any future reload will offer RESUME only if the player
+  // dies again (at which point a fresh snapshot is written). Without this clear, a reload after a
+  // successful continue would send the player back to the original death point, losing intervening
+  // progress.
   clearSave();
   continueRun();
 });
@@ -3821,16 +3524,12 @@ document.getElementById("resume-btn").addEventListener("click", (e) => {
   resumeFromSave(data);
 });
 
-// Expose the RESUME button on the menu if a saved run exists
-// AND no incoming challenge is active. The challenge guard
-// matters because RESUME calls resumeFromSave(), which restores
-// the saved score — letting a player land on a #challenge URL
-// and instantly exceed the sender's score with their prior
-// run's progress. Forcing them to start fresh keeps the
-// challenge meaningful. The button's slot is reserved in HTML
-// via `visibility:hidden` so a load with a save and a load
-// without one have the same layout — flipping visibility
-// doesn't shift the description / link block beneath it.
+// Expose the RESUME button on the menu if a saved run exists AND no incoming challenge is active.
+// The challenge guard matters because RESUME calls resumeFromSave(), which restores the saved score
+// — letting a player land on a #challenge URL and instantly exceed the sender's score with their
+// prior run's progress. Forcing them to start fresh keeps the challenge meaningful. The button's
+// slot is reserved in HTML via `visibility:hidden` so a load with a save and a load without one
+// have the same layout — flipping visibility doesn't shift the description / link block beneath it.
 function updateResumeButtonVisibility() {
   const btn = document.getElementById("resume-btn");
   if (!btn) return;

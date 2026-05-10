@@ -1,8 +1,6 @@
-// Verifies that addNextStar actually pushes target stars
-// further away as the game progresses. Re-implements the
-// generator inline (it lives in gameplay.js which is browser-only)
-// and runs many simulated chains, reporting prev→next distance
-// statistics by star index.
+// Verifies that addNextStar actually pushes target stars further away as the game progresses.
+// Re-implements the generator inline (it lives in gameplay.js which is browser-only) and runs many
+// simulated chains, reporting prev→next distance statistics by star index.
 
 import { SAFE_SEP, starGM } from "../docs/physics.js";
 
@@ -29,8 +27,8 @@ function separationOk(stars, x, y, r) {
   return true;
 }
 
-// Verbatim copy of addNextStar from gameplay.js (with `stars`
-// passed in instead of read from a closure).
+// Verbatim copy of addNextStar from gameplay.js (with `stars` passed in instead of read from a
+// closure).
 function addNextStar(stars) {
   const prev = stars[stars.length - 1];
   const n = stars.length;
@@ -60,8 +58,8 @@ function addNextStar(stars) {
   stars.push(makeStar(fx, fy, r, n));
 }
 
-// Bucket: for each star index n, gather all the prev→next
-// distances seen across RUNS independent chains.
+// Bucket: for each star index n, gather all the prev→next distances seen across RUNS independent
+// chains.
 const distsByIdx = Array.from({ length: STARS_PER_RUN }, () => []);
 const radiiByIdx = Array.from({ length: STARS_PER_RUN }, () => []);
 const fallbacksByIdx = new Array(STARS_PER_RUN).fill(0);
@@ -122,4 +120,7 @@ const meanD60 = mean(distsByIdx[60]);
 const ratio = meanD60 / meanD1;
 console.log(`  mean distance at idx 1:  ${meanD1.toFixed(1)} px`);
 console.log(`  mean distance at idx 60: ${meanD60.toFixed(1)} px`);
-console.log(`  ratio: ${ratio.toFixed(2)}× — ${ratio > 1.4 ? "GROWS as game progresses" : ratio < 0.9 ? "SHRINKS as game progresses" : "FLAT"}`);
+const trend = ratio > 1.4 ? "GROWS as game progresses"
+            : ratio < 0.9 ? "SHRINKS as game progresses"
+            : "FLAT";
+console.log(`  ratio: ${ratio.toFixed(2)}× — ${trend}`);

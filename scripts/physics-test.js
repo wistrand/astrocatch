@@ -1,6 +1,5 @@
-// Node test runner for the ASTROCATCH physics. Sweeps boost
-// angles, runs the full transfer + post-capture orbit, and
-// reports any crashes / overshoots / drifts.
+// Node test runner for the ASTROCATCH physics. Sweeps boost angles, runs the full transfer +
+// post-capture orbit, and reports any crashes / overshoots / drifts.
 
 import * as P from "../docs/physics.js";
 
@@ -8,13 +7,11 @@ const SIM_LIMIT = 2000;             // hard cap on frames per scenario
 const POST_CAPTURE_FRAMES = 400;    // frames to verify orbit stability after capture
 
 function classify(stars, ball, label) {
-  // Possible outcomes:
-  //   captured                       — auto-tuned boost, clean capture, stable post-orbit
-  //   no-prediction-died             — fallback boost, ball flies free and dies
-  //   no-prediction-escaped          — fallback boost, ball drifts off-screen-ish
-  //   no-prediction-orbit            — fallback boost, ball lucks into a closed orbit
-  //   crashed-during-transfer        — predicted capture, but live trajectory crashed
-  //   crashed-post-capture           — predicted capture, but resulting orbit decays
+  // Possible outcomes: captured — auto-tuned boost, clean capture, stable post-orbit
+  // no-prediction-died — fallback boost, ball flies free and dies no-prediction-escaped — fallback
+  // boost, ball drifts off-screen-ish no-prediction-orbit — fallback boost, ball lucks into a
+  // closed orbit crashed-during-transfer — predicted capture, but live trajectory crashed
+  // crashed-post-capture — predicted capture, but resulting orbit decays
   const pred = P.applyBoostAndArm(stars, ball);
   if (!pred) {
     // Fallback boost was applied. Run free physics, see what happens.
@@ -55,12 +52,10 @@ function classify(stars, ball, label) {
   }
   if (!captured) return { label, result: "ran-out-of-frames", frames, pred };
 
-  // Post-capture: confirm we're in a stable, non-crashing orbit
-  // around the new primary.
+  // Post-capture: confirm we're in a stable, non-crashing orbit around the new primary.
   const target = stars[ball.pendingCapture < 0 ? ball.currentStar + 1 : ball.pendingCapture];
-  // After burnStep returned true the live game calls captureStar()
-  // which advances ball.currentStar and clears pendingCapture. We
-  // mimic that here so post-capture nearest-star physics is correct.
+  // After burnStep returned true the live game calls captureStar() which advances ball.currentStar
+  // and clears pendingCapture. We mimic that here so post-capture nearest-star physics is correct.
   ball.currentStar = ball.currentStar + 1;
   ball.pendingCapture = -1;
 
@@ -107,7 +102,11 @@ function sweep(stars, label) {
       failures.push(r);
     }
     if (r.result === "captured" && r.pred && typeof r.pred.boostFactor === "number") {
-      captures.push({ angle: +(angle * 180 / Math.PI).toFixed(0), bf: +r.pred.boostFactor.toFixed(2), peri: +r.pred.periDist.toFixed(1) });
+      captures.push({
+        angle: +(angle * 180 / Math.PI).toFixed(0),
+        bf: +r.pred.boostFactor.toFixed(2),
+        peri: +r.pred.periDist.toFixed(1),
+      });
     }
   }
   console.log(`\n[${label}] ${N} samples:`);
@@ -116,7 +115,10 @@ function sweep(stars, label) {
     const factors = captures.map((c) => c.bf);
     const minBf = Math.min(...factors), maxBf = Math.max(...factors);
     const meanBf = factors.reduce((a, b) => a + b, 0) / factors.length;
-    console.log(`  boost factor range  [${minBf.toFixed(2)}, ${maxBf.toFixed(2)}]  mean ${meanBf.toFixed(2)}`);
+    console.log(
+      `  boost factor range  [${minBf.toFixed(2)}, ${maxBf.toFixed(2)}]` +
+      `  mean ${meanBf.toFixed(2)}`,
+    );
   }
   if (failures.length > 0) {
     console.log(`  ⚠ failures (${failures.length}):`);
@@ -152,7 +154,10 @@ console.log("\nDetailed trace of a known FAILING scenario:");
   const stars = makeTwoStarSystem(280, 30).map((s) => ({ ...s }));
   const angle = 151.9 * Math.PI / 180;
   const ball = P.makeBallInCircularOrbit(stars[0], angle);
-  console.log(`Initial: pos=(${ball.x.toFixed(2)},${ball.y.toFixed(2)}) v=(${ball.vx.toFixed(2)},${ball.vy.toFixed(2)})`);
+  console.log(
+    `Initial: pos=(${ball.x.toFixed(2)},${ball.y.toFixed(2)})` +
+    ` v=(${ball.vx.toFixed(2)},${ball.vy.toFixed(2)})`,
+  );
   const pred = P.applyBoostAndArm(stars, ball);
   console.log(`Pred:`, pred);
   let captured = false, frames = 0, burnFrame = -1, burnState = null;
@@ -168,8 +173,19 @@ console.log("\nDetailed trace of a known FAILING scenario:");
       const rdot = (ball.vx * dx + ball.vy * dy) / d; // radial component (signed)
       const tdot = Math.sqrt(Math.max(0, v * v - rdot * rdot));
       // Run burnStep but capture state right before
-      if (ball.captureMinD !== undefined && d > ball.captureMinD + P.PERI_HYSTERESIS && burnState === null) {
-        burnState = { tf: ball.transferFrames + 1, d: +d.toFixed(3), v: +v.toFixed(3), rdot: +rdot.toFixed(3), tdot: +tdot.toFixed(3), minD: +ball.captureMinD.toFixed(3) };
+      if (
+        ball.captureMinD !== undefined
+        && d > ball.captureMinD + P.PERI_HYSTERESIS
+        && burnState === null
+      ) {
+        burnState = {
+          tf: ball.transferFrames + 1,
+          d: +d.toFixed(3),
+          v: +v.toFixed(3),
+          rdot: +rdot.toFixed(3),
+          tdot: +tdot.toFixed(3),
+          minD: +ball.captureMinD.toFixed(3),
+        };
       }
     }
     if (P.burnStep(stars, ball)) { captured = true; burnFrame = frames; break; }
@@ -179,7 +195,8 @@ console.log("\nDetailed trace of a known FAILING scenario:");
   console.log("captured =", captured, "frames =", frames);
   // Post-capture velocity decomposition
   if (captured) {
-    const t = stars[ball.currentStar + 1] || stars[ball.pendingCapture < 0 ? ball.currentStar + 1 : ball.pendingCapture];
+    const t = stars[ball.currentStar + 1]
+      || stars[ball.pendingCapture < 0 ? ball.currentStar + 1 : ball.pendingCapture];
     ball.currentStar = ball.currentStar + 1;
     ball.pendingCapture = -1;
     const target = stars[ball.currentStar];
@@ -190,14 +207,20 @@ console.log("\nDetailed trace of a known FAILING scenario:");
     const rdot = (ball.vx * dx + ball.vy * dy) / d;
     const tdot = Math.sqrt(Math.max(0, v * v - rdot * rdot));
     const vc = Math.sqrt(target.gm / d);
-    console.log(`Post-burn: d=${d.toFixed(3)} v=${v.toFixed(3)} radial=${rdot.toFixed(3)} tangential=${tdot.toFixed(3)} vc=${vc.toFixed(3)}`);
+    console.log(
+      `Post-burn: d=${d.toFixed(3)} v=${v.toFixed(3)}` +
+      ` radial=${rdot.toFixed(3)} tangential=${tdot.toFixed(3)} vc=${vc.toFixed(3)}`,
+    );
     // Compute the orbital elements (specific energy, ang mom) of resulting orbit
     const E = v * v / 2 - target.gm / d;
     const Lz = dx * ball.vy - dy * ball.vx;
     const a = -target.gm / (2 * E);
     const eSq = 1 + 2 * E * Lz * Lz / (target.gm * target.gm);
     const e = Math.sqrt(Math.max(0, eSq));
-    console.log(`Resulting orbit: a=${a.toFixed(2)} e=${e.toFixed(4)} peri=${(a*(1-e)).toFixed(2)} apo=${(a*(1+e)).toFixed(2)}`);
+    console.log(
+      `Resulting orbit: a=${a.toFixed(2)} e=${e.toFixed(4)}` +
+      ` peri=${(a*(1-e)).toFixed(2)} apo=${(a*(1+e)).toFixed(2)}`,
+    );
     // Run forward and capture min/max
     let minD = Infinity, maxD = 0;
     for (let i = 0; i < 400; i++) {
