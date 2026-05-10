@@ -532,8 +532,8 @@ negligible most of the time.
 Flag bit 8192. Demon manifesting through a rip in space — pure
 2D SDF, no ray-marching. Drawn inside the common `star` program;
 working set comparable to teapot (~20-25 reg). Endgame variant
-(1-2% from star ≥ 50), high zoom (4.5× desktop / 2.5× touch
-on top of the base ZOOM 0.58) when captured.
+(1-2% from star ≥ 50), steepest captured zoom of any variant
+(see `zoomTargetFor` in gameplay.js).
 
 ### Body silhouette
 
@@ -608,10 +608,11 @@ clipping against the silhouette edge.
 
 ### Camera + audio
 
-While captured, `zoomTargetFor` returns a `zoomMult` of
-**4.5× desktop / 2.5× touch** (vs ringworld's 1.7/1.5,
-nebula/teapot's 1.6/1.4). Effective on-screen zoom is
-`ZOOM · zoomMult` — biggest of any variant.
+While captured, `zoomTargetFor` returns the steepest
+`zoomMult` of any variant (see the function in gameplay.js
+for the exact values; touch is reduced from desktop because
+mobile screens make extreme zoom feel excessive). Effective
+on-screen zoom is `ZOOM · zoomMult` — biggest of any variant.
 Music switches to a Phrygian demon-mode chord progression
 (`[Am, Bb, Dm, E]` / `[Em, Bb, Dm, E]`) at the next section
 boundary. Reverts on leaving the orbit.

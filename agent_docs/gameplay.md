@@ -348,16 +348,16 @@ Endgame variant; typical short runs won't see one.
 **Higher minR (`r ≥ 56`) and 1.5× size multiplier.** Bigger
 than every other variant. Three face tiers + 14 spikes need
 surface area; the demonic moment loses its weight if the rip
-is small. Combined with the captured-zoom (4.5× desktop /
-2.5× touch on `zoomMult`), the demon fills most of the
-central viewport area — biggest of any variant.
+is small. Combined with the steep captured-zoom (see
+`zoomTargetFor`), the demon fills most of the central
+viewport area — biggest of any variant.
 
 **Camera zoom.** While the ship's `currentStar.isAzazel` is
-true, `zoomTargetFor` returns a `zoomMult` of **4.5× desktop
-/ 2.5× touch**, multiplied onto the base `ZOOM` (0.58) for
-effective on-screen scale. `visualR` for the horizontal-
-camera-nudge logic is `cs0.r * 2.4` (matches the quad's
-`extentMul`).
+true, `zoomTargetFor` returns the steepest `zoomMult` of any
+variant (touch is reduced from desktop because mobile screens
+make extreme zoom feel excessive). Effective on-screen scale
+is `ZOOM · zoomMult`. `visualR` for the horizontal-camera-
+nudge logic is `cs0.r * 2.4` (matches the quad's `extentMul`).
 
 **Music override.** Capture flips `audio.setDemonMode(true)`,
 which swaps the active chord progression to a Phrygian-mode
@@ -369,9 +369,10 @@ is bar-aligned so the swap doesn't crunch mid-phrase. See
 
 **Launch-window override.** While captured around an Azazel,
 the launch-window indicator is forced visible regardless of
-the user toggle (W key / score-tap). The demon-orbit moment
-is a special-occasion focus and the indicator is part of its
-signature read. Other orbits keep the toggle behaviour.
+the user toggle (W key / score-tap). The Azazel capture zoom
+is steep enough that the next star typically sits off-screen,
+so without the indicator the player has no visual cue for
+when to tap. Other orbits keep the toggle behaviour.
 
 **Save/resume.** Round-trips `isAzazel` alongside the other
 variant flags. Captured demons persist through saves; on
@@ -523,9 +524,10 @@ Gameplay count is persisted in `localStorage`
 
 **Azazel orbit override**: while the ship is captured around
 an Azazel star, the launch-window draws regardless of the user
-toggle. The demon-orbit moment is special-occasion and the
-indicator is part of its signature read. Toggle still works
-on every other orbit. Gate is `currentStar.isAzazel`.
+toggle. The Azazel capture zoom is steep enough that the next
+star is typically off-screen, so the indicator is the only
+available cue for when to tap. Toggle still works on every
+other orbit. Gate is `currentStar.isAzazel`.
 
 ## Death sounds
 

@@ -1464,7 +1464,21 @@ function captureStar(idx) {
 // camera feedback rather than waiting for release; the tap path
 // is gated on no-long-press-having-fired so the same pointer
 // stroke can't trigger both.
-let showLaunchWindow = false;
+//
+// The toggle state persists across sessions — explicit user
+// toggles (W key, score tap) write to localStorage so the next
+// run starts with the same preference. Tutorial-driven
+// assignments (force-on at init for the first 3 runs, auto-off
+// at 15 stars) bypass the setter; they're transient overrides
+// for new players, not user preferences.
+const LAUNCH_WINDOW_KEY = "astrocatch_launch_window";
+let showLaunchWindow = localStorage.getItem(LAUNCH_WINDOW_KEY) === "1";
+function toggleLaunchWindow() {
+  showLaunchWindow = !showLaunchWindow;
+  try {
+    localStorage.setItem(LAUNCH_WINDOW_KEY, showLaunchWindow ? "1" : "0");
+  } catch (e) { /* private mode / quota — silently keep in-memory */ }
+}
 const SCORE_LONG_PRESS_MS = 500;
 let _scoreHoldTimer = null;
 let _scoreHoldFired = false;
@@ -1490,7 +1504,7 @@ if (scoreToggleEl) {
     if (!_scoreHoldFired) {
       e.preventDefault();
       e.stopPropagation();
-      showLaunchWindow = !showLaunchWindow;
+      toggleLaunchWindow();
     }
     _scoreHoldFired = false;
   });
@@ -2668,9 +2682,10 @@ function draw() {
   // Launch-window indicator — short tangent ticks on the orbit
   // where a tap would land a clean capture. Player watches the
   // bright zone approach as they orbit.
-  // Azazel always shows the launch window — the demon orbit is
-  // a special-occasion moment and the indicator is part of its
-  // signature read.
+  // Azazel always shows the launch window. Its capture zoom
+  // (set in `zoomTargetFor`) is steep enough to push the next
+  // star off-screen most of the time, so without the indicator
+  // the player can't see when to tap.
   const csCur = ball ? stars[ball.currentStar] : null;
   const lwForced = csCur && csCur.isAzazel;
   if ((showLaunchWindow || lwForced) && ball && ball.launchWindow
@@ -2686,6 +2701,12 @@ function draw() {
       const a = 0.5 * pulse;
       const headCol = [a, a, a, a];
       const tickLen = 5;
+      // Stroke half-width is expressed in screen-space pixels
+      // and divided by drawZoom — without this it grows with
+      // zoom and the ticks turn into thick bars at the steeper
+      // captured-zooms. tickLen stays world-space so the marks
+      // visibly scale with the orbit they're attached to.
+      const halfWidth = 0.9 / drawZoom;
       // Draw the ticks 10% inboard of the ship's orbit so they
       // sit cleanly inside the trajectory instead of on top of it.
       const inset = 0.9;
@@ -2697,7 +2718,7 @@ function draw() {
         renderer.drawPolyline([
           { x: cx - s.tx * tickLen, y: cy - s.ty * tickLen },
           { x: cx + s.tx * tickLen, y: cy + s.ty * tickLen },
-        ], cam, 0.9, headCol, headCol);
+        ], cam, halfWidth, headCol, headCol);
       }
     }
   }
@@ -2717,6 +2738,8 @@ function draw() {
       const a = 0.30 * pulse;
       const headCol = [a, a, a, a];
       const tickLen = 5;
+      // Screen-space stroke half-width (see live launch-window above).
+      const halfWidth = 0.9 / drawZoom;
       const inset = 0.9;
       for (let i = 0; i < lw.length; i++) {
         const s = lw[i];
@@ -2726,7 +2749,7 @@ function draw() {
         renderer.drawPolyline([
           { x: cx - s.tx * tickLen, y: cy - s.ty * tickLen },
           { x: cx + s.tx * tickLen, y: cy + s.ty * tickLen },
-        ], cam, 0.9, headCol, headCol);
+        ], cam, halfWidth, headCol, headCol);
       }
     }
   }
@@ -3344,7 +3367,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "w" || e.key === "W") {
     if (e.repeat) return;
     e.preventDefault();
-    showLaunchWindow = !showLaunchWindow;
+    toggleLaunchWindow();
     return;
   }
   if (e.key === "z" || e.key === "Z") {
