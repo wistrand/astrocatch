@@ -532,7 +532,8 @@ negligible most of the time.
 Flag bit 8192. Demon manifesting through a rip in space — pure
 2D SDF, no ray-marching. Drawn inside the common `star` program;
 working set comparable to teapot (~20-25 reg). Endgame variant
-(1-2% from star ≥ 50), high zoom (2.1×) when captured.
+(1-2% from star ≥ 50), high zoom (4.5× desktop / 2.5× touch
+on top of the base ZOOM 0.58) when captured.
 
 ### Body silhouette
 
@@ -607,7 +608,10 @@ clipping against the silhouette edge.
 
 ### Camera + audio
 
-While captured, camera eases to **2.1×** zoom (1.8× on touch).
+While captured, `zoomTargetFor` returns a `zoomMult` of
+**4.5× desktop / 2.5× touch** (vs ringworld's 1.7/1.5,
+nebula/teapot's 1.6/1.4). Effective on-screen zoom is
+`ZOOM · zoomMult` — biggest of any variant.
 Music switches to a Phrygian demon-mode chord progression
 (`[Am, Bb, Dm, E]` / `[Em, Bb, Dm, E]`) at the next section
 boundary. Reverts on leaving the orbit.
@@ -618,7 +622,7 @@ return alpha=0). Inside silhouette ~600-900 ALU (sdRip + 3-face
 loop with eye/iris/mouth SDFs). Quad is 2.4× v_baseR (~77%
 fewer fragments than the original 5× sized for halftone +
 0.85-length spikes — both gone), so frame cost is dominated by
-the inside-silhouette region. At Azazel zoom 2.1× this is most
+the inside-silhouette region. At Azazel zoom this is most
 of the screen, so the demon comfortably costs more than any
 other variant *while captured* — but spawn rate is endgame, so
 the aggregate impact across a typical run is small.

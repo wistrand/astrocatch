@@ -348,14 +348,16 @@ Endgame variant; typical short runs won't see one.
 **Higher minR (`r ≥ 56`) and 1.5× size multiplier.** Bigger
 than every other variant. Three face tiers + 14 spikes need
 surface area; the demonic moment loses its weight if the rip
-is small. Combined with the captured-zoom (2.1×), the demon
-reliably fills the central viewport area.
+is small. Combined with the captured-zoom (4.5× desktop /
+2.5× touch on `zoomMult`), the demon fills most of the
+central viewport area — biggest of any variant.
 
 **Camera zoom.** While the ship's `currentStar.isAzazel` is
-true, the camera eases to **2.1×** zoom (1.8× on touch — mobile
-screens make extreme zoom feel excessive). `visualR` for the
-horizontal-camera-nudge logic is `cs0.r * 2.4` (matches the
-quad's `extentMul`).
+true, `zoomTargetFor` returns a `zoomMult` of **4.5× desktop
+/ 2.5× touch**, multiplied onto the base `ZOOM` (0.58) for
+effective on-screen scale. `visualR` for the horizontal-
+camera-nudge logic is `cs0.r * 2.4` (matches the quad's
+`extentMul`).
 
 **Music override.** Capture flips `audio.setDemonMode(true)`,
 which swaps the active chord progression to a Phrygian-mode

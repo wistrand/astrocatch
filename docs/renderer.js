@@ -988,12 +988,18 @@ float az_sdRip(vec2 p, float seed, float t) {
   // tapered body. Costs ~50 ALU vs ~400 for the 14-iter loop,
   // and the resulting SDF is approximately normalized so -d
   // gives correct inner-glow distance everywhere.
-  // Far-corner early-out: max pr-space spike extent is
-  //   ASPECT_Y + AZ_SPIKE_LEN_MAX = 1.45 + 0.6 = 2.05
-  // (along the long body axis), so |pr| > ~2.17 (dot > 4.7)
-  // is provably outside every spike body — skip the entire
-  // spike-finder path for those ~30% corner fragments.
-  if (dot(pr, pr) < 4.7) {
+  // Two-sided gate:
+  //   - Far-corner: |pr| > ~2.17 (dot > 4.7) is past max spike
+  //     extent (ASPECT_Y + AZ_SPIKE_LEN_MAX = 2.05), so spike
+  //     SDF can't go negative — skip the finder for those ~30%
+  //     corner fragments.
+  //   - Deep interior: base < -0.20 means the fragment is well
+  //     inside the body, deeper than any spike body can reach
+  //     (spikes attach to the boundary and only extend inward
+  //     by AZ_SPIKE_BASE_W ≈ 0.06), so min(base, spikeSDF) is
+  //     provably base — skip on body-interior fragments too,
+  //     which is most of the silhouette at Azazel zoom.
+  if (base >= -0.20 && dot(pr, pr) < 4.7) {
     float angParam = atan(q.y, q.x);
     float spPhase = az_hash11(seed * 13.7) * TAU;
     float period = TAU / float(AZ_N_SPIKES);

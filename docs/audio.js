@@ -293,20 +293,21 @@ const MUSIC_BASS_PATTERN_RANGES = [
 ];
 
 export function createAudio() {
-  // Sanity check: every chord index referenced by the
-  // progressions must exist in all three parallel tables.
+  // Sanity check: every chord index referenced by *either*
+  // progression bank must exist in all three parallel tables.
   // Catches table-length drift at init instead of at a random
-  // runtime moment minutes into gameplay.
-  const maxChordIdx = MUSIC_PROGRESSIONS.reduce(
-    (mx, p) => p.reduce((a, b) => Math.max(a, b), mx), 0
-  );
+  // runtime moment minutes into gameplay. Folds over both
+  // MUSIC_PROGRESSIONS and MUSIC_DEMON_PROGRESSIONS so a
+  // demon-only chord index can't slip past the check.
+  const maxChordIdx = [...MUSIC_PROGRESSIONS, ...MUSIC_DEMON_PROGRESSIONS]
+    .reduce((mx, p) => p.reduce((a, b) => Math.max(a, b), mx), 0);
   if (
     maxChordIdx >= MUSIC_BASS.length ||
     maxChordIdx >= MUSIC_ARP.length ||
     maxChordIdx >= MUSIC_LEAD.length
   ) {
     throw new Error(
-      "MUSIC_PROGRESSIONS references chord index " + maxChordIdx +
+      "MUSIC progression references chord index " + maxChordIdx +
       " but MUSIC_BASS/ARP/LEAD only have " +
       Math.min(MUSIC_BASS.length, MUSIC_ARP.length, MUSIC_LEAD.length) + " entries"
     );
