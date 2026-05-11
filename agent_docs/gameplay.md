@@ -497,15 +497,26 @@ pixel-art sun with **ray-traced Blinn-Phong shading**:
   azimuth sweeps a full rotation while elevation drifts on a narrow sinusoid (`π/4 ± π/8`) so
   the highlight traces a smooth oval on the sphere without ever fully fronting the camera.
 
-### Animated PNG bake
+### Animated PNG bake (delta-encoded)
 
 After rendering the canvas + live RAF (covers the ~700 ms encoding latency), `gameplay.js`
-asynchronously builds an APNG via `encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps)`:
+asynchronously builds an APNG via `encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps,
+deltaRect)`:
 
 - 32 frames at 16 fps = 2 s seamless loop. Frame count chosen so per-frame highlight jump
   (~11.25° azimuth) reads as continuous motion rather than stop-motion.
-- Per frame: caller's `drawFrame(i, total)` mutates the canvas, encoder snapshots via
-  `canvas.toBlob("image/png")`, parses out the IDAT chunks, and stitches them into a valid
+- **Delta encoding**: the QR cells outside the sun's bounding box don't change between frames,
+  so encoding the full 198×198 image every frame wastes ~80% of the file size on
+  invariant pixels. The bake passes a `deltaRect` covering only the sun's pixel footprint
+  (~60×60 px at v3 / scale 6); the encoder renders frame 0 onto the full canvas (used as the
+  baseline) and frames 1+ onto a 60×60 offscreen canvas containing the sun + the bare QR cells
+  in that bounding box. Per-frame `fcTL` carries the rect's `x/y/w/h` and `dispose=PREVIOUS`,
+  so each delta lands at the sun position in the playback buffer and reverts before the next
+  delta replaces it. File size drops ~5× (≈220 KB → ≈40 KB at 32 frames) with no quality
+  change — the rest of the QR was never animating anyway.
+- Caller's `drawFrame(i, total, target)` receives the appropriate canvas (`target = canvas`
+  for frame 0, `target = deltaCanvas` for frames 1+). The encoder snapshots `target` via
+  `canvas.toBlob("image/png")`, parses out IDAT chunks, and stitches them into a valid
   APNG by inserting `acTL` + per-frame `fcTL` + (for frames ≥ 1) converting `IDAT` → `fdAT`
   with sequence-number prefix. CRC32 over each PNG chunk; no external library.
 - Once the bake completes, the live canvas is replaced in-DOM with `<img id="challenge-out-qr"

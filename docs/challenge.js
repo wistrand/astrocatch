@@ -633,24 +633,39 @@ function parsePngChunks(buf) {
   return chunks;
 }
 
-// Encode a canvas-driven animation as an APNG. `drawFrame(i, total)` is the caller-supplied
-// per-frame render function that mutates the canvas — the encoder snapshots the canvas after each
-// call via canvas.toBlob. `fps` controls playback speed.
-export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps) {
-  // 1. Render each frame and snapshot the canvas into a PNG.
+// Encode a canvas-driven animation as an APNG. `drawFrame(i, total, target)` is the caller-
+// supplied per-frame render function that mutates `target` — the encoder snapshots target via
+// canvas.toBlob after each call. `fps` controls playback speed.
+//
+// Optional `deltaRect = { x, y, w, h }` switches on delta-frame encoding: frame 0 is rendered
+// onto the full `canvas` (size W×H, target = canvas), all subsequent frames are rendered onto
+// a smaller offscreen canvas (size w×h, target = deltaCanvas) and composited at (x, y) into the
+// playback buffer. Frame 0's dispose stays NONE so its content persists in the buffer; delta
+// frames use dispose=PREVIOUS so the next frame's delta lands on the unchanged frame-0 state.
+// Drops file size roughly 5× for our use case where only a small region animates.
+export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps, deltaRect) {
+  // 1. Set up the delta-frame canvas if requested.
+  let deltaCanvas = null;
+  if (deltaRect) {
+    deltaCanvas = document.createElement("canvas");
+    deltaCanvas.width = deltaRect.w;
+    deltaCanvas.height = deltaRect.h;
+  }
+  // 2. Render each frame onto the appropriate target and snapshot.
   const framePngs = [];
   for (let i = 0; i < frameCount; i++) {
-    drawFrame(i, frameCount);
-    const blob = await new Promise((r) => canvas.toBlob(r, "image/png"));
+    const target = (deltaCanvas && i > 0) ? deltaCanvas : canvas;
+    drawFrame(i, frameCount, target);
+    const blob = await new Promise((r) => target.toBlob(r, "image/png"));
     framePngs.push(new Uint8Array(await blob.arrayBuffer()));
   }
-  // 2. Pull IHDR from frame 0 and grab its width/height.
+  // 3. Pull IHDR from frame 0 (full canvas). This drives the APNG's overall dimensions.
   const firstChunks = parsePngChunks(framePngs[0]);
   const ihdr = firstChunks.find((c) => c.type === "IHDR");
   if (!ihdr) throw new Error("APNG: first frame has no IHDR");
   const w = (ihdr.data[0] << 24) | (ihdr.data[1] << 16) | (ihdr.data[2] << 8) | ihdr.data[3];
   const h = (ihdr.data[4] << 24) | (ihdr.data[5] << 16) | (ihdr.data[6] << 8) | ihdr.data[7];
-  // 3. Assemble APNG: signature + IHDR + acTL + per-frame (fcTL + IDAT/fdAT) + IEND.
+  // 4. Assemble APNG: signature + IHDR + acTL + per-frame (fcTL + IDAT/fdAT) + IEND.
   const parts = [PNG_SIGNATURE, writePngChunk("IHDR", ihdr.data)];
   const acTL = new Uint8Array(8);
   new DataView(acTL.buffer).setUint32(0, frameCount);
@@ -658,17 +673,29 @@ export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps) {
   parts.push(writePngChunk("acTL", acTL));
   let seq = 0;
   for (let i = 0; i < frameCount; i++) {
+    // Delta frames specify the sub-rect they occupy via fcTL x/y/w/h; frame 0 covers the full
+    // canvas. Mixing frame sizes is fine — each frame's IDAT/fdAT stream encodes its own
+    // dimensions per its source PNG's IHDR (which we don't write to the APNG, only the
+    // composite IHDR survives).
+    const useDelta = deltaRect && i > 0;
+    const frameW = useDelta ? deltaRect.w : w;
+    const frameH = useDelta ? deltaRect.h : h;
+    const frameX = useDelta ? deltaRect.x : 0;
+    const frameY = useDelta ? deltaRect.y : 0;
     const fcTL = new Uint8Array(26);
     const fv = new DataView(fcTL.buffer);
     fv.setUint32(0, seq++);
-    fv.setUint32(4, w);
-    fv.setUint32(8, h);
-    fv.setUint32(12, 0);     // x_offset
-    fv.setUint32(16, 0);     // y_offset
+    fv.setUint32(4, frameW);
+    fv.setUint32(8, frameH);
+    fv.setUint32(12, frameX);
+    fv.setUint32(16, frameY);
     fv.setUint16(20, 1);     // delay_num
     fv.setUint16(22, fps);   // delay_den (delay = num/den seconds = 1/fps)
-    fcTL[24] = 0;            // dispose_op: NONE
-    fcTL[25] = 0;            // blend_op: SOURCE (overwrite full frame)
+    // Dispose: frame 0 keeps its content (NONE = 0); delta frames revert their sub-rect to the
+    // state-before-this-frame (PREVIOUS = 2), so the next delta composites back onto the
+    // frame-0 base instead of stacking on the previous delta.
+    fcTL[24] = useDelta ? 2 : 0;
+    fcTL[25] = 0;            // blend_op: SOURCE (overwrite the rect's pixels)
     parts.push(writePngChunk("fcTL", fcTL));
     const chunks = parsePngChunks(framePngs[i]);
     const idats = chunks.filter((c) => c.type === "IDAT");
@@ -688,7 +715,7 @@ export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps) {
     }
   }
   parts.push(writePngChunk("IEND", new Uint8Array(0)));
-  // 4. Concatenate.
+  // 5. Concatenate.
   const total = parts.reduce((s, p) => s + p.length, 0);
   const out = new Uint8Array(total);
   let off = 0;

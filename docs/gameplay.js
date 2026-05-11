@@ -2435,13 +2435,46 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   // the camera.
   const FRAMES = 32;
   const FPS = 16;
-  const apngBytes = await encodeAnimatedQrPng(canvas, (i, total) => {
+  // Sun bbox in canvas pixels — the only region that actually changes between frames.
+  // drawSunLogo's mask is `hypot(sunDx, sunDy) > rMod` (where sunDx = mx + 0.5 - centre), so
+  // a module mx is inside iff |mx + 0.5 - centre| ≤ rMod, i.e. mx ∈ [⌈c-r-0.5⌉, ⌊c+r-0.5⌋].
+  // For v3 (centre=14.5, rMod=4.5) that's modules 10..18, 9 columns × 6 px = 54 px.
+  const SUN_RMOD = 4.5;
+  const centre = matrix.size / 2;
+  const sunModMin = Math.ceil(centre - SUN_RMOD - 0.5);
+  const sunModMax = Math.floor(centre + SUN_RMOD - 0.5);
+  const sunPxMin = (sunModMin + quiet) * scale;
+  const sunPxSpan = (sunModMax - sunModMin + 1) * scale;
+  const deltaRect = { x: sunPxMin, y: sunPxMin, w: sunPxSpan, h: sunPxSpan };
+  const apngBytes = await encodeAnimatedQrPng(canvas, (i, total, target) => {
     const t = i / total;
     const phase = -3 * Math.PI / 4 + t * 2 * Math.PI;
     const elev = Math.PI / 4 + Math.sin(t * 2 * Math.PI) * Math.PI / 8;
-    ctx.drawImage(_sunAnimBareQr, 0, 0);
-    drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
-  }, FRAMES, FPS);
+    if (i === 0) {
+      // Frame 0 is the full canvas: bare QR + sun at phase 0. Subsequent frames replace just
+      // the sun rect via APNG delta encoding.
+      ctx.drawImage(_sunAnimBareQr, 0, 0);
+      drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
+    } else {
+      // Delta frames: render only the sun region onto the small `target` canvas. The bare-QR
+      // underlay is needed because drawSunLogo only writes the modules inside the sun mask —
+      // the modules in the sun's bounding box but OUTSIDE the mask need to be the bare QR
+      // (otherwise they'd be transparent and the APNG decoder would composite over whatever
+      // pixels happen to be in the buffer there). Translating the context lets drawSunLogo's
+      // absolute pixel coords land correctly in the smaller canvas.
+      const tctx = target.getContext("2d");
+      tctx.clearRect(0, 0, target.width, target.height);
+      tctx.drawImage(
+        _sunAnimBareQr,
+        deltaRect.x, deltaRect.y, deltaRect.w, deltaRect.h,
+        0, 0, deltaRect.w, deltaRect.h,
+      );
+      tctx.save();
+      tctx.translate(-deltaRect.x, -deltaRect.y);
+      drawSunLogo(target, matrix.size, scale, quiet, phase, elev);
+      tctx.restore();
+    }
+  }, FRAMES, FPS, deltaRect);
   if (_challengeApngUrl) URL.revokeObjectURL(_challengeApngUrl);
   // `File` (not bare Blob) carries a name property that most browsers surface as the suggested
   // filename when the user right-clicks the resulting <img> and chooses "Save image as…". With
