@@ -673,8 +673,8 @@ const INTRO_TEXTS = [
   "you're orbiting a star",
   "tap when your direction aims at the next one",
   "release within one rotation for bonus",
+  "send runs as challenge links",
   "stranger stars ahead",
-  "send runs as challenges",
   "enjoy",
 ];
 const INTRO_NEXT_DELAY_MS = 1000;
