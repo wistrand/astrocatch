@@ -10,12 +10,15 @@ docs/
   audio.js           # browser-only ES module: procedural WebAudio SFX + music
   physics.js         # pure physics ES module — used by browser and node
   star-rendering.js  # browser-only — binary positions, ejecta, comets
-  challenge.js       # browser-only — QR encoder + challenge-link payload
+  challenge.js       # browser-only — QR encoder + challenge-link payload + APNG encoder
+  run-title.js       # pure ES module — procedural run-title composer (lexicon + statHash)
   debug.html / .js   # variant inspector — one of every star type in a grid
   variants.html / .js  # variant inspector grid (?type=&seed=&grid=NxM)
 scripts/
   physics-test.js    # node test runner — imports ../docs/physics.js
   check-distances.js # standalone diagnostic for addNextStar's distance curve
+  check-variant-distribution.js  # verifies seeded RNG matches Math.random per spawn-table
+  check-titles.js    # sweeps run-title composer across canonical + random stat profiles
   serve.js           # dependency-free static server, serves docs/
 agent_docs/          # detailed architecture docs (rendering, audio, physics, gameplay)
 package.json         # `"type": "module"` + `start` and `test` scripts
@@ -100,16 +103,33 @@ npm start          # → http://localhost:8001/
   overlay, replay with dynamic follow-cam, optional FPS counter via `?fps=1`.
   → [Details](agent_docs/gameplay.md)
 
-- **Challenge links** (`challenge.js`): on death, encodes per-run stats + run seed + 5-bit
-  checksum into a lowercase base32 URL fragment, rendered as a QR (v3, EC M, multi-segment alpha
-  + byte) with a snap-to-grid pixel-art sun logo on the death-screen flip card. Decoder
-  uppercases on entry, verifies checksum, enforces strict byte length — random fragment edits
-  don't fake a higher score. Incoming `#code` URLs surface a welcome card with sender stats;
-  `hashchange` listener re-runs decode for same-tab navigations. While a challenge is active,
-  RESUME is hidden (no prior-session score reuse), the HUD sub-line gains `· target N`, and a
-  one-shot "challenge beaten" flash fires the first frame the player's score crosses the
-  sender's.
+- **Challenge links** (`challenge.js`): on death, encodes per-run stats + run seed + 1-bit
+  launch-window flag + 5-bit checksum into a lowercase base32 URL fragment (28 chars, format
+  v2). Rendered as an APNG-animated QR (v3, EC M, 32-frame ray-traced sun logo with rotating
+  light) on the death-screen flip card. Decoder uppercases, strict 17-byte length, checksum-
+  verified — random edits don't fake a higher score. The `launch_window` bit forces hint-
+  indicator parity between sender and recipient; init() reads it and overrides
+  `showLaunchWindow` for the challenge run. Incoming `#code` URLs surface a welcome card with
+  sender stats; `hashchange` listener re-runs decode for same-tab navigations; invalid hashes
+  show a small amber "invalid challenge link" indicator (textContent only, XSS-safe). While a
+  challenge is active, RESUME is hidden, the HUD sub-line gains `· target N`, the inline
+  death-stats line gets `· target N ✓/✗ ×` (dismiss button strips hash + reloads), and a
+  one-shot "challenge beaten" flash fires the first frame score crosses target. Save schema
+  carries `seed` so resumed runs generate valid (recipient-reproducible) challenge URLs.
   → [Details](agent_docs/gameplay.md#challenge-links)
+
+- **Run titles** (`run-title.js`): pure ES module — composes a short noun phrase ("the burning
+  twins", "the patient void, charted") from a run's stats. 8 style families (burning / swift /
+  patient / rhythmic / greedy / long / epic / spare) × 6 adjectives each, 6 common-variant
+  noun pools × 4 nouns each, rare-variant override (azazel / teapot map to opaque nouns —
+  omen / apparition / rumor / specter — to avoid spoiling them in shareable titles), failed-
+  run vocabulary for 0-star runs, optional "guided" suffix when the player used the launch-
+  window hint. Word selection within each pool uses a non-crypto stat-hash that folds in every
+  encoded field (score, stars, streak, b/q/s, comets, deathCause, variants, launchWindow,
+  seed) — same `(stats, seed)` always maps to the same title, so sender and recipient see
+  identical labels on the challenge card. Surfaces in `#run-title` (gameover) and
+  `#challenge-title` (welcome card). Verified by `scripts/check-titles.js`.
+  → [Details](agent_docs/gameplay.md#run-titles)
 
 ## User preferences
 

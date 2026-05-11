@@ -43,12 +43,16 @@ one too.
   the score cycles a cinematic ship-following camera through two zoom levels and back.
 - **Watch your replay.** A cinematic follow-camera plays back your run with simplex-driven zoom
   behind the AGAIN button.
-- **Send a challenge.** On death, flip the small text link on the game-over screen to reveal a
-  QR + copy button. The link encodes your score, run summary and game seed (nothing more) so a
-  friend opening it sees your numbers and plays the exact same star sequence. While playing a
-  challenge run, the sender's score sits next to your running total under the HUD so you can see
-  where you are; beating it pops a once-per-run "challenge beaten" notification. RESUME is
-  unavailable on a challenge URL — you start fresh.
+- **Send a challenge.** On death, flip the small text link on the game-over screen to reveal an
+  animated QR + copy button. The link encodes your score, run summary and game seed (nothing
+  more) so a friend opening it sees your numbers and plays the exact same star sequence with
+  the launch-window hint matched to whatever you used. Each run also gets a short procedural
+  title (e.g. "the burning twins", "the patient void, charted") computed from the run's stats —
+  shown above your score on the death screen, and on the recipient's welcome card. While playing
+  a challenge run, the sender's score sits next to your running total under the HUD so you can
+  see where you are; beating it pops a once-per-run "challenge beaten" notification, and the
+  death-stats line marks your verdict (`target N ✓` or `✗`). RESUME is unavailable on a
+  challenge URL — you start fresh.
 - **Mute anytime** via the speaker button in the top-right corner, or press **M**. Both the
   sound effects and the ambient music loop are generated on the fly from oscillators (no audio
   files to download). The background melody is a four-bar progression in A minor with a
@@ -126,7 +130,8 @@ docs/
   audio.js            browser-only: procedural WebAudio sound effects
   physics.js          pure physics module, used by browser and node
   star-rendering.js   browser-only: binary positions, ejecta, comets
-  challenge.js        browser-only: QR encoder + challenge-link payload
+  challenge.js        browser-only: QR encoder + challenge-link payload + APNG encoder
+  run-title.js        pure ES module: procedural run-title composer
   debug.html / .js    variant inspector — one of every star type
   variants.html / .js  variant inspector grid
                        (?type=&seed=N&grid=NxM)

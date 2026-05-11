@@ -699,22 +699,36 @@ export async function encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps) {
 // ═════════════════════════════════════════════════════════════
 // Run-stat payload — bit-packed + 5-bit checksum → base32 fragment.
 //
-// 4 bits format version (currently 1) 1 bit has_seed 20 bits score (0..1,048,575) 10 bits
-// starsVisited (0..1023) 4 bits streakPeak (0..15) 8 bits blazingCount (0..255) 8 bits quickCount 8
-// bits slowCount 6 bits cometsCaught (0..63) 4 bits deathCause (0..15 enum) 24 bits variant census
-// (8 variants × 3 bits) 32 bits seed (only if has_seed=1) 5 bits checksum (low 5 bits of
-// CRC-16/CCITT-FALSE over the byte-aligned payload pre-checksum)
+// 4 bits  format version (currently 2)
+// 1 bit   launch_window (was has_seed in v1; seed is now always encoded)
+// 20 bits score (0..1,048,575)
+// 10 bits starsVisited (0..1023)
+// 4 bits  streakPeak (0..15)
+// 8 bits  blazingCount (0..255)
+// 8 bits  quickCount
+// 8 bits  slowCount
+// 6 bits  cometsCaught (0..63)
+// 4 bits  deathCause (0..15 enum)
+// 24 bits variant census (8 variants × 3 bits)
+// 32 bits seed (always present)
+// 5 bits  checksum (low 5 bits of CRC-16/CCITT-FALSE over the byte-aligned payload pre-checksum)
 //
-// 102 bits (no seed) or 134 bits (with seed) bit-packed → 13 / 17 bytes (the 5-bit checksum tucks
-// INTO the byte-pad bits that the original format wasted, so the encoded length is identical to the
-// pre-checksum format). Encoded base32 = 21 chars (no seed) or 28 chars (with seed).
+// 134 bits bit-packed → 17 bytes (the 5-bit checksum tucks INTO the byte-pad bits that the byte-
+// boundary padding would otherwise waste, so it costs no extra length). Encoded base32 = 28 chars
+// always.
+//
+// v1 → v2: in practice every encoded challenge had has_seed=1 (gameplay.js always passes a seed),
+// so the conditional branch was dead. v2 locks the seed in and reuses the freed bit for
+// `launch_window` — true if the sender had the launch-window indicator on. The recipient's init()
+// reads this bit and enables the indicator for the challenge run, so both players experience the
+// same hint visibility.
 //
 // The checksum deters casual URL-fragment forgery — random edits pass at ~1/32 instead of ~100%. It
 // does not authenticate the code (anyone reading challenge.js can compute valid checksums) — that
 // would need server-side signing, which doesn't fit a static-page game.
 // ═════════════════════════════════════════════════════════════
 
-const CHALLENGE_FORMAT_VERSION = 1;
+const CHALLENGE_FORMAT_VERSION = 2;
 
 // CRC-16/CCITT-FALSE truncated to 5 bits — we use only the low 5 bits as the on-wire checksum (1/32
 // random-edit pass-rate). Full 16-bit CRC is computed and masked rather than a custom CRC-5
@@ -869,28 +883,24 @@ export function decodeChallengeCode(code) {
   if (!code) return null;
   const bytes = b32ToBytes(code.toUpperCase());
   if (!bytes) return rejectChallenge("invalid base32 char", code);
-  if (bytes.length < 13) return rejectChallenge("too short (" + bytes.length + "B)", code);
-  // Peek at format and hasSeed BEFORE trusting the bits, so we know the expected byte length. byte
-  // 0 layout: bits 7..4 = format, bit 3 = hasSeed, bits 2..0 = top of score.
+  // v2 fixed length: always 17 bytes (134 payload+checksum bits → 17 bytes byte-padded). The v1
+  // 13-byte no-seed shape was dropped — every encoded challenge now carries a seed.
+  if (bytes.length !== 17) {
+    return rejectChallenge("wrong length: got " + bytes.length + "B, expected 17B", code);
+  }
+  // Peek at format BEFORE trusting any bits. byte 0 layout: bits 7..4 = format, bit 3 =
+  // launch_window, bits 2..0 = top of score.
   const fmt = (bytes[0] >> 4) & 0xF;
   if (fmt !== CHALLENGE_FORMAT_VERSION) {
     return rejectChallenge("format=" + fmt + " (expected " + CHALLENGE_FORMAT_VERSION + ")", code);
   }
-  const hasSeedFlag = (bytes[0] >> 3) & 1;
-  const expectedLen = hasSeedFlag ? 17 : 13;
-  // Strict equality — any insertion/deletion that survives base32 decoding shows up as a length
-  // mismatch.
-  if (bytes.length !== expectedLen) {
-    return rejectChallenge(
-      "wrong length: got " + bytes.length + "B, expected " + expectedLen + "B", code);
-  }
-  // Verify the inline 5-bit checksum. Reconstruct the payload- only byte view by zeroing the last
-  // byte's bits 6..2 (which hold the checksum on the wire) and bits 1..0 (encoder pad zeros). Bit 7
-  // of the last byte is the final payload bit.
+  // Verify the inline 5-bit checksum. Reconstruct the payload-only byte view by zeroing the last
+  // byte's bits 6..2 (which hold the checksum on the wire) and bits 1..0 (encoder pad zeros). Bit
+  // 7 of the last byte is the final payload bit.
   const checkBytes = new Uint8Array(bytes);
-  checkBytes[expectedLen - 1] &= 0x80;
+  checkBytes[16] &= 0x80;
   const want = crc16(checkBytes) & 0x1F;
-  const got = (bytes[expectedLen - 1] >> 2) & 0x1F;
+  const got = (bytes[16] >> 2) & 0x1F;
   if (want !== got) {
     return rejectChallenge(
       "checksum mismatch (got 0x" + got.toString(16) + ", want 0x" + want.toString(16) + ")", code);
@@ -898,7 +908,7 @@ export function decodeChallengeCode(code) {
   const r = new BitReader(bytes);
   // fmt re-read (already validated) just to advance the cursor.
   r.read(4);
-  const hasSeed = r.read(1) === 1;
+  const launchWindow = r.read(1) === 1;
   const score = r.read(20);
   const starsVisited = r.read(10);
   const streakPeak = r.read(4);
@@ -909,11 +919,11 @@ export function decodeChallengeCode(code) {
   const deathCause = r.read(4);
   const variants = {};
   for (const k of VARIANT_KEYS) variants[k] = r.read(3);
-  const seed = hasSeed ? r.read32() : null;
+  const seed = r.read32();
   return {
     score, starsVisited, streakPeak,
     blazingCount, quickCount, slowCount,
-    cometsCaught, deathCause, variants, seed,
+    cometsCaught, deathCause, variants, seed, launchWindow,
   };
 }
 
@@ -941,8 +951,9 @@ export function buildChallengeUrl(stats, originUrl) {
   }
   const bs = new BitStream();
   bs.push(CHALLENGE_FORMAT_VERSION, 4);
-  const hasSeed = stats.seed !== undefined && stats.seed !== null;
-  bs.push(hasSeed ? 1 : 0, 1);
+  // launch_window bit (formerly has_seed in v1). Recipient's init() reads it and enables the
+  // launch-window indicator for the challenge run so both players see the same hint state.
+  bs.push(stats.launchWindow ? 1 : 0, 1);
   bs.push(clampBits(stats.score, 20), 20);
   bs.push(clampBits(stats.starsVisited, 10), 10);
   bs.push(clampBits(stats.streakPeak, 4), 4);
@@ -955,12 +966,13 @@ export function buildChallengeUrl(stats, originUrl) {
   for (const k of VARIANT_KEYS) {
     bs.push(clampBits(census[k] || 0, 3), 3);
   }
-  if (hasSeed) bs.push32(stats.seed >>> 0);
-  // Compute checksum over the payload-only byte view (97 or 129 bits → 13 or 17 bytes with the
-  // trailing 7 bits all zero).
-  // Take low 5 bits of CRC-16, push them into the bitstream;
-  // those 5 bits land inside the previously-zero pad region of the last data byte, so the byte
-  // count doesn't grow.
+  // Seed is unconditional in v2. Falsy / undefined seeds get coerced to 0 via `>>> 0`, but
+  // gameplay's setRunSeed always installs a non-zero seed before challenge encoding (any path
+  // that produces a 0 there hits the PRNG-degeneration guard in init() that remaps 0 → 1).
+  bs.push32((stats.seed || 0) >>> 0);
+  // Compute checksum over the payload-only byte view (134 bits → 17 bytes with the trailing 2
+  // bits all zero). Take low 5 bits of CRC-16, push them into the bitstream; those 5 bits land
+  // inside the previously-zero pad region of the last data byte, so the byte count doesn't grow.
   const tmpBytes = bs.toBytes();
   bs.push(crc16(tmpBytes) & 0x1F, 5);
   // Visible URL keeps the fragment lowercase so the link looks tidy to humans; the QR-render path

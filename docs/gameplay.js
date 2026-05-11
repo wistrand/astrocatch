@@ -20,6 +20,7 @@ import {
   buildChallengeUrl, makeQrMatrix, renderQrToCanvas, drawSunLogo,
   encodeAnimatedQrPng, decodeChallengeCode, DEATH_CAUSES,
 } from "./challenge.js";
+import { composeRunTitle } from "./run-title.js";
 
 // ── Incoming challenge (#…) ──────────────────────────────
 // Challenge codes ride in the URL fragment (uppercase base32) so the QR can encode them in
@@ -97,6 +98,8 @@ function showChallengeCard() {
     wrap.classList.add("hidden");
     setInvalidChallengeIndicator(_invalidChallengeHash);
     setDeathTargetInline(null);
+    const titleEl = document.getElementById("challenge-title");
+    if (titleEl) titleEl.textContent = "";
     return;
   }
   setInvalidChallengeIndicator(null);
@@ -127,6 +130,10 @@ function showChallengeCard() {
   document.getElementById("challenge-score").textContent = scoreText;
   document.getElementById("challenge-line").textContent = lineText;
   document.getElementById("challenge-variants").textContent = variantsText;
+  // Sender's procedural run title. composeRunTitle is pure — same (stats, seed) → same title,
+  // so sender and recipient see identical labels.
+  const titleEl = document.getElementById("challenge-title");
+  if (titleEl) titleEl.textContent = composeRunTitle(c);
   wrap.classList.remove("hidden");
 }
 // The first showChallengeCard() runs inside requestAnimationFrame so the browser paints the
@@ -1078,6 +1085,14 @@ function init() {
   // it off mid-run.
   isTutorialRun = gameplayCount < TUTORIAL_GAMES;
   if (isTutorialRun) showLaunchWindow = true;
+  // Challenge runs match the sender's launch-window setting. This is intentional so both players
+  // experience the same hint visibility regardless of either party's personal default. The
+  // recipient can still toggle (W key) mid-run if they want to deviate. Setting the variable
+  // directly here doesn't write back to localStorage — the player's personal default survives
+  // the challenge run unless they explicitly toggle.
+  if (_incomingChallenge) {
+    showLaunchWindow = !!_incomingChallenge.launchWindow;
+  }
   gameplayCount++;
   localStorage.setItem(GAMEPLAYS_KEY, "" + gameplayCount);
   // Per-run seed selection, in priority order:
@@ -1094,7 +1109,11 @@ function init() {
       const parsed = parseInt(urlSeedRaw, 36) >>> 0;
       setRunSeed(parsed || 1); // 0 would degenerate the PRNG; remap to 1
     } else {
-      setRunSeed((Math.random() * 0x100000000) >>> 0);
+      // `|| 1` matches the two seeded paths above — Math.random() can return 0, in which
+      // case the resulting 32-bit value is 0, and a 0-seed run would generate a challenge
+      // URL with seed=0 → recipient's init remaps 0→1, playing a different star sequence
+      // than the sender. ~1 in 2³² odds, but the guard is one token.
+      setRunSeed(((Math.random() * 0x100000000) >>> 0) || 1);
     }
   }
   stars = [];
@@ -2242,7 +2261,11 @@ function renderChallengeCard() {
   // Stamp the ✓/✗ verdict next to "TARGET N" on the inline death-stats line. `score` is the
   // player's final score at this point (no more captures fire after die() flips state).
   updateDeathTargetMark();
-  const url = buildChallengeUrl({
+  // Single stats bag — fed both to buildChallengeUrl (encodes into the QR / copy-link) AND to
+  // composeRunTitle (the procedural title shown above the score). Keeping them in lockstep
+  // guarantees the title the player sees on death is the same one their recipient sees when
+  // they open the challenge link.
+  const runStatsForShare = {
     score, starsVisited,
     streakPeak: runStats.streakPeak,
     blazingCount: runStats.blazingCount,
@@ -2252,7 +2275,16 @@ function renderChallengeCard() {
     deathCause: runStats.deathCause,
     variants: runStats.variants,
     seed: currentRunSeed,
-  }, location.origin + location.pathname);
+    // Encode whether the player had the launch-window indicator on. `showLaunchWindow` is the
+    // user-facing setting — separate from the forced-on rendering azazel applies via the
+    // `lwForced` render check, so azazel orbits don't falsely flag the bit. Recipient's init()
+    // reads this and matches the setting.
+    launchWindow: !!showLaunchWindow,
+  };
+  const url = buildChallengeUrl(runStatsForShare, location.origin + location.pathname);
+  // Procedural run title above the score number.
+  const titleEl = document.getElementById("run-title");
+  if (titleEl) titleEl.textContent = composeRunTitle(runStatsForShare);
   // The slot holds either the live canvas (during/just after death) or a baked APNG <img> (from
   // a previous death). Either way, ensure we have a canvas to draw the first frame onto before
   // the APNG finishes encoding — replaces the img with a fresh canvas if needed.

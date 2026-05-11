@@ -406,16 +406,18 @@ simplex zoom on the DEAD screen. Trailing window caps the polyline. Music keeps 
 
 ## Challenge links
 
-`challenge.js` is a self-contained module with two responsibilities: a minimal QR encoder and the
-per-run challenge-link payload codec.
+`challenge.js` is a self-contained module with three responsibilities: a minimal QR encoder, the
+per-run challenge-link payload codec, and an inline APNG assembler for the death-screen
+animated QR. Procedural run titles are composed by the separate `run-title.js` module — see
+[Run titles](#run-titles) below.
 
 ### Payload format
 
-Bit-packed into a single base32-encoded URL fragment. Format v1 (`CHALLENGE_FORMAT_VERSION = 1`):
+Bit-packed into a single base32-encoded URL fragment. Format v2 (`CHALLENGE_FORMAT_VERSION = 2`):
 
 ```
 4  bits   format version
-1  bit    has_seed
+1  bit    launch_window     (was has_seed in v1; seed is now always encoded)
 20 bits   score              (0..1,048,575)
 10 bits   starsVisited
 4  bits   streakPeak
@@ -425,15 +427,24 @@ Bit-packed into a single base32-encoded URL fragment. Format v1 (`CHALLENGE_FORM
 6  bits   cometsCaught
 4  bits   deathCause         (enum DEATH_CAUSES)
 24 bits   variant census     (8 variants × 3 bits, fixed slot order)
-32 bits   seed               (only if has_seed=1)
+32 bits   seed               (always present in v2)
 5  bits   checksum (low 5 bits of CRC-16/CCITT-FALSE over the
                     byte-aligned payload pre-checksum)
 ```
 
-97 (no seed) or 129 (with seed) payload bits + 5-bit checksum = 102 / 134 bits → byte-padded to **13
-/ 17 bytes** = base32 = **21 / 28 chars**. The checksum lives inside the byte-pad bits the original
-layout wasted, so adding it didn't grow the encoded length. Adding a new variant means bumping
-format version because the slot indices shift.
+129 payload bits + 5-bit checksum = 134 bits → byte-padded to **17 bytes** = base32 = **28 chars**
+always. The checksum lives inside the byte-pad bits the original layout wasted, so it costs no
+extra length. Adding a new variant means bumping format version because the slot indices shift.
+
+**v1 → v2.** In v1 the `has_seed` bit guarded a conditional 32-bit seed encoding, but in practice
+the encoder always passed a seed (the one place that wouldn't have was a "share without seed"
+UI affordance that never shipped). The bit was dead. v2 locks the seed in unconditionally and
+repurposes the freed bit for `launch_window` — true if the sender had the launch-window
+indicator on. The recipient's `init()` reads this bit and forces `showLaunchWindow` to match
+the sender's setting, so both players experience the same hint visibility. (Setting the
+variable directly bypasses the toggle's localStorage write, so the player's personal default
+survives the challenge run.) Azazel's forced-on indicator state is tracked separately via
+`lwForced = csCur.isAzazel` in the renderer, so azazel orbits don't falsely flip the bit.
 
 ### Forgery deterrence
 
@@ -467,27 +478,53 @@ standard mask penalty selection). The death-screen card (`#challenge-out`, flip-
 renders at v3 (29×29) with EC level M (~15% damage budget) so a centred logo overlay is
 RS-recoverable.
 
-`drawSunLogo()` paints a snap-to-grid pixel-art sun:
+`drawSunLogo(canvas, modulesPerSide, scale, quiet, phase, elevation)` paints a snap-to-grid
+pixel-art sun with **ray-traced Blinn-Phong shading**:
 
-- Mask: every module whose centre lies inside `rMod = 4.5` from the QR centre. Radius isn't 5
-  because at 5 the cardinal-axis modules (centre±0.5, ±4.5) sit at distance 4.528 (just inside)
-  while the next column is at 5.025 (just outside), producing 2-module tabs detached from the
-  diagonal silhouette. Pulling below 4.528 collapses them into a clean 6-8-8-8-8-8-8-6 outline.
-- Body gradient origin is offset upper-left by `0.35 * rMod` — earlier passes layered a separate
-  specular kicker on top of a centred body gradient, but the body's natural near-white core at
-  sun-centre always swamped the kicker visually. Moving the gradient origin instead puts the bright
-  pool at the lit side and the warm amber rim on the shadow side.
-- Each covered module is filled with one solid colour (no anti-aliasing). Snap-to-grid is what keeps
-  RS recovery clean: a fully obscured cell reads as missing data (RS fills it in), whereas a
-  partially obscured cell injects noise that erodes the EC budget.
+- **Mask** (unchanged): every module whose centre lies inside `rMod = 4.5` from the QR centre.
+  Radius isn't 5 because at 5 the cardinal-axis modules (centre±0.5, ±4.5) sit at distance 4.528
+  (just inside) while the next column is at 5.025 (just outside), producing 2-module tabs
+  detached from the diagonal silhouette. Pulling below 4.528 collapses them into a clean
+  6-8-8-8-8-8-8-6 outline.
+- **Per-module shading**: each filled module's centre is treated as a sample on a unit-radius
+  sphere centred at the QR centre. The closed-form sphere normal `N = (nx, ny, sqrt(1-nx²-ny²))`
+  drives Lambert diffuse (`max(0, N·L)`) and Blinn-Phong specular (`(N·H)^k`). The diffuse term
+  indexes the white→amber gradient table — lit hemisphere approaches the core stop, shadow side
+  parks at the warm amber rim. Specular lerps toward a saturated yellow target color (not pure
+  white) so the highlight stays sun-coloured at peak rather than blowing out to plastic.
+- **Light direction `L`** is parametric: `phase` = azimuth, `elevation` = angle out of screen
+  plane (0 = equator, π/2 = pointing straight at viewer). Animated by `gameplay.js` —
+  azimuth sweeps a full rotation while elevation drifts on a narrow sinusoid (`π/4 ± π/8`) so
+  the highlight traces a smooth oval on the sphere without ever fully fronting the camera.
+
+### Animated PNG bake
+
+After rendering the canvas + live RAF (covers the ~700 ms encoding latency), `gameplay.js`
+asynchronously builds an APNG via `encodeAnimatedQrPng(canvas, drawFrame, frameCount, fps)`:
+
+- 32 frames at 16 fps = 2 s seamless loop. Frame count chosen so per-frame highlight jump
+  (~11.25° azimuth) reads as continuous motion rather than stop-motion.
+- Per frame: caller's `drawFrame(i, total)` mutates the canvas, encoder snapshots via
+  `canvas.toBlob("image/png")`, parses out the IDAT chunks, and stitches them into a valid
+  APNG by inserting `acTL` + per-frame `fcTL` + (for frames ≥ 1) converting `IDAT` → `fdAT`
+  with sequence-number prefix. CRC32 over each PNG chunk; no external library.
+- Once the bake completes, the live canvas is replaced in-DOM with `<img id="challenge-out-qr"
+  src=blob:image/png>`. RAF stops; playback is native browser APNG decoding, zero JS cost. The
+  blob is wrapped in `File(..., "astrocatch-challenge.png", { type: "image/png" })` so most
+  browsers (not Firefox) suggest the filename on right-click "Save image as…".
 
 ### Incoming challenges
 
 `gameplay.js` decodes `location.hash` once at module load AND on every `hashchange` event — so
 editing the URL in the address bar of an already-loaded page (a same-tab soft navigation, not a full
 reload) still surfaces the welcome card. The `#challenge` welcome card on the start screen shows the
-sender's score, run summary, and variant census; closing it strips both the fragment and any
+sender's title, score, run summary, and variant census; closing it strips both the fragment and any
 `?seed=` query so a fresh-random run can roll.
+
+Invalid hashes (decode rejected — corrupted / tampered / stale) show a small amber `#challenge-
+invalid` indicator: `invalid challenge link · #<12-char prefix>`. The hash snippet is rendered
+via `textContent` only (never `innerHTML`) so a hostile `#<script>` or `#<img onerror=…>` stays
+inert literal text. Length-truncated to keep the indicator one line tall.
 
 `init()` reads `_incomingChallenge` at the moment the player clicks START, so any hash change before
 that point picks up. Seed-source priority:
@@ -496,6 +533,12 @@ that point picks up. Seed-source priority:
 2. `?seed=XYZ` legacy/explicit param
 3. fresh-random per run
 
+`init()` also reads `_incomingChallenge.launchWindow` and overrides `showLaunchWindow` for the
+run — the recipient experiences the sender's hint setting regardless of either player's
+localStorage default. Variable assignment bypasses the toggle's persist-to-localStorage path so
+the recipient's preference is preserved for non-challenge runs. The recipient can still toggle
+with W to deviate; doing so writes back to their own setting.
+
 The RESUME button is hidden whenever an incoming challenge is active
 (`updateResumeButtonVisibility()` checks `loadGame() && !_incomingChallenge`). Without this guard, a
 player on a fresh challenge URL could click RESUME and `resumeFromSave()` would restore their prior
@@ -503,8 +546,18 @@ session's score — instantly clearing the sender's bar with no actual play. CON
 screen is unaffected because `continueRun()` already resets `score = 0`.
 
 `updateSub()` appends `· target N` to the sub-line under the HUD score whenever `_incomingChallenge`
-is set, so the sender's bar is visible alongside the player's running total throughout the run (not
-just on the welcome card).
+is set, so the sender's bar is visible alongside the player's running total throughout the run.
+
+### Death-stats inline annotation
+
+On gameover, the existing "X stars · best Y" line gets `· target N ✓/✗ ×` appended via a hidden
+`#death-target` span — visible only when `_incomingChallenge` is set. The ✓/✗ mark colour-codes
+the verdict (green / amber) and is set by `updateDeathTargetMark()` from `renderChallengeCard`
+(at gameover time `score` is the player's final score, since no captures fire after the DYING
+freeze). The trailing `×` is the same `dismissChallenge()` handler as the start-screen
+`#challenge-close` — strips `#hash` + `?seed=` and reloads. Inline annotation chosen over a
+duplicated card because the standalone mirror added ~150 px to the gameover overlay and
+overflowed shorter mobile viewports.
 
 ### Once-per-run "challenge beaten" flash
 
@@ -514,6 +567,110 @@ element at top:90px, ~1.5s hold so it reads as a once-per-run event rather than 
 The flag is reset by `resetRunStats()` based on the *current* score — fresh start / continueRun
 (score=0) → false; resume from save where the saved score already cleared the challenge → true (so
 the flash doesn't re-fire on the resumed frame).
+
+## Run titles
+
+`run-title.js` is a pure ES module that turns a run summary (or a decoded challenge code) into a
+short noun phrase like `the burning twins` or `the patient void, charted`. Deterministic: given
+the same stats and seed, returns the same title — so a challenge sender and recipient see the
+same label baked into the shareable identity of the code. Pure data + no DOM, exportable, no
+gameplay dependencies.
+
+### Composition
+
+The composed title is `the {adjective} {noun}` plus optional comma-suffix. Three axes drive the
+choice:
+
+1. **Style adjective** picked from the run's dominant style metric. 8 families × 6 words each:
+   - `burning` (high blazing fraction) — burning, blazing, scorching, sun-struck, feverish,
+     wildfire
+   - `swift` (high quick fraction) — swift, darting, fleet, quick-handed, lithe, dashing
+   - `patient` (high slow fraction) — patient, deliberate, steady, watchful, measured, biding
+   - `rhythmic` (high streak peak) — rhythmic, drum-tight, locked-in, even, metered,
+     sure-footed
+   - `greedy` (high comet-per-star) — greedy, magpie, comet-eyed, gilded, hoarding,
+     shimmer-eyed
+   - `long` (≥30 stars) — long, deep, far-running, unbroken, enduring, sustained
+   - `epic` (≥100 stars) — endless, deep-time, year-long, marathon, ageless, fathomless
+   - `spare` (<5 stars) — quiet, still, spare, brief, bare, hushed
+
+   The metrics are normalized to [0, 1] and the highest scoring family wins. Tiebreaker is
+   insertion order via the stable sort — `burning`/`swift`/`patient` push first so they win
+   ties against `rhythmic` when a run mixes both qualities. `epic` pushes before `long` so
+   100+-star runs win the length-tier tie against `long` (both saturate at 1.0 for those
+   runs). `STYLE_THRESHOLD = 0.3` — below that, the composer falls back to `long` or `spare`.
+
+2. **Noun** picked by rare-encounter override → dominant-variant pool → generic fallback:
+   - **Rare-variant override**: any run with `variants.azazel > 0` or `variants.teapot > 0`
+     routes through `RARE_NOUN = ["omen", "apparition", "rumor", "specter"]` regardless of
+     what else the player encountered. Two reasons: (a) signals "something special happened",
+     (b) keeps the rare variant's *name* out of the title so a shareable URL doesn't spoil the
+     surprise for anyone who hasn't seen them yet.
+   - **Common-variant pool**: 6 pools × 4 words each. Dominance is weighted (`blackHole` ×1.1,
+     `monolith` ×1.3, etc.) so visually-distinct variants outrank common ones at low counts.
+     Pools: binary {twins, pair, duet, tandem}, blackHole {void, maw, well, horizon},
+     monolith {slab, obelisk, pillar, stone}, ringworld {ring, band, halo, hoop}, pulsar
+     {beacon, pulse, lantern, signal}, nebula {cloud, veil, shroud, mist}. Key names match
+     `runStats.variants` (note: `blackHole`, not `bh`; BH binaries increment BOTH `blackHole`
+     and `binary` rather than getting their own bucket, so they can't be named distinctly).
+   - **Generic fallback** when every star was plain: `["drift", "passage", "crossing",
+     "watch", "hunt", "voyage", "trek", "transit"]`.
+
+3. **Optional suffix** appended for two reasons:
+   - **Launch-window suffix** (`lw=true && stars >= 5`): tag from `GUIDED_SUFFIX = ["charted",
+     "well-aimed", "sighted", "well-marked"]`. Frames using the hint as a craft choice — `the
+     burning twins, charted` reads as a nautical / aerospace acknowledgement rather than a
+     callout.
+
+**0-star runs short-circuit** to a separate failure vocabulary: `FAILED_ADJ = ["abrupt",
+"early", "luckless", "fleeting"]` × `FAILED_NOUN = ["fumble", "misfire", "stumble", "slip",
+"miss", "blunder"]`. Avoids the gentle "spare" branch reading as "you chose to leave" when the
+run actually flubbed before catching anything.
+
+### Determinism: `statHash`
+
+Word selection within each pool runs on a 32-bit hash of *every* encoded stat field — not just
+seed. `statHash(stats)` folds in score, starsVisited, streakPeak, b/q/s, cometsCaught,
+deathCause, launchWindow, variants, and seed via Knuth-multiplier + xor-shift rounds (Murmur-
+style mixing, non-crypto). Different bit-slices of the same hash feed each pool's index
+(`hash % adjList.length`, `hash >>> 11 % nounList.length`, `hash >>> 23 % GUIDED_SUFFIX.length`)
+so the slices stay uncorrelated.
+
+Without this, two runs sharing a seed but different outcomes (different score, streak, comet
+count, …) would pick identical words inside their style/variant families — only the *family*
+would vary by what the run was. Folding all the bits in makes the title also reflect the
+gameplay detail. Sender / recipient agreement is preserved because all hash inputs are in the
+challenge payload.
+
+### Verification
+
+`scripts/check-titles.js` sweeps `composeRunTitle` across canonical + randomised stat profiles
+and prints each generated title with its inputs. Canonicals exercise:
+
+- Edge cases: 0-star failure (across 4 seeds, to spread the FAILED pool), 1-2 star runs.
+- Pure styles: all-blazing / all-quick / all-patient / balanced / comet-hunter / tight-streak.
+- Variant landscapes: binary / BH / pulsar / nebula / ringworld+monolith dominance.
+- Rare-variant cases: single azazel + commons, single teapot + commons (titles should use
+  oblique RARE_NOUN, never name the rare variant).
+- All-plain runs at varying lengths to confirm the long → epic transition fires past 100
+  stars when length is the standout (high streak / dominant capture style still beats epic
+  on ties).
+- `lw=true` runs at and below the 5-star threshold to confirm the suffix gates properly.
+
+Plus a deterministic random sweep of 40 profiles and a per-title aggregate count, to catch
+repetition over a wider sample.
+
+### UI integration
+
+- `#run-title` (gameover overlay, between "game over" and the final score) — populated by
+  `renderChallengeCard()` from the player's live runStats + `currentRunSeed` +
+  `showLaunchWindow`. Same stats bag also feeds `buildChallengeUrl()` so the title shown on
+  the player's gameover matches what the recipient sees when they open the link.
+- `#challenge-title` (start-screen welcome card, above the "challenge" label) — populated by
+  `showChallengeCard()` from the decoded `_incomingChallenge` object.
+- CSS: 13 px uppercase, 4 px letter-spacing, warm-amber colour (rgba 255,220,160,.65). The
+  slots have `:empty { display: none }` so a non-challenge run / no-incoming-challenge
+  start-screen renders cleanly without an empty 1-em gap.
 
 ## Window resize
 

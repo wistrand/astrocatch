@@ -433,6 +433,19 @@
     margin-top: 0;
     margin-bottom: 0;
   }
+  /* Procedural run title slots — small uppercase tag in warm amber, sits between the
+     overlay's main label and the score number. Empty when there's no title to show
+     (showChallengeCard / renderChallengeCard set textContent = "" to hide). */
+  #run-title, #challenge-title {
+    font-size: 13px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+    color: rgba(255, 220, 160, 0.65);
+    font-weight: 600;
+    margin: 4px 0;
+    min-height: 1em;
+  }
+  #run-title:empty, #challenge-title:empty { display: none; }
   /* Inline death-screen target annotation. Hides/shows via `.hidden` toggling opacity (no
      height change since this lives inside a single text line). `display: none` would jump the
      line width; opacity keeps the layout calm. */
@@ -714,6 +727,8 @@
     <div id="challenge-invalid" class="hidden"></div>
     <div id="challenge" class="hidden">
       <button id="challenge-close" type="button" aria-label="dismiss challenge">×</button>
+      <!-- Sender's procedural run title — populated by showChallengeCard via composeRunTitle. -->
+      <div id="challenge-title"></div>
       <div class="label">challenge</div>
       <div id="challenge-score">0</div>
       <div id="challenge-line" class="label">0 stars</div>
@@ -730,6 +745,8 @@
 
   <div id="gameover" class="overlay hidden">
     <div class="label">game over</div>
+    <!-- Procedural run title — populated by renderChallengeCard via composeRunTitle. -->
+    <div id="run-title"></div>
     <div id="final">0</div>
     <!-- Stats line. The `#death-target` span appends "· target N ✓/✗ ×" inline when an incoming
          challenge is active. Inline annotation costs ~0 vertical space vs the old card mirror
