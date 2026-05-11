@@ -625,10 +625,16 @@ function resetRunStats() {
   // milestone as already crossed so the flash doesn't re-fire on the resumed frame. Fresh-start and
   // continueRun paths set score=0 first, so this evaluates false there.
   challengeBeaten = !!(_incomingChallenge && score > _incomingChallenge.score);
+  _chapterMilestones.clear();
 }
 // Once-per-run flag: flips true the first frame `score` exceeds the incoming challenge's score,
 // fires showChallengeBeatFlash(). Reset by resetRunStats() based on current score (see above).
 let challengeBeaten = false;
+// One-shot tracker for chapter flashes — keys are "variant:<name>" or "stars:<N>". Reset by
+// resetRunStats so a fresh run / continueRun re-arms all milestones. Resume-from-save also
+// resets (the player gets to re-experience the milestones for their resumed run).
+const _chapterMilestones = new Set();
+let _chapterFlashTimer = null;
 // Tracked ball speed, normalized to [0, 1] against MAX_SPEED, fed to audio.setIntensity() each
 // render frame so the music's chord progression escalates as the player boosts faster. Uses a
 // decay-max tracker: each frame, either bump up to the current instantaneous normalized speed (if
@@ -1524,14 +1530,60 @@ function captureStar(idx) {
   else if (bonus >= 2) runStats.quickCount++;
   else runStats.slowCount++;
   if (fastStreak > runStats.streakPeak) runStats.streakPeak = fastStreak;
-  if (s.isAzazel)     runStats.variants.azazel++;
-  if (s.isTeapot)     runStats.variants.teapot++;
-  if (s.isBlackHole)  runStats.variants.blackHole++;
-  if (s.isRingworld)  runStats.variants.ringworld++;
-  if (s.isNebula)     runStats.variants.nebula++;
-  if (s.isPulsar)     runStats.variants.pulsar++;
-  if (s.isBinary)     runStats.variants.binary++;
-  if (s.isMonolith)   runStats.variants.monolith++;
+  // Track which variants newly entered the census on THIS capture (count was 0, now becomes
+  // 1). Used below to fire a one-shot chapter flash on first-of-variant.
+  const newVariants = [];
+  if (s.isAzazel) {
+    if (runStats.variants.azazel === 0) newVariants.push("azazel");
+    runStats.variants.azazel++;
+  }
+  if (s.isTeapot) {
+    if (runStats.variants.teapot === 0) newVariants.push("teapot");
+    runStats.variants.teapot++;
+  }
+  if (s.isBlackHole) {
+    if (runStats.variants.blackHole === 0) newVariants.push("blackHole");
+    runStats.variants.blackHole++;
+  }
+  if (s.isRingworld) {
+    if (runStats.variants.ringworld === 0) newVariants.push("ringworld");
+    runStats.variants.ringworld++;
+  }
+  if (s.isNebula) {
+    if (runStats.variants.nebula === 0) newVariants.push("nebula");
+    runStats.variants.nebula++;
+  }
+  if (s.isPulsar) {
+    if (runStats.variants.pulsar === 0) newVariants.push("pulsar");
+    runStats.variants.pulsar++;
+  }
+  if (s.isBinary) {
+    if (runStats.variants.binary === 0) newVariants.push("binary");
+    runStats.variants.binary++;
+  }
+  if (s.isMonolith) {
+    if (runStats.variants.monolith === 0) newVariants.push("monolith");
+    runStats.variants.monolith++;
+  }
+  // Chapter milestones: first-of-variant beats star-count if both fire on the same capture
+  // (variants are rarer, naturally higher-priority for narrative). All milestones are tracked
+  // in `_chapterMilestones` so they never fire twice per run.
+  const STAR_MILESTONES = [25, 50, 100, 200, 500];
+  let chapterFired = false;
+  for (const v of newVariants) {
+    const key = "variant:" + v;
+    if (!_chapterMilestones.has(key)) {
+      _chapterMilestones.add(key);
+      if (!chapterFired) { showChapterFlash(); chapterFired = true; }
+    }
+  }
+  if (!chapterFired && STAR_MILESTONES.includes(starsVisited)) {
+    const key = "stars:" + starsVisited;
+    if (!_chapterMilestones.has(key)) {
+      _chapterMilestones.add(key);
+      showChapterFlash();
+    }
+  }
   // Tutorial assist auto-off at the boundary. One-shot — the player can still re-enable with W and
   // their preference will stick from here on.
   if (isTutorialRun && starsVisited === TUTORIAL_STARS) {
@@ -2038,6 +2090,48 @@ function showChallengeBeatFlash() {
     el.style.opacity = "0";
     el.style.transform = "translateY(-24px) scale(1.06)";
   }, 1500);
+}
+
+// Chapter flash. Fires on first-of-variant captures and at star-count milestones. Reuses the
+// run-title composer with the CURRENT run state, so the score-driven hash gives each milestone a
+// distinct title even when the dominant style and variant haven't shifted. Lives at the bottom of
+// the viewport so it reads as a narrator's voice rather than a bonus pop (which sits up top with
+// the score). Soft amber color, gentle fade.
+function showChapterFlash() {
+  const title = composeRunTitle({
+    score, starsVisited,
+    streakPeak: runStats.streakPeak,
+    blazingCount: runStats.blazingCount,
+    quickCount: runStats.quickCount,
+    slowCount: runStats.slowCount,
+    cometsCaught: runStats.cometsCaught,
+    deathCause: runStats.deathCause,
+    variants: runStats.variants,
+    seed: currentRunSeed,
+    launchWindow: !!showLaunchWindow,
+  });
+  let el = document.getElementById("chapter-flash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "chapter-flash";
+    el.style.cssText =
+      "position:absolute;bottom:80px;left:0;right:0;text-align:center;"
+      + "font-size:16px;font-weight:500;letter-spacing:3px;text-transform:uppercase;"
+      + "pointer-events:none;opacity:0;transition:opacity 0.45s ease;"
+      + "color:rgba(255,220,160,0.78);"
+      + "text-shadow:0 0 18px rgba(255,170,60,0.45),0 0 36px rgba(255,170,60,0.18);";
+    document.getElementById("ui").appendChild(el);
+  }
+  el.textContent = title;
+  // Cancel any pending fade-out from a previous flash so the new one isn't cut short by a
+  // stale timer landing partway into the hold.
+  if (_chapterFlashTimer !== null) clearTimeout(_chapterFlashTimer);
+  el.style.opacity = "1";
+  void el.offsetWidth;
+  _chapterFlashTimer = setTimeout(() => {
+    el.style.opacity = "0";
+    _chapterFlashTimer = null;
+  }, 2400);
 }
 
 function showBonusFlash(bonus, streak) {
