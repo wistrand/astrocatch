@@ -383,6 +383,10 @@
   #challenge-out-flip:hover {
     color: rgba(255, 255, 255, 0.85);
   }
+  /* `display: none` can't be transitioned, so we keep both states in flow and animate
+     max-height / opacity / collapsing margin+padding. The hard cap (max-height: 240px) is
+     larger than any realistic card content; on expand the transition reads from 0 → 240px
+     but the actual rendered height is `auto`, so the animation feels natural. */
   #challenge {
     position: relative;
     margin: 16px auto 12px;
@@ -395,9 +399,72 @@
     align-items: center;
     gap: 4px;
     min-width: 240px;
+    overflow: hidden;
+    max-height: 240px;
+    opacity: 1;
+    transition: max-height 0.35s ease, opacity 0.25s ease,
+                margin 0.35s ease, padding 0.35s ease, border-width 0.35s ease;
   }
-  #challenge.hidden { display: none; }
-  #challenge-close {
+  #challenge.hidden {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-top-width: 0;
+    border-bottom-width: 0;
+  }
+  #challenge-invalid {
+    font-size: 11px;
+    letter-spacing: 1px;
+    color: rgba(255, 180, 100, 0.55);
+    margin: 8px auto 4px;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    max-height: 40px;
+    opacity: 1;
+    transition: max-height 0.3s ease, opacity 0.2s ease, margin 0.3s ease;
+  }
+  #challenge-invalid.hidden {
+    max-height: 0;
+    opacity: 0;
+    margin-top: 0;
+    margin-bottom: 0;
+  }
+  /* Inline death-screen target annotation. Hides/shows via `.hidden` toggling opacity (no
+     height change since this lives inside a single text line). `display: none` would jump the
+     line width; opacity keeps the layout calm. */
+  #death-target {
+    opacity: 1;
+    transition: opacity 0.25s ease;
+  }
+  #death-target.hidden {
+    display: none;
+  }
+  #death-target-mark.beat   { color: rgba(120, 230, 140, 0.95); }
+  #death-target-mark.missed { color: rgba(255, 170, 100, 0.85); }
+  #death-target-close {
+    appearance: none;
+    -webkit-appearance: none;
+    background: transparent;
+    border: none;
+    color: rgba(255, 255, 255, 0.45);
+    font: inherit;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 4px;
+    margin-left: 4px;
+    cursor: pointer;
+    border-radius: 3px;
+    vertical-align: baseline;
+  }
+  #death-target-close:hover {
+    color: rgba(255, 255, 255, 0.95);
+    background: rgba(255, 255, 255, 0.08);
+  }
+  #challenge-close, #challenge-go-close {
     position: absolute;
     top: 4px;
     right: 4px;
@@ -419,23 +486,24 @@
     appearance: none;
     -webkit-appearance: none;
   }
-  #challenge-close:hover {
+  #challenge-close:hover, #challenge-go-close:hover {
     color: rgba(255, 255, 255, 0.9);
     background: rgba(255, 255, 255, 0.08);
   }
-  #challenge-score {
+  #challenge-score, #challenge-go-score {
     font-size: 38px;
     font-weight: 750;
     letter-spacing: -1px;
     text-shadow: 0 0 18px rgba(140, 210, 255, 0.5);
     margin: 2px 0 4px;
   }
-  #challenge-line, #challenge-variants {
+  #challenge-line, #challenge-variants,
+  #challenge-go-line, #challenge-go-variants {
     font-size: 11px;
     letter-spacing: 1.5px;
     color: rgba(255, 255, 255, 0.65);
   }
-  #challenge-variants:empty { display: none; }
+  #challenge-variants:empty, #challenge-go-variants:empty { display: none; }
   #challenge-out-link {
     display: inline-block;
     line-height: 0; /* kill anchor descender gap below the canvas */
@@ -640,6 +708,10 @@
     <h1>ASTROCATCH</h1>
     <div class="tag">click / space to play</div>
     <div id="start-best" class="label" style="visibility:hidden">&nbsp;</div>
+    <!-- Shown when the URL hash is present but failed to decode (corrupted / tampered / stale /
+         from a different version). Content is set via textContent only — never innerHTML — so
+         even a hash like #<script> is rendered as literal text, not parsed. -->
+    <div id="challenge-invalid" class="hidden"></div>
     <div id="challenge" class="hidden">
       <button id="challenge-close" type="button" aria-label="dismiss challenge">×</button>
       <div class="label">challenge</div>
@@ -659,7 +731,15 @@
   <div id="gameover" class="overlay hidden">
     <div class="label">game over</div>
     <div id="final">0</div>
-    <div class="label"><span id="stars">0</span> stars · best <span id="best">0</span></div>
+    <!-- Stats line. The `#death-target` span appends "· target N ✓/✗ ×" inline when an incoming
+         challenge is active. Inline annotation costs ~0 vertical space vs the old card mirror
+         and keeps the close affordance available on the gameover screen. -->
+    <div class="label">
+      <span id="stars">0</span> stars · best <span id="best">0</span><span id="death-target"
+        class="hidden"> · target <span id="death-target-score">0</span> <span
+        id="death-target-mark"></span> <button id="death-target-close"
+        type="button" aria-label="dismiss challenge">×</button></span>
+    </div>
     <button id="retry-btn">RESTART</button>
     <button id="continue-btn">CONTINUE</button>
     <div id="gameover-keys" class="tag" style="margin-top:12px">

@@ -29,27 +29,82 @@ import {
 // `_incomingChallenge` at the moment the player clicks START, so any hash change before that point
 // picks up.
 let _incomingChallenge = null;
+// Held separately so showChallengeCard can surface "we saw a hash but rejected it" to the
+// player. Empty/missing hash → null; valid hash → null (caller reads _incomingChallenge);
+// invalid hash → the raw code string.
+let _invalidChallengeHash = null;
 function recomputeIncomingChallenge() {
   const code = location.hash ? location.hash.replace(/^#/, "") : "";
-  _incomingChallenge = code ? decodeChallengeCode(code) : null;
+  if (!code) {
+    _incomingChallenge = null;
+    _invalidChallengeHash = null;
+    return;
+  }
+  _incomingChallenge = decodeChallengeCode(code);
+  _invalidChallengeHash = _incomingChallenge ? null : code;
 }
 recomputeIncomingChallenge();
+// Show / hide the "invalid challenge link" indicator on the start screen. textContent is the
+// XSS guard — the rejected hash is rendered as literal text, never parsed as HTML, so even a
+// hostile `#<img onerror=…>` payload stays inert. The hash is truncated to a short prefix so
+// the indicator stays one line tall regardless of the bogus input.
+function setInvalidChallengeIndicator(hash) {
+  const inv = document.getElementById("challenge-invalid");
+  if (!inv) return;
+  if (!hash) {
+    inv.classList.add("hidden");
+    return;
+  }
+  const snippet = hash.length > 12 ? hash.slice(0, 12) + "…" : hash;
+  inv.textContent = "invalid challenge link · #" + snippet;
+  inv.classList.remove("hidden");
+}
+// Death-screen target annotation: the inline "· target N ✓/✗ ×" appended to the stats line on
+// gameover. Score number set here; the ✓/✗ mark is decided by updateDeathTargetMark() once we
+// know the player's final score.
+function setDeathTargetInline(challenge) {
+  const wrap = document.getElementById("death-target");
+  if (!wrap) return;
+  if (!challenge) {
+    wrap.classList.add("hidden");
+    return;
+  }
+  document.getElementById("death-target-score").textContent
+    = challenge.score.toLocaleString();
+  // Mark starts blank — populated when the gameover screen renders.
+  const mark = document.getElementById("death-target-mark");
+  if (mark) { mark.textContent = ""; mark.classList.remove("beat", "missed"); }
+  wrap.classList.remove("hidden");
+}
+function updateDeathTargetMark() {
+  const mark = document.getElementById("death-target-mark");
+  if (!mark || !_incomingChallenge) return;
+  if (score > _incomingChallenge.score) {
+    mark.textContent = "✓";
+    mark.className = "beat";
+  } else {
+    mark.textContent = "✗";
+    mark.className = "missed";
+  }
+}
 function showChallengeCard() {
   const wrap = document.getElementById("challenge");
   if (!wrap) return;
   const c = _incomingChallenge;
-  // No (or invalid) hash → hide the card. This also handles the path where a hashchange wipes a
-  // previously-valid challenge.
+  // No (or invalid) hash → hide welcome card AND the inline death annotation. This also handles
+  // the path where a hashchange wipes a previously-valid challenge.
   if (!c) {
     wrap.classList.add("hidden");
+    setInvalidChallengeIndicator(_invalidChallengeHash);
+    setDeathTargetInline(null);
     return;
   }
-  document.getElementById("challenge-score").textContent =
-    c.score.toLocaleString();
+  setInvalidChallengeIndicator(null);
+  setDeathTargetInline(c);
+  const scoreText = c.score.toLocaleString();
   const tierBits = `${c.blazingCount}/${c.quickCount}/${c.slowCount}`;
-  document.getElementById("challenge-line").textContent =
-    `${c.starsVisited} stars · streak ×${c.streakPeak} · ${tierBits}` +
-    (c.cometsCaught ? ` · ${c.cometsCaught} comets` : "");
+  const lineText = `${c.starsVisited} stars · streak ×${c.streakPeak} · ${tierBits}`
+    + (c.cometsCaught ? ` · ${c.cometsCaught} comets` : "");
   // Variant census line — only mention variants the sender actually saw, with friendly labels.
   // Keeps the card terse when the run was vanilla. Surprise variants (azazel, teapot) are
   // aggregated under "special" so the public-facing card doesn't spoil what's out there to
@@ -68,11 +123,19 @@ function showChallengeCard() {
     const n = c.variants[k] || 0;
     if (n > 0) seen.push(`${n} ${labels[k]}${n > 1 ? "s" : ""}`);
   }
-  document.getElementById("challenge-variants").textContent =
-    seen.length ? "saw " + seen.join(", ") : "";
+  const variantsText = seen.length ? "saw " + seen.join(", ") : "";
+  document.getElementById("challenge-score").textContent = scoreText;
+  document.getElementById("challenge-line").textContent = lineText;
+  document.getElementById("challenge-variants").textContent = variantsText;
   wrap.classList.remove("hidden");
 }
-showChallengeCard();
+// The first showChallengeCard() runs inside requestAnimationFrame so the browser paints the
+// HTML-applied .hidden state (max-height: 0) at least once before JS removes the class. Without
+// the deferral, the style change collapses into the same layout pass as the first paint and the
+// expand-in transition is skipped — the card just snaps in. Subsequent hashchange-driven calls
+// don't need this guard: a previous state is already on screen for the browser to interpolate
+// from.
+requestAnimationFrame(showChallengeCard);
 window.addEventListener("hashchange", () => {
   recomputeIncomingChallenge();
   showChallengeCard();
@@ -82,20 +145,21 @@ window.addEventListener("hashchange", () => {
   // though it lives below.
   updateResumeButtonVisibility();
 });
-// Close button — strip the challenge fragment and ?seed= so the run-seed roll goes back to
-// fresh-random, then reload. Equivalent to landing on the bare page from scratch.
-{
-  const closeBtn = document.getElementById("challenge-close");
-  if (closeBtn) {
-    closeBtn.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const url = new URL(location.href);
-      url.searchParams.delete("seed");
-      url.hash = "";
-      location.assign(url.toString());
-    });
-  }
+// Close-X dismiss — strip the challenge fragment and ?seed= so the run-seed roll goes back to
+// fresh-random, then reload. Equivalent to landing on the bare page from scratch. Wired to both
+// the start-screen welcome card's × and the inline gameover annotation's ×; either dismissal
+// exits challenge mode entirely.
+function dismissChallenge(e) {
+  if (e) { e.preventDefault(); e.stopPropagation(); }
+  const url = new URL(location.href);
+  url.searchParams.delete("seed");
+  url.hash = "";
+  location.assign(url.toString());
 }
+const _closeBtnStart = document.getElementById("challenge-close");
+if (_closeBtnStart) _closeBtnStart.addEventListener("click", dismissChallenge);
+const _closeBtnDeath = document.getElementById("death-target-close");
+if (_closeBtnDeath) _closeBtnDeath.addEventListener("click", dismissChallenge);
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -474,6 +538,11 @@ function saveGame() {
       currentStar: ball.currentStar,
       frame: ball.frame || 0,
     },
+    // `seed` is saved so resumeFromSave can restore the PRNG. Without it, resumed runs default
+    // currentRunSeed = 0, which the challenge-link encoder then writes as seed=0 — and the
+    // recipient's init() remaps 0 → 1, making the challenge play a different star sequence than
+    // the sender intended.
+    seed: currentRunSeed,
     score, starsVisited, fastStreak, trackedSpeed, hasBoosted,
     camY, camTargetY,
   };
@@ -1186,6 +1255,15 @@ function continueRun() {
 function resumeFromSave(data) {
   paused = false;
   syncPausedIndicator();
+  // Restore the PRNG seed so any challenge link generated from this run encodes the correct
+  // seed (the recipient needs it to recreate the same star sequence). Pre-seed-save snapshots
+  // (v=1 without `seed`) fall back to 1 so the PRNG state is at least non-degenerate; their
+  // challenge links won't be reproducible by recipients, but the resumed run itself still plays.
+  if (typeof data.seed === "number") {
+    setRunSeed(data.seed || 1);
+  } else {
+    setRunSeed(1);
+  }
   // Rehydrate stars. Past stars are {x,y,r,colorIdx,caught} stubs; fill in sensible defaults so
   // draw() doesn't choke on missing fields.
   stars = data.stars.map((raw) => ({
@@ -2161,6 +2239,9 @@ function renderChallengeCard() {
   // again, then died re-sees the "get challenge link" text rather than the prior QR.
   const card = document.getElementById("challenge-out");
   if (card) card.classList.remove("flipped");
+  // Stamp the ✓/✗ verdict next to "TARGET N" on the inline death-stats line. `score` is the
+  // player's final score at this point (no more captures fire after die() flips state).
+  updateDeathTargetMark();
   const url = buildChallengeUrl({
     score, starsVisited,
     streakPeak: runStats.streakPeak,
