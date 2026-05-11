@@ -659,6 +659,127 @@ const TUTORIAL_STARS = 15;
 let gameplayCount = +(localStorage.getItem(GAMEPLAYS_KEY) || 0);
 let isTutorialRun = false;
 
+// Live first-run intro overlay. Each entry in INTRO_TEXTS is bound to a star index: text[i]
+// rides on stars[i] for its whole lifetime. The two persistent DOM slots display whichever
+// texts currently map to ball.currentStar and ball.currentStar + 1, so capture naturally
+// promotes the next-text into the current-text without a visible swap (same string at the
+// same screen position, just on a different element). The next-text fades in INTRO_NEXT_DELAY_MS
+// after each transition so the player gets a moment with just the current line. When
+// ball.currentStar moves past the end of INTRO_TEXTS the overlay dismisses itself — that's
+// the success exit; mid-tutorial death and a 60 s safety timeout dismiss without flagging
+// done, so the next run re-fires.
+const INTRO_DONE_KEY = "astrocatch_intro_done";
+const INTRO_TEXTS = [
+  "you're orbiting a star",
+  "tap when your direction aims at the next one",
+  "release within one rotation for bonus",
+  "stranger stars ahead",
+  "send runs as challenges",
+  "enjoy",
+];
+const INTRO_NEXT_DELAY_MS = 1000;
+let introActive = false;
+let _introLastCurStar = -1;
+let _introNextVisible = false;
+let _introNextTimer = null;
+let _introTimers = [];
+// Dev/test override: ?intro=1 in the URL forces the overlay regardless of the done-flag and
+// fires it from the resume path too, so a saved run can be used to iterate on the intro
+// without losing progress. Successful completion under the override doesn't write the
+// done-flag — refreshing the page just replays it.
+function introOverride() {
+  return new URLSearchParams(location.search).get("intro") === "1";
+}
+function _setIntroSlot(slot, text) {
+  const el = document.getElementById("tutorial-" + slot);
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.classList.add("show");
+  } else {
+    el.classList.remove("show");
+  }
+}
+// Pull both slots in line with the current ball.currentStar. Called from updateTutorialPositions
+// (each render frame) so a capture is reflected within one frame of the physics step. Detects
+// transitions via _introLastCurStar and schedules the next-text fade-in.
+function syncIntroForCurStar() {
+  if (!introActive || !ball) return;
+  const cur = ball.currentStar;
+  if (cur === _introLastCurStar) return;
+  _introLastCurStar = cur;
+  const curText = INTRO_TEXTS[cur];
+  _setIntroSlot("current", curText);
+  // Clear the next slot's textContent in the same tick, not just its `.show` class — the
+  // element snaps to the new next-star anchor immediately (per-frame positioning), so a
+  // 0.15 s fade-out of the *old* text at the *new* anchor reads as a flicker. With empty
+  // text content the fade-out is invisible (nothing to render), and the 1 s delay timer
+  // below then sets the correct new text and fades it in.
+  const nextEl = document.getElementById("tutorial-next");
+  if (nextEl) { nextEl.classList.remove("show"); nextEl.textContent = ""; }
+  _introNextVisible = false;
+  if (_introNextTimer) { clearTimeout(_introNextTimer); _introNextTimer = null; }
+  const nextText = INTRO_TEXTS[cur + 1];
+  if (nextText) {
+    _introNextTimer = setTimeout(() => {
+      if (introActive && ball && ball.currentStar === cur) {
+        _setIntroSlot("next", nextText);
+        _introNextVisible = true;
+      }
+    }, INTRO_NEXT_DELAY_MS);
+  } else if (!curText) {
+    // Past the last text — the player has completed the intro.
+    endIntro(true);
+  }
+}
+function endIntro(success) {
+  if (!introActive) return;
+  introActive = false;
+  _introLastCurStar = -1;
+  _introNextVisible = false;
+  if (_introNextTimer) { clearTimeout(_introNextTimer); _introNextTimer = null; }
+  for (const t of _introTimers) clearTimeout(t);
+  _introTimers.length = 0;
+  _setIntroSlot("current", "");
+  _setIntroSlot("next", "");
+  if (success && !introOverride()) {
+    try { localStorage.setItem(INTRO_DONE_KEY, "1"); } catch (_) { /* ignore */ }
+  }
+}
+function startIntro() {
+  introActive = true;
+  _introLastCurStar = -1;
+  _introNextVisible = false;
+  if (_introNextTimer) { clearTimeout(_introNextTimer); _introNextTimer = null; }
+  for (const t of _introTimers) clearTimeout(t);
+  _introTimers.length = 0;
+  _setIntroSlot("current", "");
+  _setIntroSlot("next", "");
+  // Bootstrap based on current ball.currentStar (usually 0 on a fresh init).
+  syncIntroForCurStar();
+  // Safety dismissal if the player never makes it through. Not a success — flag stays unset.
+  _introTimers.push(setTimeout(() => endIntro(false), 60000));
+}
+// Anchor both intro tags each render frame, after the camera lerp has updated camRender*.
+// Also detects ball.currentStar transitions and pipes them through syncIntroForCurStar.
+function updateTutorialPositions() {
+  if (!introActive || !ball || stars.length === 0) return;
+  syncIntroForCurStar();
+  const cs = stars[ball.currentStar];
+  const next = stars[ball.currentStar + 1];
+  function place(slot, s) {
+    if (!s) return;
+    const el = document.getElementById("tutorial-" + slot);
+    if (!el) return;
+    const sx = s.x * camRenderScale + camRenderOx;
+    const sy = (s.y + s.r) * camRenderScale + camRenderOy;
+    el.style.left = sx + "px";
+    el.style.top = (sy + 18) + "px";
+  }
+  place("current", cs);
+  place("next", next);
+}
+
 // ── Per-run seeded PRNG ───────────────────────────────────
 // Drives every spawn-time random decision (variant, position, radius, planets, comets, binary
 // phases). Each run captures a 32-bit seed at init() — either lifted from the URL (?seed=XYZ,
@@ -1167,6 +1288,8 @@ function initMenuStars() {
 function init() {
   paused = false;
   syncPausedIndicator();
+  // Drop any leftover intro overlay from a prior run; init() decides below whether to re-fire.
+  endIntro(false);
   // Tutorial: auto-show the launch window hint on the first few gameplays. Player can still toggle
   // it off mid-run.
   isTutorialRun = gameplayCount < TUTORIAL_GAMES;
@@ -1264,7 +1387,18 @@ function init() {
   document.getElementById("score").textContent = "0";
   updateSub();
   document.getElementById("score-display").style.display = "block";
-  document.getElementById("hint").classList.add("on");
+  // First-run intro: fires whenever the done-flag is unset, including for first-timers
+  // arriving via a challenge link — those players still need the basic loop explained
+  // before they have any chance against the sender's score. The intro's beat-1 text
+  // covers the same "tap to boost" guidance as #hint, so we suppress #hint while the
+  // intro runs to avoid two messages competing. ?intro=1 forces it regardless of the
+  // done-flag (dev/test).
+  const introDone = !!localStorage.getItem(INTRO_DONE_KEY);
+  if (introOverride() || !introDone) {
+    startIntro();
+  } else {
+    document.getElementById("hint").classList.add("on");
+  }
   // Fire up the generative music layer. Scheduler runs until die() turns it back off. Idempotent —
   // calling startMusic again mid-run is a no-op.
   audio.startMusic();
@@ -1458,6 +1592,9 @@ function resumeFromSave(data) {
   document.getElementById("score").textContent = "" + score;
   updateSub();
   document.getElementById("score-display").style.display = "block";
+  // Resumed runs never show the intro — the player is past first-time onboarding by
+  // definition. ?intro=1 is intentionally ignored on this path.
+  endIntro(false);
   document.getElementById("hint").classList.add("on");
   audio.startMusic();
   // One-shot: consume the save so a later death-during-resume writes a fresh snapshot rather than
@@ -1647,21 +1784,27 @@ function captureStar(idx) {
   }
   // Chapter milestones: first-of-variant beats star-count if both fire on the same capture
   // (variants are rarer, naturally higher-priority for narrative). All milestones are tracked
-  // in `_chapterMilestones` so they never fire twice per run.
+  // in `_chapterMilestones` so they never fire twice per run. Suppressed for the first 10
+  // captures because the intro overlay is teaching the basic loop and a chapter title flash
+  // on top of those prompts reads as noise. Skipping the milestone-marking on early
+  // variants too — so if the player's first binary lands at star 7, the chapter flash still
+  // fires the next time a binary spawns past star 10 (no silently missed recognition).
   const STAR_MILESTONES = [25, 50, 100, 200, 500];
   let chapterFired = false;
-  for (const v of newVariants) {
-    const key = "variant:" + v;
-    if (!_chapterMilestones.has(key)) {
-      _chapterMilestones.add(key);
-      if (!chapterFired) { showChapterFlash(); chapterFired = true; }
+  if (starsVisited > 10) {
+    for (const v of newVariants) {
+      const key = "variant:" + v;
+      if (!_chapterMilestones.has(key)) {
+        _chapterMilestones.add(key);
+        if (!chapterFired) { showChapterFlash(); chapterFired = true; }
+      }
     }
-  }
-  if (!chapterFired && STAR_MILESTONES.includes(starsVisited)) {
-    const key = "stars:" + starsVisited;
-    if (!_chapterMilestones.has(key)) {
-      _chapterMilestones.add(key);
-      showChapterFlash();
+    if (!chapterFired && STAR_MILESTONES.includes(starsVisited)) {
+      const key = "stars:" + starsVisited;
+      if (!_chapterMilestones.has(key)) {
+        _chapterMilestones.add(key);
+        showChapterFlash();
+      }
     }
   }
   // Tutorial assist auto-off at the boundary. One-shot — the player can still re-enable with W and
@@ -2369,6 +2512,8 @@ function die(crash, crashedStar) {
   if (state !== STATE.PLAY) return;
   state = STATE.DYING;
   syncPausedIndicator();
+  // Dropping the intro on death (without success) lets the next run re-fire the overlay.
+  endIntro(false);
   ball.pendingCapture = -1; // cancel any in-flight transfer
   // Death-cause categorisation for the challenge card. Crashing into a binary's sub-star or BH gets
   // its own enum so the challenge narrative can read the right way ("hit by donor" is more
@@ -2948,6 +3093,10 @@ function renderTick() {
   _prevTargetOy = targetOy;
   _camIntegratorInited = true;
 
+  // First-run intro: reposition the visible tags now that camRender* reflects this frame's
+  // camera. No-op when the intro isn't active.
+  updateTutorialPositions();
+
   // Feed peak-held ball speed to the music layer so it can escalate the chord progression at high
   // velocity. Decay- max: each frame the tracker either jumps to the current instantaneous speed
   // (if higher) or decays the previous value. Peaks latch, valleys are ignored, so a boost pushes
@@ -3183,7 +3332,13 @@ function draw() {
   // window. Its capture zoom (set in `zoomTargetFor`) is steep enough to push the next star
   // off-screen most of the time, so without the indicator the player can't see when to tap.
   const csCur = ball ? stars[ball.currentStar] : null;
-  const lwForced = csCur && csCur.isAzazel;
+  // Render-only forces for the launch-window indicator. `lwForced` never touches the persisted
+  // showLaunchWindow flag — these are visual overrides for specific situations:
+  //   • azazel orbits (capture zoom hides the next star, so the indicator is essential),
+  //   • the first-run intro's "tap when aimed at the next one" line (on while the player is
+  //     still on star 0 and the next-line has faded in).
+  const lwForced = (csCur && csCur.isAzazel)
+                || (introActive && ball && ball.currentStar === 0 && _introNextVisible);
   if ((showLaunchWindow || lwForced) && ball && ball.launchWindow
       && ball.pendingCapture < 0
       && ball.launchWindowStarIdx === ball.currentStar) {
