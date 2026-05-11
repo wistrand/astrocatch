@@ -1,28 +1,33 @@
 // Challenge-card utilities: per-run stat payload + URL + QR. Self-contained; no dependencies.
 
 // ═════════════════════════════════════════════════════════════
-// QR encoder — multi-segment (alphanumeric + byte), EC L or M, auto version 1..10. Adapted from
+// QR encoder — multi-segment (alphanumeric + byte), EC L or M, auto version 1..6. Adapted from
 // ISO/IEC 18004. Pruned to what we need: a short URL with mostly-alpha content plus a '#' fragment
 // separator that requires byte mode for one char. Multi-segment lets us bit-pack the alpha portions
 // at 5.5 bits/char while keeping byte-mode for chars outside the alphanumeric set. EC M gives ~15%
 // damage tolerance — enough to overlay a small centred logo on top of the QR.
+//
+// Capped at v6 deliberately. v7+ requires extra spec features we don't implement (version-info
+// bits in two reserved 6×3 regions) and unequal RS block-group sizes at M v8/v9/v10 (where
+// dataCw/numBlocks isn't integral — the spec splits codewords into two groups with sizes
+// differing by 1). Our `dataPerBlock = dataCw / numBlocks` slice math assumes uniform splits,
+// which holds for v1..v6 in both L and M but breaks at higher versions. Our actual payload
+// (28-char URL ≈ 290 bits) fits comfortably in v3 EC M (44 data CW = 352 bits), so v6 is roughly
+// 3× the headroom we'll ever need.
 // ═════════════════════════════════════════════════════════════
 
 // Data codewords per version (index = version - 1).
-const QR_DATA_CW_L = [19, 34, 55, 80, 108, 136, 156, 194, 232, 274];
-const QR_DATA_CW_M = [16, 28, 44, 64,  86, 108, 124, 154, 182, 216];
+const QR_DATA_CW_L = [19, 34, 55, 80, 108, 136];
+const QR_DATA_CW_M = [16, 28, 44, 64,  86, 108];
 // Total codewords (data + ECC) per version.
-const QR_TOTAL_CW  = [26, 44, 70, 100, 134, 172, 196, 242, 292, 346];
-// Number of EC blocks per version. v1..v10 stays simple (single or double block) — we never push
-// into the v10+ range where blocks split into two unequal-size groups.
-const QR_EC_BLOCKS_L = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2];
-const QR_EC_BLOCKS_M = [1, 1, 1, 2, 2, 4, 4, 4, 5, 5];
-// Alignment-pattern centre coordinates per version. v1 has none;
-// v2..v6 have a single centre at the listed coordinate; v7+ are outside our range so omitted.
-const QR_ALIGN_POS = [
-  null, [6, 18], [6, 22], [6, 26], [6, 30], [6, 34],
-  [6, 22, 38], [6, 24, 42], [6, 26, 46], [6, 28, 50],
-];
+const QR_TOTAL_CW  = [26, 44, 70, 100, 134, 172];
+// Number of EC blocks per version. v1..v6 keep uniform splits — `dataCw / numBlocks` is integral
+// for every entry below. Higher versions would need separate Group-1 / Group-2 metadata.
+const QR_EC_BLOCKS_L = [1, 1, 1, 1, 1, 2];
+const QR_EC_BLOCKS_M = [1, 1, 1, 2, 2, 4];
+// Alignment-pattern centre coordinates per version. v1 has none; v2..v6 have a single centre at
+// the listed coordinate.
+const QR_ALIGN_POS = [null, [6, 18], [6, 22], [6, 26], [6, 30], [6, 34]];
 // Format info: 5-bit input (2 EC bits + 3 mask bits) → 15-bit BCH-encoded value, then XORed with
 // 0x5412. Precomputed for masks 0..7 at EC L (data 01xxx) and EC M (data 00xxx).
 const QR_FORMAT_BITS_L = [
@@ -129,7 +134,7 @@ function segmentBits(seg, version) {
 function pickVersionAndLevel(text, ecLevel) {
   const segs = splitSegments(text);
   const dataTbl = ecLevel === "M" ? QR_DATA_CW_M : QR_DATA_CW_L;
-  for (let v = 1; v <= 10; v++) {
+  for (let v = 1; v <= 6; v++) {
     let bits = 0;
     for (const s of segs) bits += segmentBits(s, v);
     if (dataTbl[v - 1] * 8 >= bits) return { version: v, segments: segs };
