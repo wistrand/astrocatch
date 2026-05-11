@@ -26,7 +26,7 @@ const STYLE_ADJ = {
   spare:    ["quiet",    "still",      "spare",       "brief",       "bare",      "hushed"],
 };
 
-// Per-variant noun pools. Each variant gets 4 candidate words so two runs with the same
+// Per-variant noun pools. Each variant gets 7 candidate words so two runs with the same
 // dominant variant don't always share the same title. The seed picks within the pool. Reads as
 // "the {adj} {noun}" without grammar surgery in every combination. Deliberately omits `teapot`
 // and `azazel` — those are surprise-discovery variants and naming them in a shareable title
@@ -35,12 +35,12 @@ const STYLE_ADJ = {
 // census: 6 common variants. (BH binaries increment BOTH blackHole and binary in runStats —
 // no separate bucket — so they can't be named distinctly here.)
 const VARIANT_NOUN = {
-  binary:    ["twins",  "pair",    "duet",    "tandem"],
-  blackHole: ["void",   "maw",     "well",    "horizon"],
-  monolith:  ["slab",   "obelisk", "pillar",  "stone"],
-  ringworld: ["ring",   "band",    "halo",    "hoop"],
-  pulsar:    ["beacon", "pulse",   "lantern", "signal"],
-  nebula:    ["cloud",  "veil",    "shroud",  "mist"],
+  binary:    ["twins",  "pair",    "duet",    "tandem",   "waltz",      "kindred",    "mirror"],
+  blackHole: ["void",   "maw",     "well",    "horizon",  "abyss",      "gulf",       "throat"],
+  monolith:  ["slab",   "obelisk", "pillar",  "stone",    "spire",      "monument",   "sentinel"],
+  ringworld: ["ring",   "band",    "halo",    "hoop",     "wheel",      "coronet",    "circuit"],
+  pulsar:    ["beacon", "pulse",   "lantern", "signal",   "metronome",  "watchfire",  "flicker"],
+  nebula:    ["cloud",  "veil",    "shroud",  "mist",     "haze",       "gauze",      "plume"],
 };
 
 // Weights for the "dominant variant" computation. Visually-distinct variants get a small
