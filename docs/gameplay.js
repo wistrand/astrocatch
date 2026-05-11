@@ -134,6 +134,45 @@ function showChallengeCard() {
   // so sender and recipient see identical labels.
   const titleEl = document.getElementById("challenge-title");
   if (titleEl) titleEl.textContent = composeRunTitle(c);
+  // Reset to front face every time the welcome card is (re)populated — a hashchange that
+  // brings a NEW challenge while the previous one was flipped should land on stats, not QR.
+  wrap.classList.remove("flipped");
+  // Render the back-face QR for the CURRENT URL, then asynchronously bake it into an animated
+  // APNG matching the death-screen card (scale 6, 198 px native on v3, 32-frame seamless loop
+  // with rotating-light sun). The slot might hold either a fresh <canvas> or an <img> from a
+  // previous showChallengeCard call (after a hashchange); ensure we have a canvas before the
+  // bake.
+  let backCanvas = document.getElementById("challenge-back-qr");
+  if (backCanvas) {
+    if (backCanvas.tagName === "IMG") {
+      const fresh = document.createElement("canvas");
+      fresh.id = "challenge-back-qr";
+      fresh.setAttribute("aria-label", "challenge QR code");
+      backCanvas.parentNode.replaceChild(fresh, backCanvas);
+      backCanvas = fresh;
+    }
+    const qrText = location.href.toUpperCase();
+    const matrix = makeQrMatrix(qrText, "M");
+    const SCALE = 6, QUIET = 2;
+    renderQrToCanvas(matrix, backCanvas, SCALE, QUIET);
+    // Snapshot the bare QR (no logo yet) for the APNG bake's delta-frame underlay.
+    if (!_welcomeBareQr
+        || _welcomeBareQr.width !== backCanvas.width
+        || _welcomeBareQr.height !== backCanvas.height) {
+      _welcomeBareQr = document.createElement("canvas");
+      _welcomeBareQr.width = backCanvas.width;
+      _welcomeBareQr.height = backCanvas.height;
+    }
+    const cacheCtx = _welcomeBareQr.getContext("2d");
+    cacheCtx.clearRect(0, 0, _welcomeBareQr.width, _welcomeBareQr.height);
+    cacheCtx.drawImage(backCanvas, 0, 0);
+    // Static first frame on the visible canvas so the back face has something to show before
+    // the bake finishes (~700 ms). The bake then replaces the canvas with an animated <img>.
+    drawSunLogo(backCanvas, matrix.size, SCALE, QUIET);
+    bakeWelcomeApng(backCanvas, matrix, SCALE, QUIET).catch((err) => {
+      console.log("[challenge] welcome-card APNG bake failed:", err);
+    });
+  }
   wrap.classList.remove("hidden");
 }
 // The first showChallengeCard() runs inside requestAnimationFrame so the browser paints the
@@ -167,6 +206,47 @@ const _closeBtnStart = document.getElementById("challenge-close");
 if (_closeBtnStart) _closeBtnStart.addEventListener("click", dismissChallenge);
 const _closeBtnDeath = document.getElementById("death-target-close");
 if (_closeBtnDeath) _closeBtnDeath.addEventListener("click", dismissChallenge);
+// Welcome-card flip — any click on #challenge that ISN'T the close button or copy button
+// toggles between front (sender stats) and back (QR for the current URL). Close uses
+// dismissChallenge() which stopPropagation()s; copy button does the same inside its own
+// handler below.
+const _challengeCard = document.getElementById("challenge");
+if (_challengeCard) {
+  _challengeCard.addEventListener("click", () => {
+    _challengeCard.classList.toggle("flipped");
+  });
+}
+// Welcome-card copy button — copies the current challenge URL to clipboard. stopPropagation
+// keeps the click from bubbling up to the card and toggling the flip. Same fallback path as
+// the death-screen copy button for older browsers without async clipboard access.
+const _backCopyBtn = document.getElementById("challenge-back-copy");
+if (_backCopyBtn) {
+  _backCopyBtn.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const btn = e.currentTarget;
+    const url = location.href;
+    const flash = () => {
+      btn.classList.add("copied");
+      btn.textContent = "copied";
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.textContent = "copy link";
+      }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); flash(); } catch (_) { /* swallow */ }
+      document.body.removeChild(ta);
+    }
+  });
+}
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -2425,20 +2505,19 @@ function renderChallengeCard() {
 // allocations leak until revoked).
 let _challengeApngUrl = null;
 
-async function bakeChallengeApng(canvas, matrix, scale, quiet) {
+// Encode a QR canvas as a delta-encoded animated PNG with the rotating sun. Pure data; no DOM
+// mutation, no URL management. Both bakeChallengeApng (death-screen) and bakeWelcomeApng
+// (welcome-card) use this — they differ only in which canvas + cache they pass and how they
+// swap the result into the DOM. Frame timing: 32 @ 16 fps = 2 s seamless loop. Azimuth
+// per-frame jump ≈ 11.25° (~1.5 modules of arc); elevation traces a narrow [π/8, 3π/8] oval.
+async function encodeQrApngBytes(canvas, bareQr, matrix, scale, quiet) {
   const ctx = canvas.getContext("2d");
-  // 32 frames @ 16 fps = 2 s seamless loop. Azimuth per-frame jump is ~11.25° (~1.5 modules of
-  // arc on the highlight's path). Pure sine on elevation: the previous cubed-sine bias squashed
-  // dwell near the equator and produced a visible kink when the curve sharpened toward the brief
-  // head-on visit — at low frame counts that kink reads as choppy motion. Plain sine with a
-  // narrower [π/8, 3π/8] range traces a smooth oval path on the sphere without ever fully facing
-  // the camera.
   const FRAMES = 32;
   const FPS = 16;
   // Sun bbox in canvas pixels — the only region that actually changes between frames.
   // drawSunLogo's mask is `hypot(sunDx, sunDy) > rMod` (where sunDx = mx + 0.5 - centre), so
   // a module mx is inside iff |mx + 0.5 - centre| ≤ rMod, i.e. mx ∈ [⌈c-r-0.5⌉, ⌊c+r-0.5⌋].
-  // For v3 (centre=14.5, rMod=4.5) that's modules 10..18, 9 columns × 6 px = 54 px.
+  // For v3 (centre=14.5, rMod=4.5) that's modules 10..18, 9 columns × scale px.
   const SUN_RMOD = 4.5;
   const centre = matrix.size / 2;
   const sunModMin = Math.ceil(centre - SUN_RMOD - 0.5);
@@ -2446,26 +2525,26 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   const sunPxMin = (sunModMin + quiet) * scale;
   const sunPxSpan = (sunModMax - sunModMin + 1) * scale;
   const deltaRect = { x: sunPxMin, y: sunPxMin, w: sunPxSpan, h: sunPxSpan };
-  const apngBytes = await encodeAnimatedQrPng(canvas, (i, total, target) => {
+  return await encodeAnimatedQrPng(canvas, (i, total, target) => {
     const t = i / total;
     const phase = -3 * Math.PI / 4 + t * 2 * Math.PI;
     const elev = Math.PI / 4 + Math.sin(t * 2 * Math.PI) * Math.PI / 8;
     if (i === 0) {
       // Frame 0 is the full canvas: bare QR + sun at phase 0. Subsequent frames replace just
       // the sun rect via APNG delta encoding.
-      ctx.drawImage(_sunAnimBareQr, 0, 0);
+      ctx.drawImage(bareQr, 0, 0);
       drawSunLogo(canvas, matrix.size, scale, quiet, phase, elev);
     } else {
       // Delta frames: render only the sun region onto the small `target` canvas. The bare-QR
       // underlay is needed because drawSunLogo only writes the modules inside the sun mask —
-      // the modules in the sun's bounding box but OUTSIDE the mask need to be the bare QR
-      // (otherwise they'd be transparent and the APNG decoder would composite over whatever
-      // pixels happen to be in the buffer there). Translating the context lets drawSunLogo's
-      // absolute pixel coords land correctly in the smaller canvas.
+      // modules in the sun's bbox but OUTSIDE the mask need to be the bare QR (otherwise the
+      // APNG decoder composites over whatever pixels are left in the buffer there).
+      // Translating the context lets drawSunLogo's absolute pixel coords land correctly in
+      // the smaller canvas.
       const tctx = target.getContext("2d");
       tctx.clearRect(0, 0, target.width, target.height);
       tctx.drawImage(
-        _sunAnimBareQr,
+        bareQr,
         deltaRect.x, deltaRect.y, deltaRect.w, deltaRect.h,
         0, 0, deltaRect.w, deltaRect.h,
       );
@@ -2475,6 +2554,10 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
       tctx.restore();
     }
   }, FRAMES, FPS, deltaRect);
+}
+
+async function bakeChallengeApng(canvas, matrix, scale, quiet) {
+  const apngBytes = await encodeQrApngBytes(canvas, _sunAnimBareQr, matrix, scale, quiet);
   if (_challengeApngUrl) URL.revokeObjectURL(_challengeApngUrl);
   // `File` (not bare Blob) carries a name property that most browsers surface as the suggested
   // filename when the user right-clicks the resulting <img> and chooses "Save image as…". With
@@ -2483,7 +2566,7 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   _challengeApngUrl = URL.createObjectURL(file);
   // The encoder draws the LAST frame onto the canvas. Avoid showing it briefly before swap by
   // restoring the bare QR (the live animation already drew frame 0 onto it on the prior tick).
-  ctx.drawImage(_sunAnimBareQr, 0, 0);
+  canvas.getContext("2d").drawImage(_sunAnimBareQr, 0, 0);
   // Build the <img> with the same id / aria as the canvas it replaces; CSS for #challenge-out-qr
   // already targets the slot regardless of tag.
   const img = document.createElement("img");
@@ -2500,6 +2583,32 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   } else {
     URL.revokeObjectURL(_challengeApngUrl);
     _challengeApngUrl = null;
+  }
+}
+
+// Welcome-card bake. Same encode path as the death-screen bake, but with its own bareQr
+// cache + blob URL state, and no RAF to stop. The welcome card stays at the same URL for the
+// session (unless the user hashchange's to a new challenge), so the resulting <img> animates
+// silently in the back face whether the user has flipped to it yet or not.
+let _welcomeBareQr = null;
+let _welcomeApngUrl = null;
+async function bakeWelcomeApng(canvas, matrix, scale, quiet) {
+  const apngBytes = await encodeQrApngBytes(canvas, _welcomeBareQr, matrix, scale, quiet);
+  if (_welcomeApngUrl) URL.revokeObjectURL(_welcomeApngUrl);
+  const file = new File([apngBytes], "astrocatch-challenge.png", { type: "image/png" });
+  _welcomeApngUrl = URL.createObjectURL(file);
+  const img = document.createElement("img");
+  img.id = "challenge-back-qr";
+  img.src = _welcomeApngUrl;
+  img.setAttribute("aria-label", "challenge QR code");
+  img.style.imageRendering = "pixelated";
+  img.width = canvas.width;
+  img.height = canvas.height;
+  if (canvas.parentNode) {
+    canvas.parentNode.replaceChild(img, canvas);
+  } else {
+    URL.revokeObjectURL(_welcomeApngUrl);
+    _welcomeApngUrl = null;
   }
 }
 

@@ -384,24 +384,22 @@
     color: rgba(255, 255, 255, 0.85);
   }
   /* `display: none` can't be transitioned, so we keep both states in flow and animate
-     max-height / opacity / collapsing margin+padding. The hard cap (max-height: 240px) is
-     larger than any realistic card content; on expand the transition reads from 0 → 240px
-     but the actual rendered height is `auto`, so the animation feels natural. */
+     max-height / opacity / collapsing margin+padding. The hard cap (max-height: 280px) is the
+     fixed display height of the flip-card inside; on expand the transition reads 0 → 280px
+     and the animation feels natural. */
   #challenge {
     position: relative;
     margin: 16px auto 12px;
-    padding: 14px 30px;
+    padding: 14px 0;
     border: 1px solid rgba(140, 210, 255, 0.25);
     border-radius: 6px;
     background: rgba(20, 30, 60, 0.35);
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    min-width: 240px;
+    width: 280px;
     overflow: hidden;
-    max-height: 240px;
+    max-height: 310px;
     opacity: 1;
+    perspective: 1200px;
+    cursor: pointer;
     transition: max-height 0.35s ease, opacity 0.25s ease,
                 margin 0.35s ease, padding 0.35s ease, border-width 0.35s ease;
   }
@@ -414,6 +412,63 @@
     padding-bottom: 0;
     border-top-width: 0;
     border-bottom-width: 0;
+  }
+  /* Flip mechanics for the welcome card. .flip-inner is the rotating element; .flip-front
+     and .flip-back are absolute-positioned siblings, each backface-hidden so only one shows
+     at a time. Click anywhere on the card (except the close-X, which stopPropagation()s)
+     toggles `.flipped`. */
+  #challenge .flip-inner {
+    position: relative;
+    width: 100%;
+    height: 270px;
+    transform-style: preserve-3d;
+    transition: transform 0.55s cubic-bezier(0.4, 0.0, 0.2, 1);
+  }
+  #challenge.flipped .flip-inner {
+    transform: rotateY(180deg);
+  }
+  #challenge .flip-front,
+  #challenge .flip-back {
+    position: absolute;
+    inset: 0;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 0 24px;
+    box-sizing: border-box;
+  }
+  /* Belt-and-braces hide for the flip: backface-visibility isn't honoured on every browser
+     (text bleeds through mirrored on some Safari / Chromium combos). Fade the front out as
+     the flip reaches its midpoint so the back face is the only thing visible by the time the
+     rotation completes; do the inverse for the back face. The 220 ms delay matches the
+     transform's midpoint (≈0.55 s / 2). */
+  #challenge .flip-front {
+    opacity: 1;
+    transition: opacity 0.2s ease 0.18s;
+  }
+  #challenge.flipped .flip-front {
+    opacity: 0;
+    transition: opacity 0.2s ease 0.18s;
+  }
+  #challenge .flip-back {
+    transform: rotateY(180deg) translateZ(1px);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+  }
+  #challenge.flipped .flip-back {
+    opacity: 1;
+    transition: opacity 0.2s ease 0.22s;
+  }
+  #challenge-back-qr {
+    width: auto;
+    height: auto;
+    image-rendering: pixelated;
+    border-radius: 4px;
+    box-shadow: 0 0 12px rgba(140, 210, 255, 0.18);
   }
   #challenge-invalid {
     font-size: 11px;
@@ -444,6 +499,13 @@
     font-weight: 600;
     margin: 4px 0;
     min-height: 1em;
+    /* align-self stretches the title to the full flex-container width; text-align then
+       horizontally centres the text within it. padding-left compensates for the trailing
+       letter-spacing on the last character, which would otherwise nudge the visual centre
+       a few pixels to the right. */
+    align-self: stretch;
+    text-align: center;
+    padding-left: 4px;
   }
   #run-title:empty, #challenge-title:empty { display: none; }
   /* Inline death-screen target annotation. Hides/shows via `.hidden` toggling opacity (no
@@ -498,6 +560,10 @@
     justify-content: center;
     appearance: none;
     -webkit-appearance: none;
+    /* Lift above the flip-card siblings so the close-X stays clickable. Without z-index the
+       .flip-inner (later in DOM) stacks on top and intercepts the click, causing the card to
+       flip instead of dismiss. */
+    z-index: 2;
   }
   #challenge-close:hover, #challenge-go-close:hover {
     color: rgba(255, 255, 255, 0.9);
@@ -725,14 +791,26 @@
          from a different version). Content is set via textContent only — never innerHTML — so
          even a hash like #<script> is rendered as literal text, not parsed. -->
     <div id="challenge-invalid" class="hidden"></div>
+    <!-- Welcome card: a flip card with sender stats on the front and a QR for the same
+         challenge URL on the back. Any click on the card outside the close button toggles the
+         flip; close-X dismisses the challenge entirely (uses stopPropagation so its click never
+         reaches the card's flip toggle). -->
     <div id="challenge" class="hidden">
       <button id="challenge-close" type="button" aria-label="dismiss challenge">×</button>
-      <!-- Sender's procedural run title — populated by showChallengeCard via composeRunTitle. -->
-      <div id="challenge-title"></div>
-      <div class="label">challenge</div>
-      <div id="challenge-score">0</div>
-      <div id="challenge-line" class="label">0 stars</div>
-      <div id="challenge-variants" class="label"></div>
+      <div class="flip-inner">
+        <div class="flip-front">
+          <!-- Sender's procedural run title — populated by showChallengeCard. -->
+          <div id="challenge-title"></div>
+          <div class="label">challenge</div>
+          <div id="challenge-score">0</div>
+          <div id="challenge-line" class="label">0 stars</div>
+          <div id="challenge-variants" class="label"></div>
+        </div>
+        <div class="flip-back">
+          <canvas id="challenge-back-qr" aria-label="challenge QR code"></canvas>
+          <button id="challenge-back-copy" class="link-btn" type="button">copy link</button>
+        </div>
+      </div>
     </div>
     <button id="start-btn">START</button>
     <button id="resume-btn" style="visibility:hidden">RESUME</button>
