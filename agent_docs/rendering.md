@@ -572,3 +572,134 @@ Dynamic following camera with simplex-noise-driven zoom:
 - Trailing window caps the trajectory polyline.
 - Camera matrix built per frame via `renderer.replayMat(...)`.
 - When `replayIdx` wraps, camera eases back to start.
+
+## Vector renderer
+
+`renderer-2d.js` implements the same draw API as `renderer.js` but backs it with Canvas2D. The
+aesthetic is intentional phosphor-CRT: pure black field, thin bright vector outlines, additive
+blending, no fills except where structurally required (event horizons, monolith silhouette,
+azazel rift). Each frame begins with a semi-transparent black fillRect over the whole canvas
+instead of an opaque clear — `PHOSPHOR_FADE = 0.22` decays previous frame contents exponentially,
+giving the slow trails behind the ship, fading capture bursts, and ambient ghost-of-the-last-
+frame feel.
+
+### Selection
+
+`gameplay.js` picks the renderer at boot, before any draw:
+
+- `?vector=1` URL param → `createRenderer2D(canvas)` from the start.
+- `?nowebgl=1` URL param → dev/test override that pretends WebGL2 isn't there; exercises the
+  fall-back path on any machine.
+- No params, WebGL2 available → `createRenderer(canvas)`. Default.
+- No params, WebGL2 unavailable → `createRenderer(canvas)` returns null; gameplay silently
+  fall-backs to `createRenderer2D(canvas)`, sets `body.webgl-unavailable`, and after 800 ms
+  surfaces a `#webgl-unavailable-banner` ("webgl2 unavailable · vector mode active") that fades
+  after ~4 s.
+
+At runtime, **V** or the renderer pill inside the help overlay calls `toggleVectorMode()` which
+swaps the canvas DOM element (a canvas's context type is sticky once `getContext()` runs), spins
+up a fresh renderer, and re-`resize()`s. Toggling back to WebGL is refused when the device fell
+back at boot (`_webglAvailable = false`); the WebGL pill renders disabled.
+
+The HUD score / sub line, intro tutorial slots, and in-game flash messages (bonus / comet /
+chapter / challenge-beat) all reroute through `renderer.drawText` in vector mode — the HTML
+originals are hidden via `body.vector` CSS, except `#score-display`, which stays in the layout
+(text made transparent) so its tap → toggle launch-window / long-press → cycle cinematic-camera
+listeners keep working at the same screen region.
+
+### Polygon stroker (the hot path)
+
+The dominant per-frame cost is polygon strokes. `_strokeScratchPoly(count, closed)` emits **2
+composite ops per polygon**:
+
+1. **Outline stroke** — single continuous path: `moveTo(V[0])`, `lineTo(V[1..n-1])`, `closePath`
+   if closed, one `ctx.stroke()`. `lineJoin = "round"` so the stroke fills round corners.
+2. **Vertex dot fill** — small `arc()` at every brightening vertex (all vertices for closed
+   polygons; only interior vertices for open ones — endpoints already get matching paint from
+   the stroke's round line caps). Built as one path with N subpaths, one `ctx.fill()`.
+
+Both passes use `globalAlpha = caller_α × LINE_ALPHA` with `LINE_ALPHA = 0.16`, so:
+- Mid-segment pixels paint at 0.16. Steady-state under afterglow (`paint / FADE`) ≈ 0.73.
+- Vertex pixels receive 0.16 from the stroke + 0.16 from the dot fill. `composite="lighter"`
+  sums them → 0.32. Steady-state ≈ 1.0 (clamps).
+
+That's the same brightening math the old per-segment routing achieved via antialiased cap-
+overlap, but at one tenth the stroke count. A 12-gon used to be 12 separate stroke calls. It's
+now 1 stroke + 1 fill.
+
+`LINE_ALPHA` must stay strictly below `PHOSPHOR_FADE` so the steady-state stays under 1.0 for
+static shapes — otherwise a star sitting still on screen would saturate to flat brightness and
+the corner emphasis would disappear under the clamp.
+
+### Vertex-dot batching
+
+The dot fill is collected into a frame-level bucket (`_pendingDots`, `_pendingDotsFS`,
+`_pendingDotsAlpha`) keyed by fillStyle + alpha. Adjacent same-color polygons share one fill —
+a star's photosphere + inner ring (same color) collapse into one fill, the BH's three same-
+color accretion ellipses collapse into one fill, etc. `_flushDots()` runs:
+
+- Before any cached `setCop` change (so dots draw under the composite they were collected in).
+- Before `applyMat` (so dots draw in the transform they were collected in).
+- Before `beginFrame` / `drawBgStars` / `finalizeFrame` direct `setTransform` calls.
+- Inline when a new polygon's color or alpha doesn't match the pending bucket.
+
+In a typical 4-star scene the per-frame fill count drops from ~30 (one per polygon) to ~8.
+
+### Particle path (`drawCircleBatch`)
+
+Four branches gated by `screenR = outerR × mat[0]` (CSS pixels):
+
+- **Shockwave** (innerR > 0): 16-gon ring via `strokePolyCircle`. Always renders.
+- **Ball-glow halo** (kind === 2, screenR ≥ 5): 12-gon outline. Significant on-screen glows
+  only — small kind:2 entries demote.
+- **Small particle** (outerR ≤ 4 *or* kind:2 demote): single beginPath with a phosphor cross
+  (2 moveTo+lineTo pairs), one stroke. `pa = a × PARTICLE_ALPHA (0.4)` so slow swarms (BH-
+  binary ejecta, comet wakes near periapsis) don't saturate under the afterglow accumulator.
+- **Larger particle** (otherwise): phosphor snowflake (3 segments through center).
+
+Sub-pixel cull: non-shockwave / non-ball-glow particles with `screenR < 0.6` skip entirely.
+Removes hundreds of invisible BH-binary ejecta and comet-tail particles per frame at low zoom.
+
+### Trail
+
+`drawPolyline`'s perPoint branch decimates the trail by screen pixels walked back from the
+head (`MAX_TRAIL_SCREEN_PX = 120`), capped at `VISIBLE_TRAIL_SEGMENTS` (10 on desktop, 7 on
+touch). `TRAIL_STRIDE` 4 / 6. Each kept segment is its own `beginPath`/`stroke` with the
+per-sample color baked into the trail array — not routed through `_strokeScratchPoly` because
+each segment has its own color/alpha along the gradient. Alpha capped by `LINE_ALPHA`.
+
+### Text
+
+`bakeTextLabel` renders each glyph (inline vector font, `GLYPHS` table with `-1` sentinel
+pen-up moves) into a DPR-scaled offscreen canvas using the same per-segment cap-accumulation
+trick as the polygon outline once was — corner brightening at glyph joins (K-fork, T-spout,
+B-back). The bake is keyed in a 32-entry LRU map by `(text, size, color, width, shadowBlur,
+blurColor, spacing)`. Score updates that change the bake invalidate one entry per number; the
+LRU evicts the oldest entry once full.
+
+Each line within a multi-line bake is centered relative to the bake's max-line width, so
+wrapped intro text reads as a centered block rather than stacked flush-left under a centered
+bounding box. Single-line bakes get a zero-offset and behave identically to a non-centered
+layout.
+
+### DPR
+
+`setViewport(W, H, DPR)` writes `canvas.width = round(W × DPR)`. `gameplay.js`'s `resize()`
+clamps DPR to **1.5** on touch+vector (`_vectorModeActive && IS_TOUCH`), 2 otherwise — iPhone
+Pro renders at 1.5 instead of 3, halving every fillRect / stroke / fill / text blit cost. The
+phosphor-fuzz aesthetic hides the resolution drop.
+
+### State caching
+
+Canvas2D color / shadow / composite property writes parse the string and rebuild internal
+state every time, even for identical values. Cached helpers `setSS / setFS / setSC / setSB /
+setCop` compare against a JS-side `_*Cache` variable and skip the write on no-op — a few
+hundred avoided ctx writes per frame at peak.
+
+### What it *doesn't* do
+
+No FBOs, no lensing composite — black holes render as bare accretion ellipses + sparse
+orbiting clumps. Background galaxies aren't drawn (the parallax bgStars carry the cosmic
+backdrop). Nebula renders as 2–4 jittered polygon shells; the volumetric noise the WebGL
+shader does is approximated with seed-driven vertex jitter that produces a distinct silhouette
+per nebula.

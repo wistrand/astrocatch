@@ -11,6 +11,7 @@
 // inspector.
 
 import { createRenderer } from "./renderer.js";
+import { createRenderer2D } from "./renderer-2d.js";
 import {
   PALETTE_LEN, assignBinary, binaryPositions,
 } from "./star-rendering.js";
@@ -33,7 +34,11 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-renderer = createRenderer(canvas);
+// ?vector=1 forces the Tier-1 Canvas2D rendition. Variants all draw as plain colour-tinted
+// disks under this mode, so the grid is mostly useful for confirming the low-fi path still
+// draws cleanly across types rather than for variant detail review.
+const _useVector = new URLSearchParams(location.search).get("vector") === "1";
+renderer = _useVector ? createRenderer2D(canvas) : createRenderer(canvas);
 if (!renderer) {
   document.body.innerHTML =
     "<p style='padding:20px;color:#fff'>WebGL2 required.</p>";

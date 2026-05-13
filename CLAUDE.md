@@ -7,6 +7,7 @@ docs/
   index.html         # tiny shell — DOM + CSS + one <script type="module">
   gameplay.js        # browser-only ES module: state, input, orchestration
   renderer.js        # browser-only ES module: WebGL2 renderer + shaders
+  renderer-2d.js     # browser-only ES module: Canvas2D "vector" fallback renderer
   audio.js           # browser-only ES module: procedural WebAudio SFX + music
   physics.js         # pure physics ES module — used by browser and node
   star-rendering.js  # browser-only — binary positions, ejecta, comets
@@ -82,8 +83,17 @@ npm start          # → http://localhost:8001/
   galaxies. Star + nebula share one shader source compiled twice with `#define NEBULA_ONLY` to
   keep mobile GPUs out of the heavy register tier when no nebulas are visible. Star shader
   supports crash wobble and binary tidal locking. A couple of rare endgame surprise variants are
-  kept under their own names in agent_docs. No Canvas2D, no libraries.
+  kept under their own names in agent_docs. No libraries.
   → [Details](agent_docs/rendering.md)
+
+- **Vector renderer** (`renderer-2d.js`): Canvas2D fall-back renderer with the same interface as
+  `renderer.js`. Phosphor-CRT aesthetic — thin bright outlines, `composite="lighter"` accumulation,
+  per-frame semi-transparent black overpaint for soft afterglow. Polygons use a 2-stroke approach
+  (continuous outline + batched per-vertex dot fill) so a 12-gon costs 2 composite ops instead of
+  12, with corner brightening preserved via dot overlap. Selected by `?vector=1`, the in-game V
+  key, the help-overlay pill, or automatic fall-back when `createRenderer()` returns null (no
+  WebGL2). On touch, DPR is clamped to 1.5 in vector mode — the fuzz hides the resolution drop.
+  → [Details](agent_docs/rendering.md#vector-renderer)
 
 - **Audio** (`audio.js`): procedural WebAudio. SFX through a soft compressor, generative music
   (5 layers, simplex-driven lead) direct to destination. 8-chord harmonic pool with 6

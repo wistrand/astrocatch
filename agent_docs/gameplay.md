@@ -19,6 +19,10 @@
 - **Z** or long-press (≥ 500 ms) the score display — cycle the cinematic camera mode. See [Cinematic
   mode](#cinematic-mode).
 - **H** or click the **?** button — toggle the help overlay (pauses the game while open).
+- **V** or click a renderer pill inside the help overlay — toggle between the WebGL2 and
+  Canvas2D ("vector") renderer. Replaces the canvas DOM element (context type is sticky) and
+  re-resizes. Refused if the device fell back at boot (no WebGL2 available); the WebGL pill
+  renders disabled in that case.
 - **Esc** — close help.
 - **Focus-click suppression**: clicks within 150 ms of a `window.focus` event are ignored, so
   bringing the window forward from behind doesn't fire a boost.
@@ -728,6 +732,35 @@ land visually.
 
 Shows stored high score if available (visibility-based, no layout shift). Best score loaded from
 `localStorage`.
+
+## Renderer fall-back & vector mode
+
+`gameplay.js` picks a renderer at module load and tracks it in `_useVector` plus the boot-time
+flag `_vectorModeActive` (read by `resize()` to pick a DPR cap of 1.5 on touch+vector vs 2
+otherwise).
+
+- `?vector=1` → vector renderer from the start.
+- `?nowebgl=1` → dev/test override: skips `createRenderer()` so the fall-back path runs even on
+  a WebGL2-capable browser.
+- No params + `createRenderer()` returns null → silent fall-back, `_webglAvailable = false`,
+  `body.webgl-unavailable` class added. A dedicated `#webgl-unavailable-banner` (body-level,
+  immune to `body.vector` CSS) appears 800 ms after boot announcing the fall-back; the WebGL
+  pill in the help overlay renders disabled for the rest of the session.
+
+`toggleVectorMode()` (bound to V and the help-overlay renderer pills) replaces the canvas DOM
+element so the new context type can be acquired, updates `_vectorModeActive`, re-`resize()`s
+(so the DPR cap matches the new mode), creates the new renderer, and fires a `vector on` /
+`vector off` flash. Toggling back to WebGL is refused when `_webglAvailable` is false.
+
+## Boost hint
+
+`#hint` ("tap to boost") shows on `newGame()` only when the first-run intro has already been
+seen — the intro covers the same guidance for first-time players, and `continueRun` /
+`resumeFromSave` skip the hint entirely (the player has clearly played before). The hint clears
+on the first boost (`hasBoosted = true`), and as a safety net `showBoostHint()` schedules an
+8-second auto-hide via `_boostHintTimer` so it can't linger past the early-game window even if
+the player never taps. The timer is also cleared from the `die()` post-DYING callback so an
+orphan timeout can't fire mid-game-over.
 
 ## HUD buttons
 

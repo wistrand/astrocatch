@@ -5,6 +5,7 @@
 
 import * as AC from "./physics.js";
 import { createRenderer, c1Of } from "./renderer.js";
+import { createRenderer2D } from "./renderer-2d.js";
 import {
   PALETTE_LEN,
   binaryPositions,
@@ -39,7 +40,10 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-renderer = createRenderer(canvas);
+// ?vector=1 forces the Tier-1 Canvas2D rendition (variants render as plain colour-tinted
+// disks — useful when WebGL2 is unavailable or for visually comparing the low-fi path).
+const _useVector = new URLSearchParams(location.search).get("vector") === "1";
+renderer = _useVector ? createRenderer2D(canvas) : createRenderer(canvas);
 if (!renderer) {
   document.body.innerHTML =
     "<p style='padding:20px'>WebGL2 required.</p>";

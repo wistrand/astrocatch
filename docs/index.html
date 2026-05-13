@@ -185,6 +185,47 @@
     font-size: 14px;
     opacity: 0.7;
   }
+  /* Renderer toggle inside help. Each pill is its own self-contained rounded button
+     (no joining container border) — sidesteps the alignment headaches of segmented
+     controls under button user-agent styles. Stops propagation so the tap doesn't
+     bubble to the help-overlay close handler. */
+  #help .renderer-toggle {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 18px;
+    font-size: 14px;
+  }
+  #help .renderer-pills {
+    display: inline-flex;
+    gap: 6px;
+  }
+  #help .renderer-pill {
+    margin: 0;
+    padding: 5px 14px;
+    background: rgba(255, 255, 255, 0.05);
+    color: rgba(255, 255, 255, 0.55);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 12px;
+    font: inherit;
+    font-size: 12px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    line-height: 1;
+    cursor: pointer;
+  }
+  #help .renderer-pill.active {
+    background: rgba(255, 220, 160, 0.18);
+    color: rgba(255, 230, 180, 0.95);
+    border-color: rgba(255, 220, 160, 0.45);
+  }
+  /* When WebGL2 isn't available on this device, the WebGL pill is permanently
+     disabled — visually faded and non-interactive. JS sets body.webgl-unavailable. */
+  body.webgl-unavailable #help #renderer-pill-webgl {
+    opacity: 0.3;
+    cursor: not-allowed;
+    pointer-events: none;
+  }
   #mute-btn .icon-off { display: none; }
   #mute-btn.muted .icon-on { display: none; }
   #mute-btn.muted .icon-off { display: inline; }
@@ -258,6 +299,21 @@
     0%, 100% { opacity: 0.35; }
     50%      { opacity: 0.85; }
   }
+
+  /* Vector mode (?vector=1) routes the live HUD, intro overlay, and the
+     in-game flash messages (bonus / comet / chapter / challenge-beat) through the
+     renderer's vector text path. Hide the HTML originals so they don't paint on top. */
+  body.vector .tutorial-tag,
+  body.vector #bonus-flash,
+  body.vector #chapter-flash,
+  body.vector #challenge-beat-flash { display: none !important; }
+  /* #score-display stays in the layout so its pointerdown / pointerup listeners (tap →
+     toggle launch-window, long-press → cycle cinematic camera) still receive events at
+     the same screen region as in WebGL mode. Its text is rendered as vector glyphs on
+     the canvas, so the HTML version is made invisible (transparent fill, no glow) but
+     not display:none. */
+  body.vector #score,
+  body.vector #sub { color: transparent; text-shadow: none; }
 
   /* Live first-run intro. One tag per beat, each anchored in world space to its referent
      star — left/top set per render frame via the same camera transform the renderer uses.
@@ -910,7 +966,15 @@
         <kbd>W / tap score</kbd><span>toggle launch-window hint</span>
         <kbd>Z / hold score</kbd><span>cycle cinematic zoom</span>
         <kbd>M</kbd><span>mute sound</span>
+        <kbd>V</kbd><span>toggle vector mode</span>
         <kbd>H</kbd><span>this help</span>
+      </div>
+      <div class="renderer-toggle">
+        <span>Renderer:</span>
+        <span class="renderer-pills">
+          <button id="renderer-pill-webgl" class="renderer-pill" type="button">WebGL</button>
+          <button id="renderer-pill-vector" class="renderer-pill" type="button">Vector</button>
+        </span>
       </div>
       <div id="help-close">tap anywhere or press H / Esc to close</div>
     </div>

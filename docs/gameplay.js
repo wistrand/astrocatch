@@ -3,6 +3,7 @@
 // input, gameplay state, and orchestration. ES modules are strict by default.
 import * as AC from "./physics.js";
 import { createRenderer, c1Of, c2Of } from "./renderer.js";
+import { createRenderer2D } from "./renderer-2d.js";
 import { createAudio, simplex2 } from "./audio.js";
 import {
   PALETTE_LEN,
@@ -251,7 +252,7 @@ if (_backCopyBtn) {
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
 // ─────────────────────────────────────────────────────────────
-const canvas = document.getElementById("c");
+let canvas = document.getElementById("c");
 let renderer = null;
 let W = 0, H = 0, DPR = 1;
 // Touch/coarse-pointer detection — used by resize() to pick a mobile-specific zoom, so it must be
@@ -259,6 +260,13 @@ let W = 0, H = 0, DPR = 1;
 const IS_TOUCH = typeof window !== "undefined"
   && window.matchMedia
   && window.matchMedia("(pointer: coarse)").matches;
+// Tracks whether the vector (Canvas2D) renderer is the active one. Read by resize() to pick
+// a lower DPR cap on touch devices — the phosphor-fuzz aesthetic hides resolution drop, so
+// halving pixel count is a free perf win for vector mode. Initial value comes from URL
+// params (?vector=1 or ?nowebgl=1). Updated again after the dynamic WebGL-fallback check
+// and on every V-key / pill toggle so resize() always sees the current renderer.
+let _vectorModeActive = new URLSearchParams(location.search).get("vector") === "1"
+  || new URLSearchParams(location.search).get("nowebgl") === "1";
 // Zoom is dynamic by viewport.
 //   Mobile portrait : 0.58 — original mobile value.
 //   Mobile landscape: 0.48 — pulled back so short vertical space doesn't feel cramped.
@@ -293,7 +301,12 @@ function computeZoom() {
 
 }
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  // Vector mode on touch caps DPR more aggressively (1.5 vs 2) — every fillRect / stroke /
+  // text-blit scales linearly with pixel count, and the phosphor aesthetic is intentionally
+  // fuzzy so the resolution drop is imperceptible. WebGL keeps the higher cap so its shader
+  // output stays crisp.
+  const dprCap = (_vectorModeActive && IS_TOUCH) ? 1.5 : 2;
+  DPR = Math.min(window.devicePixelRatio || 1, dprCap);
   W = window.innerWidth;
   H = window.innerHeight;
   canvas.width = Math.round(W * DPR);
@@ -340,16 +353,195 @@ window.addEventListener("resize", () => {
   if (paused && typeof draw === "function") draw();
 });
 resize();
-renderer = createRenderer(canvas);
+// Renderer selection. ?vector=1 forces the Tier-1 Canvas2D rendition (flat / low-fi, drops
+// variant visuals and BH lensing). Default is the WebGL2 renderer. The two never coexist on
+// the same canvas because a context-acquisition mode is sticky once chosen, so we pick first
+// and only call one factory.
+let _useVector = new URLSearchParams(location.search).get("vector") === "1";
+// Dev/test override: ?nowebgl=1 simulates a device without WebGL2 by skipping
+// createRenderer() entirely. Exercises the fall-back path (auto-switch to vector,
+// flash notice, disabled WebGL pill) on any machine, without needing to actually
+// have a non-WebGL2 device handy.
+const _simulateNoWebgl = new URLSearchParams(location.search).get("nowebgl") === "1";
+renderer = _useVector ? createRenderer2D(canvas)
+  : (_simulateNoWebgl ? null : createRenderer(canvas));
+// Auto-fall-back: if WebGL2 wasn't explicitly bypassed and createRenderer returned null
+// (no WebGL2 support on this device, OR ?nowebgl=1 force-failed it), silently switch
+// to vector. The fall-back is permanent for this session — _webglAvailable stays false,
+// so subsequent toggle attempts (V key, pill click) refuse to swap *back* to WebGL
+// since the canvas's context type is now sticky on the 2D one. The user is told via a
+// flash that we've dropped to vector mode.
+let _webglAvailable = true;
+if (!renderer && !_useVector) {
+  _webglAvailable = false;
+  _useVector = true;
+  // Reflect the just-detected vector mode and re-resize so the DPR cap applies for the
+  // canvas the new renderer is about to acquire. Without the re-resize, a real-device
+  // fallback (no ?nowebgl=1) would render the rest of the session at the WebGL DPR.
+  _vectorModeActive = true;
+  resize();
+  renderer = createRenderer2D(canvas);
+}
+// In vector mode the in-game HUD (score, sub-line) is rendered as vector text directly
+// on the canvas rather than as HTML, so the page should hide the HTML version. CSS rules
+// under body.vector do the actual hiding; the JS just toggles the class.
+if (_useVector) document.body.classList.add("vector");
+// Adds a class the help-overlay's WebGL pill keys off so it can show as disabled.
+if (!_webglAvailable) document.body.classList.add("webgl-unavailable");
+// Cached 2D context for the per-frame HUD/intro text pass. getContext("2d") on the same
+// canvas returns the same instance, but the per-frame property lookup adds up; cache once.
+let _ctx2d = _useVector ? canvas.getContext("2d") : null;
+
+// Toggle the renderer in-game without a page reload. A canvas's context type is sticky
+// once getContext("webgl2") or getContext("2d") has been called, so swapping requires
+// replacing the canvas DOM element. We do that in place — the parent + size + CSS
+// (which targets the `canvas` selector, not an id) carry over. Renderer and 2D-context
+// cache rebind to the fresh canvas. Gameplay state, audio, save, and challenge state
+// are all untouched because they live outside the renderer. Announcement is routed
+// through the same #bonus-flash channel that bonus / comet flashes use — visible in
+// either mode (HTML in webgl mode, vector in vector mode).
+function toggleVectorMode() {
+  // Refuse to swap back to WebGL when this device has no WebGL2 — the canvas's 2D
+  // context type is committed and createRenderer() failed at boot.
+  if (_useVector && !_webglAvailable) return;
+  const oldCanvas = canvas;
+  const newCanvas = document.createElement("canvas");
+  newCanvas.id = oldCanvas.id;
+  if (oldCanvas.parentNode) oldCanvas.parentNode.replaceChild(newCanvas, oldCanvas);
+  canvas = newCanvas;
+  // The fresh canvas inherits the HTML default 300×150 backing-store size. resize() is
+  // the canonical place that pushes the current viewport dimensions into the canvas
+  // attributes (renderer-2d's setViewport echoes them, but renderer.js's WebGL path only
+  // sets gl.viewport — it doesn't touch canvas.width/height). Set them explicitly here
+  // so the toggle doesn't need a window resize to look right.
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  canvas.style.width = W + "px";
+  canvas.style.height = H + "px";
+  _useVector = !_useVector;
+  _vectorModeActive = _useVector;
+  // Re-resize so the DPR cap matches the new mode (vector caps lower on touch). Without
+  // this the renderer would inherit the prior mode's DPR and either over- or under-render.
+  resize();
+  document.body.classList.toggle("vector", _useVector);
+  renderer = _useVector ? createRenderer2D(canvas) : createRenderer(canvas);
+  if (renderer) renderer.setViewport(W, H, DPR);
+  _ctx2d = _useVector ? canvas.getContext("2d") : null;
+  syncRendererPills();
+  announceVectorMode();
+}
+
+// Help-overlay renderer pills: highlight the active mode and let users tap to swap.
+// Provides a mobile-friendly toggle to complement the desktop V keypress. Pills
+// stopPropagation so the click doesn't bubble to the help-overlay's close handler.
+function syncRendererPills() {
+  const webglPill = document.getElementById("renderer-pill-webgl");
+  const vectorPill = document.getElementById("renderer-pill-vector");
+  if (webglPill) webglPill.classList.toggle("active", !_useVector);
+  if (vectorPill) vectorPill.classList.toggle("active", _useVector);
+}
+{
+  const webglPill = document.getElementById("renderer-pill-webgl");
+  const vectorPill = document.getElementById("renderer-pill-vector");
+  // Close the help overlay on toggle so the announcement flash is visible. The
+  // vector-on flash specifically renders on the canvas (HTML #bonus-flash is hidden by
+  // body.vector CSS in that direction) and the open help overlay covers the canvas, so
+  // without closing help the user wouldn't see the on-direction announcement.
+  function pillToggle(target) {
+    // Refuse to switch back to WebGL when this device doesn't support it. Stays silent
+    // (no help-close, no toggle) so the user notices the disabled pill rather than
+    // having the overlay close inexplicably with no mode change.
+    if (target === false && !_webglAvailable) return;
+    if (_useVector !== target) {
+      setHelpOpen(false);
+      toggleVectorMode();
+    }
+  }
+  if (webglPill) {
+    webglPill.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      pillToggle(false);
+    });
+  }
+  if (vectorPill) {
+    vectorPill.addEventListener("click", (e) => {
+      e.preventDefault(); e.stopPropagation();
+      pillToggle(true);
+    });
+  }
+  syncRendererPills();
+}
+
+function announceVectorMode() {
+  const msg = _useVector ? "vector on" : "vector off";
+  const cssColor = _useVector ? "#58e0fb" : "#ffaa3c";
+  const rgbaColor = _useVector ? "rgba(88,224,251,1)" : "rgba(255,170,60,1)";
+  let el = document.getElementById("bonus-flash");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "bonus-flash";
+    el.style.cssText =
+      "position:absolute;top:140px;left:0;right:0;text-align:center;" +
+      "font-size:22px;font-weight:700;letter-spacing:3px;text-transform:uppercase;" +
+      "pointer-events:none;opacity:0;transition:opacity .25s,transform .6s;" +
+      "text-shadow:0 0 26px rgba(255,170,60,.72)";
+    document.getElementById("ui").appendChild(el);
+  }
+  el.textContent = msg;
+  el.style.color = cssColor;
+  el.style.opacity = "1";
+  el.style.transform = "translateY(0) scale(1)";
+  void el.offsetWidth;
+  setTimeout(() => {
+    el.style.opacity = "0";
+    el.style.transform = "translateY(-30px) scale(1)";
+  }, 800);
+  setCanvasFlash("bonus", {
+    text: msg, color: rgbaColor,
+    size: 18, width: 1.5, shadowBlur: 8,
+    fadeInMs: 80, holdMs: 800, fadeOutMs: 280,
+    y: 130, anchor: "top",
+  });
+}
 if (!renderer) {
-  // No WebGL2 → show the unsupported overlay and abort. The rest of this module still loads
-  // (nothing crashes) but the main loop will never actually render anything, and input is a no-op.
+  // Both WebGL and the Canvas2D fallback failed. Truly unsupported environment. Show the
+  // overlay and stop — gameplay can't render anything.
   const el = document.getElementById("unsupported");
   if (el) el.classList.remove("hidden");
 } else {
   // Viewport wasn't set on the very first resize() because the renderer didn't exist yet — seed it
   // now.
   renderer.setViewport(W, H, DPR);
+  // If we silently fell back to vector mode, surface a notice so the player knows why
+  // they're on the low-fi renderer. setTimeout(0) lets the rest of init complete before
+  // the flash fires; setTimeout(800) gives the start screen a beat to settle first so
+  // the message isn't lost in the page-load flurry. The message uses the standard
+  // bonus-flash channel but with longer hold so there's time to read.
+  if (!_webglAvailable) {
+    setTimeout(showWebglUnavailableNotice, 800);
+  }
+}
+
+function showWebglUnavailableNotice() {
+  // Dedicated body-level element so the announcement is independent of body.vector CSS
+  // (which hides #bonus-flash, #chapter-flash, etc. so the vector renderer can own those
+  // channels), and not constrained by #ui's stacking context. A separate id means this
+  // banner shows in any mode and isn't overwritten by in-game flashes.
+  let el = document.getElementById("webgl-unavailable-banner");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "webgl-unavailable-banner";
+    el.style.cssText =
+      "position:fixed;top:140px;left:0;right:0;text-align:center;" +
+      "font-size:14px;font-weight:600;letter-spacing:2px;text-transform:uppercase;" +
+      "pointer-events:none;opacity:0;transition:opacity .5s;" +
+      "color:#ffaa3c;text-shadow:0 0 20px rgba(255,170,60,.55);padding:0 20px;" +
+      "z-index:9999;";
+    document.body.appendChild(el);
+  }
+  el.textContent = "webgl2 unavailable · vector mode active";
+  el.style.opacity = "1";
+  setTimeout(() => { el.style.opacity = "0"; }, 4200);
 }
 
 // Procedural sound effects (WebAudio). Lazy-initializes its AudioContext on the first play call so
@@ -863,6 +1055,21 @@ function fmtMult(m) {
 let camY = 0;           // world->screen vertical translation
 let camTargetY = 0;
 let hasBoosted = false; // for the hint
+// Auto-hide timer for the boost hint. The hint shows on a fresh newGame for players who've
+// already seen the intro; even if they never tap, it disappears after this many ms so it
+// doesn't linger past the early-game tutorial phase.
+const BOOST_HINT_AUTO_HIDE_MS = 8000;
+let _boostHintTimer = null;
+function showBoostHint() {
+  const el = document.getElementById("hint");
+  if (!el) return;
+  el.classList.add("on");
+  if (_boostHintTimer !== null) clearTimeout(_boostHintTimer);
+  _boostHintTimer = setTimeout(() => {
+    el.classList.remove("on");
+    _boostHintTimer = null;
+  }, BOOST_HINT_AUTO_HIDE_MS);
+}
 
 // ─────────────────────────────────────────────────────────────
 // Star generation — spawn probability table
@@ -1397,7 +1604,7 @@ function init() {
   if (introOverride() || !introDone) {
     startIntro();
   } else {
-    document.getElementById("hint").classList.add("on");
+    showBoostHint();
   }
   // Fire up the generative music layer. Scheduler runs until die() turns it back off. Idempotent —
   // calling startMusic again mid-run is a no-op.
@@ -1485,7 +1692,8 @@ function continueRun() {
   document.getElementById("score").textContent = "0";
   updateSub();
   document.getElementById("score-display").style.display = "block";
-  document.getElementById("hint").classList.add("on");
+  // Continue-after-death is not early gameplay — the player has been playing this session
+  // already and knows the controls. Skip the boost hint here.
   audio.startMusic();
 }
 
@@ -1595,7 +1803,7 @@ function resumeFromSave(data) {
   // Resumed runs never show the intro — the player is past first-time onboarding by
   // definition. ?intro=1 is intentionally ignored on this path.
   endIntro(false);
-  document.getElementById("hint").classList.add("on");
+  // Resumed-from-save means the player has clearly played before — no boost hint.
   audio.startMusic();
   // One-shot: consume the save so a later death-during-resume writes a fresh snapshot rather than
   // stacking atop the old one.
@@ -2290,6 +2498,61 @@ function updateScoreUI(bump, bonus, streak) {
   }
 }
 
+// Canvas2D / Vector-mode flash state. Each show*Flash call records the parameters of the
+// flash into _canvasFlashes; the draw loop reads each entry, computes the current opacity
+// from elapsed time + per-flash timing, and renders via renderer.drawText. The animation
+// is reduced to a pure fade-in/hold/fade-out — the CSS transform/scale animations on the
+// HTML versions can't be replayed without baking the text at every scale step (which would
+// thrash the text cache), and the fade alone reads as well in vector form.
+const _canvasFlashes = {};
+function setCanvasFlash(name, opts) {
+  if (!_useVector) return;
+  _canvasFlashes[name] = {
+    text: opts.text,
+    color: opts.color || "rgba(255,220,160,0.9)",
+    size: opts.size || 16,
+    width: opts.width !== undefined ? opts.width : 1.3,
+    startMs: performance.now(),
+    fadeInMs: opts.fadeInMs !== undefined ? opts.fadeInMs : 250,
+    holdMs: opts.holdMs !== undefined ? opts.holdMs : 1500,
+    fadeOutMs: opts.fadeOutMs !== undefined ? opts.fadeOutMs : 300,
+    anchor: opts.anchor || "top",
+    y: opts.y !== undefined ? opts.y : 100,
+    shadowBlur: opts.shadowBlur !== undefined ? opts.shadowBlur : 6,
+  };
+}
+function renderCanvasFlashes() {
+  if (!_useVector || !renderer.drawText || !_ctx2d) return;
+  const now = performance.now();
+  const keys = Object.keys(_canvasFlashes);
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    const f = _canvasFlashes[key];
+    if (!f) continue;
+    const t = now - f.startMs;
+    let alpha;
+    if (t < f.fadeInMs) {
+      alpha = t / f.fadeInMs;
+    } else if (t < f.fadeInMs + f.holdMs) {
+      alpha = 1;
+    } else if (t < f.fadeInMs + f.holdMs + f.fadeOutMs) {
+      alpha = 1 - (t - f.fadeInMs - f.holdMs) / f.fadeOutMs;
+    } else {
+      delete _canvasFlashes[key];
+      continue;
+    }
+    _ctx2d.globalAlpha = alpha;
+    const y = f.anchor === "bottom" ? H - f.y : f.y;
+    renderer.drawText(f.text, W / 2, y, f.size, {
+      color: f.color,
+      width: f.width,
+      shadowBlur: f.shadowBlur,
+      align: "center",
+    });
+  }
+  _ctx2d.globalAlpha = 1;
+}
+
 function showChallengeBeatFlash() {
   let el = document.getElementById("challenge-beat-flash");
   if (!el) {
@@ -2313,6 +2576,13 @@ function showChallengeBeatFlash() {
     el.style.opacity = "0";
     el.style.transform = "translateY(-24px) scale(1.06)";
   }, 1500);
+  setCanvasFlash("challengeBeat", {
+    text: "challenge beaten",
+    color: "rgba(255,226,98,1)",
+    size: 22, width: 1.6, shadowBlur: 10,
+    fadeInMs: 300, holdMs: 1500, fadeOutMs: 900,
+    y: 90, anchor: "top",
+  });
 }
 
 // Chapter flash. Fires on first-of-variant captures and at star-count milestones. Reuses the
@@ -2355,6 +2625,13 @@ function showChapterFlash() {
     el.style.opacity = "0";
     _chapterFlashTimer = null;
   }, 2400);
+  setCanvasFlash("chapter", {
+    text: title,
+    color: "rgba(255,220,160,0.95)",
+    size: 14, width: 1.2, shadowBlur: 6,
+    fadeInMs: 450, holdMs: 2400, fadeOutMs: 450,
+    y: 100, anchor: "bottom",
+  });
 }
 
 function showBonusFlash(bonus, streak) {
@@ -2381,6 +2658,13 @@ function showBonusFlash(bonus, streak) {
     el.style.opacity = "0";
     el.style.transform = "translateY(-30px) scale(1)";
   }, 450);
+  setCanvasFlash("bonus", {
+    text: text,
+    color: bonus >= 3 ? "rgba(255,170,60,1)" : "rgba(88,224,251,1)",
+    size: 18, width: 1.5, shadowBlur: 8,
+    fadeInMs: 80, holdMs: 380, fadeOutMs: 280,
+    y: 130, anchor: "top",
+  });
 }
 
 function showCometFlash() {
@@ -2404,6 +2688,13 @@ function showCometFlash() {
     el.style.opacity = "0";
     el.style.transform = "translateY(-30px) scale(1)";
   }, 350);
+  setCanvasFlash("bonus", {
+    text: "COMET +" + COMET_BONUS,
+    color: "rgba(88,224,251,1)",
+    size: 18, width: 1.5, shadowBlur: 8,
+    fadeInMs: 80, holdMs: 270, fadeOutMs: 280,
+    y: 130, anchor: "top",
+  });
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2499,6 +2790,10 @@ function boost() {
   if (!hasBoosted) {
     hasBoosted = true;
     document.getElementById("hint").classList.remove("on");
+    if (_boostHintTimer !== null) {
+      clearTimeout(_boostHintTimer);
+      _boostHintTimer = null;
+    }
   }
 }
 
@@ -2563,6 +2858,12 @@ function die(crash, crashedStar) {
     document.getElementById("best").textContent = best;
     document.getElementById("gameover").classList.remove("hidden");
     document.getElementById("hint").classList.remove("on");
+    // Cancel any pending boost-hint auto-hide so it can't fire mid-death-overlay (or
+    // worse, mid-continueRun) and re-toggle visibility on a stale element.
+    if (_boostHintTimer !== null) {
+      clearTimeout(_boostHintTimer);
+      _boostHintTimer = null;
+    }
     // Hide the live HUD score so it doesn't duplicate the #final on the game-over overlay. init()
     // re-shows it on the next run.
     document.getElementById("score-display").style.display = "none";
@@ -3290,7 +3591,9 @@ function draw() {
   renderer.drawBackground(camY);
   renderer.drawBgStars();
 
-  // MENU: only the decorative welcome-screen stars, in screen space.
+  // MENU: only the decorative welcome-screen stars, in screen space. Flashes (e.g. the
+  // boot-time "webgl2 unavailable" notice) still need to render here, so we run
+  // finalizeFrame + the vector flash pass before returning.
   if (state === STATE.MENU) {
     if (menuStars.length) {
       const menuBatch = menuStars.map((s) => ({
@@ -3300,6 +3603,11 @@ function draw() {
         isCurrent: false, isNext: false, isPast: false,
       }));
       renderer.drawStarBatch(menuBatch, renderer.screenMat());
+    }
+    renderer.finalizeFrame([]);
+    if (_useVector && renderer.drawText && _ctx2d) {
+      _ctx2d.setTransform(DPR, 0, 0, DPR, 0, 0);
+      renderCanvasFlashes();
     }
     return;
   }
@@ -3766,6 +4074,72 @@ function draw() {
     }
   }
   renderer.finalizeFrame(bhData);
+
+  // Vector mode: HUD score / sub line + first-run intro overlay live on the canvas as
+  // vector text. The HTML versions are hidden via body.vector CSS, so this is the only
+  // on-screen text when the alt renderer is active. Identity transform (DPR-scaled) puts
+  // text in screen px.
+  if (_useVector && renderer.drawText && state !== STATE.DEAD) {
+    if (_ctx2d) {
+      _ctx2d.setTransform(DPR, 0, 0, DPR, 0, 0);
+      renderer.drawText(String(score), W / 2, 20, 30,
+        { color: "rgba(180,255,200,0.95)", width: 1.6, shadowBlur: 8, align: "center" });
+      renderer.drawText(
+        document.getElementById("sub").textContent || "",
+        W / 2, 64, 11,
+        { color: "rgba(140,200,170,0.75)", width: 1.0, shadowBlur: 4, align: "center" });
+      // Intro overlay vector pass. Reads visibility / textContent from the (display:none)
+      // HTML elements so the existing intro state machine still drives content unchanged.
+      if (introActive && ball && stars.length > 0) {
+        const tutColor = "rgba(255,220,160,0.95)";
+        const tutSize = 12;
+        for (const slot of ["current", "next"]) {
+          const el = document.getElementById("tutorial-" + slot);
+          if (!el || !el.classList.contains("show")) continue;
+          const text = el.textContent;
+          if (!text) continue;
+          const star = slot === "current"
+            ? stars[ball.currentStar]
+            : stars[ball.currentStar + 1];
+          if (!star) continue;
+          // Anchor matches updateTutorialPositions: below the star's bottom edge.
+          const sx = star.x * camRenderScale + camRenderOx;
+          const sy = (star.y + star.r) * camRenderScale + camRenderOy + 18;
+          renderer.drawText(wrapVectorText(text, 240, tutSize), sx, sy, tutSize, {
+            color: tutColor, width: 1.1, shadowBlur: 5, align: "center",
+          });
+        }
+      }
+      // In-game flash messages (bonus / comet / chapter / challenge-beat) as vector text.
+      renderCanvasFlashes();
+    }
+  }
+}
+
+// Lightweight word-wrap for the vector-text intro overlay. The renderer's drawText
+// handles explicit \n but doesn't measure; this approximates char width and breaks at
+// word boundaries so long intro sentences ("tap when your direction aims at the next
+// one") don't run off-screen at small sizes. Char width ≈ size × (GLYPH_ASPECT + spacing)
+// ≈ size × 0.92 with current renderer defaults.
+function wrapVectorText(text, maxWidthPx, size) {
+  if (!text) return "";
+  const charW = size * 0.92;
+  const maxChars = Math.max(8, Math.floor(maxWidthPx / charW));
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let cur = "";
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
+    const trial = cur ? cur + " " + w : w;
+    if (trial.length > maxChars && cur) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = trial;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -3910,7 +4284,23 @@ if (best > 0) {
 // Kick off via RAF. Do NOT call loop() synchronously — the first elapsed needs to be measured
 // against a real vsync timestamp (see the sentinel in loop()), and any catchup ticks fired from
 // module-load time would run before init() has a ball.
-requestAnimationFrame(loop);
+//
+// Pre-warm: 6 empty RAF callbacks before the real loop starts. Cold-reload first frames are
+// expensive (shader compile + link, text-cache misses, audio-context init, module eval). If
+// any of those exceeds 8.3 ms, Chromium/Firefox often "decide" the page can't hit 120 fps and
+// pin RAF cadence at 60 Hz for the rest of the session. Running a handful of empty callbacks
+// first lets the browser establish the 120 Hz beat against real vsync intervals before we
+// commit any expensive work to a frame. The empty callbacks themselves cost nothing, and 6
+// frames is ~50 ms at 120 Hz / ~100 ms at 60 Hz — invisible to the player.
+let _prewarmRemaining = 6;
+function prewarmFrame() {
+  if (--_prewarmRemaining > 0) {
+    requestAnimationFrame(prewarmFrame);
+  } else {
+    requestAnimationFrame(loop);
+  }
+}
+requestAnimationFrame(prewarmFrame);
 
 // ─────────────────────────────────────────────────────────────
 // Input
@@ -3985,6 +4375,15 @@ document.addEventListener("keydown", (e) => {
     if (e.repeat) return;
     e.preventDefault();
     setHelpOpen(helpOverlay && helpOverlay.classList.contains("hidden"));
+    return;
+  }
+  if (e.key === "v" || e.key === "V") {
+    if (e.repeat) return;
+    e.preventDefault();
+    // Live mode swap — no reload. Replaces the canvas DOM element with a fresh one and
+    // rebinds the renderer; gameplay / audio / save state are untouched. Allowed in any
+    // state, including mid-run. Announced via the bonus-flash channel.
+    toggleVectorMode();
     return;
   }
   if (e.key === "Escape") {

@@ -40,7 +40,10 @@ one too.
 - **Help & shortcuts** — click the **?** button or press **H** for a pop-up cheat sheet (also
   pauses the game). **P** pauses / resumes. **W** or tapping the score toggles a launch-window
   hint that marks orbital angles where a tap would land a clean capture. **Z** or long-pressing
-  the score cycles a cinematic ship-following camera through two zoom levels and back.
+  the score cycles a cinematic ship-following camera through two zoom levels and back. **V** (or
+  the renderer pills inside the help overlay) toggles between the default WebGL2 look and a
+  phosphor-style vector rendition. If your browser can't make a WebGL2 context the game falls
+  back to vector mode automatically and announces it.
 - **Watch your replay.** A cinematic follow-camera plays back your run with simplex-driven zoom
   behind the AGAIN button.
 - **Send a challenge.** On death, flip the small text link on the game-over screen to reveal an
@@ -72,9 +75,17 @@ No build step. No `npm install`. The server uses only Node's built-in modules. R
 
 ### Browser support
 
-Rendering is native WebGL2, no fallback. That means any browser released in the last few years
-(Chrome 56+, Firefox 51+, Safari 15+, any modern Chromium on mobile). If the browser can't
-create a WebGL2 context the game shows an unsupported-device screen instead of running.
+The default renderer is native WebGL2 — any browser released in the last few years runs it
+(Chrome 56+, Firefox 51+, Safari 15+, any modern Chromium on mobile). If the browser can't make a
+WebGL2 context the game **silently falls back to a Canvas2D "vector" renderer** (`renderer-2d.js`)
+with a phosphor-CRT aesthetic and the same gameplay surface, announces the fall-back, and keeps
+the WebGL pill in the help overlay disabled for the rest of the session. The only path that still
+shows the unsupported-device screen is one where Canvas2D itself isn't available — effectively
+unreachable on modern browsers.
+
+You can force vector mode with `?vector=1` for the look of it, or test the fall-back path on a
+WebGL-capable browser with `?nowebgl=1`. Inside the game, **V** or the renderer pill toggles
+between the two without a reload.
 
 ## Run tests
 
@@ -112,13 +123,21 @@ reaches a player.
   procedural background grid, and real-time gravitational lensing via a conditional FBO
   composite pass. BH binaries have physics-driven ejecta from the donor star. Procedural spiral
   galaxies drift in the background.
-- **Rendering is WebGL2**, not Canvas2D. Six shader programs (fullscreen / lensing / circle /
+- **Rendering is WebGL2 by default.** Six shader programs (fullscreen / lensing / circle /
   star / nebula / polyline) cover every primitive. The star + nebula programs share one source
   compiled twice with `#define NEBULA_ONLY` toggling the heavy nebula branch — keeps
   mobile-class GPUs out of nebula's register tier when no nebulae are visible. The star is
   evaluated procedurally per pixel in the fragment shader — corona, streamers, glow,
   photosphere, granulation, core highlight — so every star stays animated without the Canvas2D
   gradient costs that used to dominate the frame budget.
+- **A Canvas2D vector renderer is the fall-back**, also accessible at runtime via the V key
+  or the `?vector=1` URL parameter. Pure black field, thin bright vector strokes,
+  `composite="lighter"` accumulation, a per-frame semi-transparent black overpaint produces
+  the soft phosphor afterglow. Polygons are rendered as **one continuous outline stroke + a
+  single batched fill of small vertex dots**, so a 12-gon costs 2 composite ops instead of 12
+  while preserving the corner-brightening that comes from cap overlap in the per-segment
+  approach. Vertex dots from same-color polygons coalesce into one fill per frame. DPR is
+  clamped to 1.5 on touch (the fuzz hides the drop).
 
 ## Project layout
 
@@ -127,6 +146,7 @@ docs/
   index.html          tiny shell — DOM + CSS, one <script type="module">
   gameplay.js         browser-only: state, input, orchestration
   renderer.js         browser-only: WebGL2 renderer + shader programs
+  renderer-2d.js      browser-only: Canvas2D "vector" fall-back renderer
   audio.js            browser-only: procedural WebAudio sound effects
   physics.js          pure physics module, used by browser and node
   star-rendering.js   browser-only: binary positions, ejecta, comets
