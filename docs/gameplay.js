@@ -2488,6 +2488,12 @@ function updateScoreUI(bump, bonus, streak) {
 // HTML versions can't be replayed without baking the text at every scale step (which would
 // thrash the text cache), and the fade alone reads as well in vector form.
 const _canvasFlashes = {};
+// Defer flash start time by one frame so the bakeTextLabel call for the flash text lands
+// AFTER the capture frame (which already pays score / sub bakes). Without this, every
+// fast capture pays 2-3 text bakes in the same frame. 18 ms ≈ one 60 Hz frame; on faster
+// displays the flash still arrives within a few frames of the trigger event, which
+// matches user perception since fadeInMs is in the hundreds.
+const FLASH_BAKE_DEFER_MS = 18;
 function setCanvasFlash(name, opts) {
   if (!_useVector) return;
   _canvasFlashes[name] = {
@@ -2495,7 +2501,7 @@ function setCanvasFlash(name, opts) {
     color: opts.color || "rgba(255,220,160,0.9)",
     size: opts.size || 16,
     width: opts.width !== undefined ? opts.width : 1.3,
-    startMs: performance.now(),
+    startMs: performance.now() + FLASH_BAKE_DEFER_MS,
     fadeInMs: opts.fadeInMs !== undefined ? opts.fadeInMs : 250,
     holdMs: opts.holdMs !== undefined ? opts.holdMs : 1500,
     fadeOutMs: opts.fadeOutMs !== undefined ? opts.fadeOutMs : 300,
@@ -2512,6 +2518,9 @@ function renderCanvasFlashes() {
     const f = _canvasFlashes[key];
     if (!f) continue;
     const t = now - f.startMs;
+    // Deferred: startMs is in the future, t is negative. Skip rendering (and the bake
+    // it would trigger) until the deferred-start frame lands.
+    if (t < 0) continue;
     let alpha;
     if (t < f.fadeInMs) {
       alpha = t / f.fadeInMs;

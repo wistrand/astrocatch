@@ -72,12 +72,19 @@ export function createRenderer2D(canvas) {
     canvas.style.height = H + "px";
     initBgCrosses();
     // Text bake canvases are sized at DPR resolution; a DPR change makes them stale.
-    // Clearing is cheap (just drops refs — GC reclaims) and re-bakes on next draw.
-    if (dprChanged && _textCache) _textCache.clear();
+    // Clearing is cheap (just drops refs — GC reclaims) and re-bakes on next draw. The
+    // canvas pool is also dropped because pooled canvases were sized at the old DPR
+    // and would mismatch new bakes' dimensions; better to start fresh than carry
+    // mis-sized buckets that will never be hit.
+    if (dprChanged) {
+      if (_textCache) _textCache.clear();
+      if (_canvasPool) _canvasPool.clear();
+    }
   }
 
   function beginFrame(nowSecArg, _hasVisibleBH) {
     nowSec = nowSecArg || 0;
+    _frameBakeBudget = FRAME_BAKE_BUDGET;
     _flushDots(); // belt-and-braces: any dots left from a previous (interrupted) frame.
     ctx.setTransform(viewDPR, 0, 0, viewDPR, 0, 0);
     setCop("source-over");
@@ -459,6 +466,52 @@ export function createRenderer2D(canvas) {
   const _textCacheMax = 32;
   const _glyphVerts = new Float32Array(64);
 
+  // ── Offscreen-canvas pool for bakeTextLabel ──
+  // Each bake used to do `document.createElement("canvas")` + per-bake buffer alloc.
+  // Most score / sub / flash bakes recur with the same dimensions (10 digits at the
+  // same size all bake to one canvas size; the sub-line stays close to one width
+  // across captures). When a cache entry is LRU-evicted, its canvas returns to the
+  // pool keyed by (widthPx × heightPx). Subsequent same-size bakes pop a recycled
+  // canvas instead of creating a new DOM element. Cap of 4 per bucket prevents
+  // unbounded growth on bake-size diversity. `acquireOffscreenCanvas` returns a
+  // canvas with the requested dims set; setting `.width` clears the pixel buffer
+  // (per spec), so re-use is safe regardless of prior content.
+  const _canvasPool = new Map();
+  const _POOL_PER_KEY_MAX = 4;
+  function acquireOffscreenCanvas(widthPx, heightPx) {
+    const k = widthPx + "x" + heightPx;
+    const arr = _canvasPool.get(k);
+    if (arr && arr.length > 0) {
+      const c = arr.pop();
+      // Re-setting width to its current value still clears the bitmap and context
+      // state per the canvas spec — semantically a fresh canvas, no allocation.
+      c.width = widthPx;
+      return c;
+    }
+    const c = document.createElement("canvas");
+    c.width = widthPx;
+    c.height = heightPx;
+    return c;
+  }
+  function releaseOffscreenCanvas(c) {
+    if (!c || !c.width || !c.height) return;
+    const k = c.width + "x" + c.height;
+    let arr = _canvasPool.get(k);
+    if (!arr) { arr = []; _canvasPool.set(k, arr); }
+    if (arr.length < _POOL_PER_KEY_MAX) arr.push(c);
+  }
+
+  // ── Per-frame bake budget ──
+  // bakeTextLabel costs 2-8 ms on mobile (canvas alloc + per-glyph strokes). When
+  // multiple texts change in the same frame (capture: score + sub + flash text all
+  // re-bake), the spike can push frame time over the budget. Limit non-trivial bakes
+  // to FRAME_BAKE_BUDGET per frame; texts whose bake is skipped this frame don't
+  // render that frame but will hit cache or get bake budget next frame. Single-char
+  // bakes (digit fast path below) bypass this limit — they're cheap and on the
+  // critical render path. Reset in beginFrame.
+  const FRAME_BAKE_BUDGET = 2;
+  let _frameBakeBudget = FRAME_BAKE_BUDGET;
+
   // Render a single glyph into the given context. Per-segment strokes so each glyph's
   // interior vertices (direction changes within the letterform) accumulate via
   // composite="lighter" — same overlap-brightening mechanism as polygon stroking. The
@@ -520,9 +573,9 @@ export function createRenderer2D(canvas) {
     const widthCSS = textWidthCSS + padCSS * 2;
     const heightCSS = textHeightCSS + padCSS * 2;
     const dpr = viewDPR || 1;
-    const off = document.createElement("canvas");
-    off.width = Math.max(1, Math.ceil(widthCSS * dpr));
-    off.height = Math.max(1, Math.ceil(heightCSS * dpr));
+    const offW = Math.max(1, Math.ceil(widthCSS * dpr));
+    const offH = Math.max(1, Math.ceil(heightCSS * dpr));
+    const off = acquireOffscreenCanvas(offW, offH);
     const oc = off.getContext("2d");
     oc.setTransform(dpr, 0, 0, dpr, 0, 0);
     // Additive composite so per-segment strokes in drawGlyphInto accumulate at shared
@@ -556,28 +609,84 @@ export function createRenderer2D(canvas) {
   // alignment is applied at blit time so left / center / right of the same label share
   // one bake. LRU eviction via Map insertion-order: on a hit we delete-and-reinsert to
   // move the key to the back; the next miss evicts the front (oldest) entry.
+  // Look up a baked entry by cache key, baking on miss. Returns null when a bake would
+  // be needed AND the per-frame bake budget is exhausted — caller should skip its draw
+  // this frame (next frame will either find the cache populated by someone else or have
+  // budget again). Single-char bakes (used by the digit fast path) bypass the budget
+  // via `bypassBudget = true` since they're cheap, predictable, and on the critical
+  // path of the score render.
+  function _getOrBakeEntry(text, size, opts, key, bypassBudget) {
+    let entry = _textCache.get(key);
+    if (entry) {
+      _textCache.delete(key);
+      _textCache.set(key, entry);
+      return entry;
+    }
+    if (!bypassBudget && _frameBakeBudget <= 0) return null;
+    if (!bypassBudget) _frameBakeBudget--;
+    entry = bakeTextLabel(text, size, opts);
+    _textCache.set(key, entry);
+    if (_textCache.size > _textCacheMax) {
+      const oldestKey = _textCache.keys().next().value;
+      const oldEntry = _textCache.get(oldestKey);
+      _textCache.delete(oldestKey);
+      // Return the evicted entry's canvas to the pool so a same-size bake later can
+      // skip the DOM-element allocation.
+      if (oldEntry && oldEntry.canvas) releaseOffscreenCanvas(oldEntry.canvas);
+    }
+    return entry;
+  }
+
+  // Fast path for digit-only strings (most commonly the score). Each digit '0'-'9' gets
+  // its own cache entry under the same (size, color, width, spacing) tuple, so after the
+  // first sighting of each digit no further bakes occur — score increments just emit a
+  // few drawImage calls per frame. Single-char bakes bypass FRAME_BAKE_BUDGET (cheap +
+  // critical-path; can't ration without leaving digits unrendered). Composited digits
+  // are positioned via the same `advance` (size × (GLYPH_ASPECT + spacing)) the regular
+  // bake uses, so the visual layout is bit-identical to a full-string bake.
+  function drawDigitsFast(text, x, y, size, opts) {
+    const align = opts.align || "left";
+    const spacing = opts.spacing !== undefined ? opts.spacing : 0.22;
+    const advance = size * (GLYPH_ASPECT + spacing);
+    const totalW = text.length * advance - size * spacing;
+    let startX;
+    if (align === "center") startX = x - totalW * 0.5;
+    else if (align === "right") startX = x - totalW;
+    else startX = x;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text.charAt(i);
+      const key = ch + "\x01" + size + "\x01" + (opts.color || "") + "\x01"
+                + (opts.width === undefined ? "" : opts.width) + "\x01"
+                + (opts.spacing === undefined ? "" : opts.spacing);
+      const entry = _getOrBakeEntry(ch, size, opts, key, true);
+      if (!entry) continue;
+      const blitX = startX + i * advance - entry.padCSS;
+      const blitY = y - entry.padCSS;
+      ctx.drawImage(entry.canvas, blitX, blitY, entry.widthCSS, entry.heightCSS);
+    }
+  }
+
   function drawText(text, x, y, size, opts) {
     if (!text) return;
     opts = opts || {};
     const align = opts.align || "left";
+    // Digit-only multi-char strings take the per-digit fast path so score updates (which
+    // happen on every capture) don't re-bake the whole number each time.
+    if (text.length > 1 && /^\d+$/.test(text)) {
+      drawDigitsFast(text, x, y, size, opts);
+      return;
+    }
     // Cache key excludes shadowBlur / blurColor — they were keys when bakeTextLabel
     // rendered a shadow halo, but the bake-time halo was removed, so callers passing
     // different shadowBlur values produce bit-identical bakes that should share an entry.
     const key = text + "\x01" + size + "\x01" + (opts.color || "") + "\x01"
               + (opts.width === undefined ? "" : opts.width) + "\x01"
               + (opts.spacing === undefined ? "" : opts.spacing);
-    let entry = _textCache.get(key);
-    if (!entry) {
-      entry = bakeTextLabel(text, size, opts);
-      _textCache.set(key, entry);
-      if (_textCache.size > _textCacheMax) {
-        const oldestKey = _textCache.keys().next().value;
-        _textCache.delete(oldestKey);
-      }
-    } else {
-      _textCache.delete(key);
-      _textCache.set(key, entry);
-    }
+    // Single-char bakes are cheap; bypass the frame budget for them so the digit fast
+    // path (and any one-off single-char drawText callers) always render.
+    const bypassBudget = text.length <= 1;
+    const entry = _getOrBakeEntry(text, size, opts, key, bypassBudget);
+    if (!entry) return;
     let blitX = x - entry.padCSS;
     if (align === "center") blitX = x - entry.textWidthCSS * 0.5 - entry.padCSS;
     else if (align === "right") blitX = x - entry.textWidthCSS - entry.padCSS;
