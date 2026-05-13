@@ -3435,19 +3435,43 @@ function renderTick() {
 // along the path at REPLAY_SPEED frames per render. The game-over overlay sits on top with reduced
 // opacity so the replay shows through.
 // ─────────────────────────────────────────────────────────────
+// Stride for decimating the replay trajectory before drawReplayGhost renders it. Each
+// segment in the replay polyline takes its own beginPath/stroke in the vector renderer,
+// so the cost scales linearly with vertex count. Profiling on DEAD state showed the
+// polyline at ~2.8 ms/frame for ~2000 vertices; a stride of 4 cuts vertex count (and
+// stroke count) by 4× with no visible loss on the smooth ballistic trajectories the
+// replay is showing. The trail end is always pinned to the marker position regardless
+// of stride, so the moving dot and the polyline tip stay connected.
+const REPLAY_DECIMATE_STRIDE = 4;
 function computeReplayBounds() {
   if (replay.length < 2) { replayBounds = null; return; }
   // We only need lastStarIdx from the bounds now — the dynamic camera in drawReplayGhost does its
   // own zoom/offset per frame.
   const lastIdx = ball ? Math.min(stars.length, ball.currentStar + 2) : stars.length;
+  // Pre-decimate the replay trajectory. The replay is frozen on death — no new samples
+  // accumulate — so building the decimated array once amortizes across every drawReplayGhost
+  // frame instead of recomputing each tick. Always include the final point so the trail tip
+  // lands exactly on the recorded death position.
+  const decimated = [];
+  for (let i = 0; i < replay.length; i += REPLAY_DECIMATE_STRIDE) {
+    decimated.push(replay[i]);
+  }
+  if (decimated[decimated.length - 1] !== replay[replay.length - 1]) {
+    decimated.push(replay[replay.length - 1]);
+  }
   replayBounds = {
     lastStarIdx: lastIdx,
+    decimated,
   };
   // Seed the replay camera at the start of the trajectory so the smooth-follow doesn't have to pan
   // from (0, 0).
   replayCamX = replay[0].x;
   replayCamY = replay[0].y;
 }
+// Scratch buffer reused across drawReplayGhost calls to avoid allocating a fresh array
+// each render frame for the trailing-window polyline slice. .length=0 keeps the
+// underlying storage; subsequent pushes reuse it.
+const _replayTrailScratch = [];
 
 function drawReplayGhost() {
   if (!replayBounds || replay.length < 2) return;
@@ -3503,17 +3527,31 @@ function drawReplayGhost() {
     renderer.drawCircleBatch(markers, mat);
   }
 
-  // Trajectory polyline — capped to a trailing window of 2000 points instead of the full replay.
-  // The close-follow camera only shows a portion of the trajectory at any zoom, so rendering all
-  // 6000 points would waste vertex work and allocate a large slice array every frame for no visible
-  // gain.
-  if (upTo > 1) {
+  // Trajectory polyline — drawn from the pre-decimated trajectory built in
+  // computeReplayBounds (stride REPLAY_DECIMATE_STRIDE). `replayIdx` indexes the full-
+  // resolution replay; divide to find the corresponding decimated cursor. The trailing
+  // window is 500 decimated points ≈ 2000 original points worth of trajectory extent,
+  // with ~4× fewer per-segment strokes than rendering at full resolution. The marker's
+  // current position (replay[upTo]) is appended as the final point so the polyline tip
+  // meets the moving dot exactly, regardless of where decimation cut nearby samples.
+  if (upTo > 1 && b.decimated) {
     const headA = 0.85;
     const head = [0.63 * headA, 0.86 * headA, 1.0 * headA, headA];
     const tail = [0, 0, 0, 0];
-    const trailStart = Math.max(0, upTo - 2000);
-    const points = replay.slice(trailStart, upTo + 1);
-    renderer.drawPolyline(points, mat, 0.8 / scale, tail, head);
+    const dec = b.decimated;
+    const decUpTo = Math.min(
+      Math.floor(upTo / REPLAY_DECIMATE_STRIDE), dec.length - 1
+    );
+    const trailStart = Math.max(0, decUpTo - 500);
+    _replayTrailScratch.length = 0;
+    for (let i = trailStart; i <= decUpTo; i++) _replayTrailScratch.push(dec[i]);
+    // Pin the trail tip to the live marker position.
+    const head_replay = replay[upTo];
+    if (_replayTrailScratch.length === 0
+        || _replayTrailScratch[_replayTrailScratch.length - 1] !== head_replay) {
+      _replayTrailScratch.push(head_replay);
+    }
+    renderer.drawPolyline(_replayTrailScratch, mat, 0.8 / scale, tail, head);
   }
 
   // Marker dot — white glow + core, sized relative to current zoom so the dot stays a constant

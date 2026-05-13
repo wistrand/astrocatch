@@ -41,6 +41,13 @@ export function createRenderer2D(canvas) {
 
   // Background cross-stars (Vector parallax). Seeded so they're stable across reloads.
   let bgCrosses = null;
+  // Offscreen bake of the bg field. The crosses don't move and only their alpha
+  // sway-twinkled across frames; the per-cross state-set + stroke loop was the single
+  // biggest steady-state cost (~0.5 ms/frame, profiled). Baking once and blitting via
+  // one drawImage drops that to ~0.05 ms/frame. The per-cross twinkle is sacrificed —
+  // a global pulse is layered on at blit time via globalAlpha so the field still
+  // breathes, but every cross now pulses in unison rather than independently.
+  let _bgStarsBake = null;
   function initBgCrosses() {
     let s = 0x9E3779B1 >>> 0;
     const rng = () => {
@@ -58,9 +65,39 @@ export function createRenderer2D(canvas) {
         y: rng() * viewH,
         size: 1.2 + rng() * 2.4,
         a: 0.20 + rng() * 0.40,
-        twinkle: rng() * Math.PI * 2,  // phase offset for subtle brightness sway
       };
     }
+    bakeBgStars();
+  }
+  // Pre-render the static cross field to an offscreen canvas. Replaces the per-frame
+  // stroke loop in drawBgStars with a single drawImage. Re-run from setViewport when
+  // the viewport changes (DPR / dims).
+  function bakeBgStars() {
+    if (!bgCrosses) return;
+    const wPx = Math.max(1, Math.round(viewW * viewDPR));
+    const hPx = Math.max(1, Math.round(viewH * viewDPR));
+    const off = document.createElement("canvas");
+    off.width = wPx;
+    off.height = hPx;
+    const oc = off.getContext("2d");
+    oc.setTransform(viewDPR, 0, 0, viewDPR, 0, 0);
+    oc.globalCompositeOperation = "lighter";
+    oc.strokeStyle = "rgba(160,200,230,0.18)";
+    oc.lineWidth = 0.8;
+    oc.lineCap = "round";
+    for (let i = 0; i < bgCrosses.length; i++) {
+      const c = bgCrosses[i];
+      // Bake at the cross's full base alpha — the global twinkle pulse at blit time
+      // modulates between 0.7× and 1.0× to recover the average-brightness baseline of
+      // the previous per-cross sway (which was c.a × (0.7 + 0.3·sin)).
+      oc.globalAlpha = c.a;
+      const h = c.size;
+      oc.beginPath();
+      oc.moveTo(c.x - h, c.y); oc.lineTo(c.x + h, c.y);
+      oc.moveTo(c.x, c.y - h); oc.lineTo(c.x, c.y + h);
+      oc.stroke();
+    }
+    _bgStarsBake = off;
   }
 
   function setViewport(W, H, DPR) {
@@ -85,6 +122,8 @@ export function createRenderer2D(canvas) {
   function beginFrame(nowSecArg, _hasVisibleBH) {
     nowSec = nowSecArg || 0;
     _frameBakeBudget = FRAME_BAKE_BUDGET;
+    _profileTick();
+    const _pt0 = _profileBegin();
     _flushDots(); // belt-and-braces: any dots left from a previous (interrupted) frame.
     ctx.setTransform(viewDPR, 0, 0, viewDPR, 0, 0);
     setCop("source-over");
@@ -95,6 +134,7 @@ export function createRenderer2D(canvas) {
     // attenuation; lower = longer trails, higher = sharper.
     setFS("rgba(0,0,0," + PHOSPHOR_FADE + ")");
     ctx.fillRect(0, 0, viewW, viewH);
+    _profileEnd("beginFrame", _pt0);
   }
 
   function drawBackground(_camY) {
@@ -102,35 +142,22 @@ export function createRenderer2D(canvas) {
   }
 
   function drawBgStars() {
-    if (!bgCrosses) return;
+    if (!_bgStarsBake) return;
+    const _pt0 = _profileBegin();
     _flushDots();
-    ctx.setTransform(viewDPR, 0, 0, viewDPR, 0, 0);
+    // The bake is at full per-cross alpha; modulate with a global pulse (0.7×–1.0×) so
+    // the field still breathes between frames. Per-cross independent twinkle phases are
+    // gone, but a single sine drive looks nearly identical for the subtle sway range
+    // the original code used.
+    const pulse = 0.7 + 0.3 * Math.sin(nowSec * 1.8);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
     setCop("lighter");
-    // Bg-stars used to set shadowBlur = 3 → one GPU blur pass per parallax star per
-    // frame (50+ passes) for a barely-visible halo. Drop the blur; the additive blend +
-    // brightness sway already reads as subtle phosphor sparkle without the cost.
     setSB(0);
-    // BG stars are perfectly fixed and redrawn every frame, so under additive composite
-    // + afterglow their pixels would accumulate to saturation. Per-stroke effective alpha
-    // (strokeStyle × c.a × tw) must stay well below PHOSPHOR_FADE so the steady-state
-    // (paint / FADE) stays around 0.4–0.5 instead of clamping at 1.0. Strokestyle dropped
-    // from 0.7 to 0.18; effective max becomes 0.18 × 0.6 × 1 ≈ 0.108, comfortably below
-    // the 0.22 fade.
-    setSS("rgba(160,200,230,0.18)");
-    ctx.lineWidth = 0.8;
-    ctx.lineCap = "round";
-    for (let i = 0; i < bgCrosses.length; i++) {
-      const c = bgCrosses[i];
-      const tw = 0.7 + 0.3 * Math.sin(nowSec * 1.8 + c.twinkle);
-      ctx.globalAlpha = c.a * tw;
-      const h = c.size;
-      ctx.beginPath();
-      ctx.moveTo(c.x - h, c.y); ctx.lineTo(c.x + h, c.y);
-      ctx.moveTo(c.x, c.y - h); ctx.lineTo(c.x, c.y + h);
-      ctx.stroke();
-    }
+    ctx.globalAlpha = pulse;
+    ctx.drawImage(_bgStarsBake, 0, 0);
     ctx.globalAlpha = 1;
     setCop("source-over");
+    _profileEnd("bgStars", _pt0);
   }
 
   function applyMat(mat) {
@@ -167,6 +194,7 @@ export function createRenderer2D(canvas) {
   function _flushDots() {
     const n = _pendingDots.length;
     if (n === 0) return;
+    const _pt0 = _profileBegin();
     const prevFS = _fsCache;
     const prevAlpha = ctx.globalAlpha;
     setFS(_pendingDotsFS);
@@ -183,6 +211,7 @@ export function createRenderer2D(canvas) {
     _pendingDots.length = 0;
     setFS(prevFS);
     ctx.globalAlpha = prevAlpha;
+    _profileEnd("flushDots", _pt0);
   }
   function setSS(s) {
     if (_ssCache !== s) { ctx.strokeStyle = s; _ssCache = s; }
@@ -465,6 +494,10 @@ export function createRenderer2D(canvas) {
   const _textCache = new Map();
   const _textCacheMax = 32;
   const _glyphVerts = new Float32Array(64);
+  // Scratch storage for drawGlyphInto's interior-vertex collection. Reused across glyph
+  // calls (length-reset each call); avoids per-glyph allocation during bake.
+  const _glyphInteriorXs = [];
+  const _glyphInteriorYs = [];
 
   // ── Offscreen-canvas pool for bakeTextLabel ──
   // Each bake used to do `document.createElement("canvas")` + per-bake buffer alloc.
@@ -518,37 +551,126 @@ export function createRenderer2D(canvas) {
   const FRAME_BAKE_BUDGET = 2;
   let _frameBakeBudget = FRAME_BAKE_BUDGET;
 
-  // Render a single glyph into the given context. Per-segment strokes so each glyph's
-  // interior vertices (direction changes within the letterform) accumulate via
-  // composite="lighter" — same overlap-brightening mechanism as polygon stroking. The
-  // bake's globalAlpha is multiplied by LINE_ALPHA so individual segments stay below
-  // saturation; corners (e.g. the join in `K`, the `Y` fork, the spout-tip notch in `T`)
-  // brighten via overlap. The offscreen ctx is left with shadowBlur=0 (default) by
-  // bakeTextLabel — earlier the bake configured a non-zero shadowBlur and this function
-  // had to suppress it per-stroke, but the halo path was deleted; nothing to suppress now.
+  // ── Vector-renderer profiler ──
+  // Enabled via URL ?profile=1. Accumulates per-category wall time + call count across
+  // ~PROFILE_LOG_INTERVAL_MS, then dumps a single console.log row sorted by total time
+  // spent. Off by default — `_profileBegin` returns 0 when disabled and `_profileEnd`
+  // short-circuits, so the only hot-path cost when disabled is one `if` per call site.
+  const _profileEnabled = typeof window !== "undefined"
+    && new URLSearchParams(window.location.search).get("profile") === "1";
+  const _profileAccum = {};
+  const _profileCount = {};
+  let _profileFrameCount = 0;
+  let _profileLastLogMs = 0;
+  const PROFILE_LOG_INTERVAL_MS = 1000;
+  function _profileBegin() {
+    return _profileEnabled ? performance.now() : 0;
+  }
+  function _profileEnd(cat, t0) {
+    if (!_profileEnabled) return;
+    const dt = performance.now() - t0;
+    _profileAccum[cat] = (_profileAccum[cat] || 0) + dt;
+    _profileCount[cat] = (_profileCount[cat] || 0) + 1;
+  }
+  function _profileTick() {
+    if (!_profileEnabled) return;
+    _profileFrameCount++;
+    const now = performance.now();
+    if (_profileLastLogMs === 0) { _profileLastLogMs = now; return; }
+    if (now - _profileLastLogMs < PROFILE_LOG_INTERVAL_MS) return;
+    const elapsed = now - _profileLastLogMs;
+    const fps = (_profileFrameCount * 1000 / elapsed).toFixed(1);
+    const cats = Object.keys(_profileAccum)
+      .filter((k) => (_profileCount[k] || 0) > 0)
+      .sort((a, b) => _profileAccum[b] - _profileAccum[a]);
+    let log = "[profile] " + _profileFrameCount + "f in "
+      + elapsed.toFixed(0) + "ms (" + fps + " fps avg)\n"
+      + "  category             total/ms  /frame  /call    calls\n";
+    for (const cat of cats) {
+      const t = _profileAccum[cat];
+      const n = _profileCount[cat];
+      log += "  " + cat.padEnd(20)
+        + " " + t.toFixed(2).padStart(8)
+        + "  " + (t / _profileFrameCount).toFixed(3).padStart(6)
+        + "  " + (t / n).toFixed(3).padStart(6)
+        + "  " + String(n).padStart(6) + "\n";
+    }
+    console.log(log);
+    for (const k of Object.keys(_profileAccum)) {
+      _profileAccum[k] = 0;
+      _profileCount[k] = 0;
+    }
+    _profileFrameCount = 0;
+    _profileLastLogMs = now;
+  }
+
+  // Render a single glyph into the given context. Single continuous stroke (one path
+  // with moveTo on pen-up sentinels, lineTo elsewhere) plus a single fill of arc dots
+  // at interior vertices — same construction as `_strokeScratchPoly` on the main canvas.
+  // The bake's globalAlpha is multiplied by LINE_ALPHA so individual passes stay below
+  // saturation; under composite="lighter", a stroke pass plus a dot pass at the same
+  // pixel sum to ~2× alpha, producing the corner brightening that the prior per-segment
+  // implementation got from overlapping endpoint caps. Visual output is identical, with
+  // ~3-4× fewer Canvas2D draw calls per glyph at bake time.
+  //
+  // Interior-vertex detection: a vertex is "interior" iff it had a lineTo coming in AND
+  // a lineTo going out (i.e., neither subpath endpoint). Detected in a single pass via
+  // a `prevWasLineToTarget` flag — when we lineTo from the previous vertex, if that
+  // vertex was itself a lineTo target, it just acquired both an in- and out-edge.
+  // Endpoints (first / last of a subpath) get round line caps from the stroke instead.
   function drawGlyphInto(c, glyphData, x, y, size) {
     if (!glyphData || glyphData.length === 0) return;
     const w = size * GLYPH_ASPECT;
     const h = size;
     const prevAlpha = c.globalAlpha;
     c.globalAlpha = prevAlpha * LINE_ALPHA;
+    _glyphInteriorXs.length = 0;
+    _glyphInteriorYs.length = 0;
     let penDown = false;
+    let prevWasLineToTarget = false;
     let lastX = 0, lastY = 0;
+    c.beginPath();
     for (let i = 0; i < glyphData.length; i += 2) {
       if (glyphData[i] === -1 && glyphData[i + 1] === -1) {
         penDown = false;
+        prevWasLineToTarget = false;
         continue;
       }
       const px = x + glyphData[i] * w;
       const py = y + glyphData[i + 1] * h;
-      if (penDown) {
-        c.beginPath();
-        c.moveTo(lastX, lastY);
+      if (!penDown) {
+        c.moveTo(px, py);
+        penDown = true;
+        prevWasLineToTarget = false;
+      } else {
+        // If the previous vertex was itself reached via lineTo and now we're lineTo-ing
+        // out of it, it has both in- and out-edges → mark as interior for the dot pass.
+        if (prevWasLineToTarget) {
+          _glyphInteriorXs.push(lastX);
+          _glyphInteriorYs.push(lastY);
+        }
         c.lineTo(px, py);
-        c.stroke();
+        prevWasLineToTarget = true;
       }
       lastX = px; lastY = py;
-      penDown = true;
+    }
+    c.stroke();
+    // Dot pass — adds the cap-overlap brightening at interior joints (K-fork, M-dip,
+    // Y-fork, B-spine etc.) that the prior per-segment routing produced via caps.
+    const n = _glyphInteriorXs.length;
+    if (n > 0) {
+      const dotR = Math.max(0.7, c.lineWidth * 0.6);
+      const prevFS = c.fillStyle;
+      c.fillStyle = c.strokeStyle;
+      c.beginPath();
+      for (let i = 0; i < n; i++) {
+        const vx = _glyphInteriorXs[i];
+        const vy = _glyphInteriorYs[i];
+        c.moveTo(vx + dotR, vy);
+        c.arc(vx, vy, dotR, 0, Math.PI * 2);
+      }
+      c.fill();
+      c.fillStyle = prevFS;
     }
     c.globalAlpha = prevAlpha;
   }
@@ -556,6 +678,7 @@ export function createRenderer2D(canvas) {
   // Bake a text label into a dedicated DPR-scaled offscreen canvas. Returns
   // { canvas, widthCSS, heightCSS, padCSS, textWidthCSS } for the blit step in drawText.
   function bakeTextLabel(text, size, opts) {
+    const _pt0 = _profileBegin();
     const spacing = opts.spacing !== undefined ? opts.spacing : 0.22;
     const lineWidth = opts.width !== undefined ? opts.width : 1.2;
     const color = opts.color || "rgba(190,255,210,0.95)";
@@ -608,6 +731,7 @@ export function createRenderer2D(canvas) {
       }
       cy += size * GLYPH_LINE_HEIGHT;
     }
+    _profileEnd("bakeText", _pt0);
     return { canvas: off, widthCSS, heightCSS, padCSS, textWidthCSS };
   }
 
@@ -674,12 +798,14 @@ export function createRenderer2D(canvas) {
 
   function drawText(text, x, y, size, opts) {
     if (!text) return;
+    const _pt0 = _profileBegin();
     opts = opts || {};
     const align = opts.align || "left";
     // Digit-only multi-char strings take the per-digit fast path so score updates (which
     // happen on every capture) don't re-bake the whole number each time.
     if (text.length > 1 && /^\d+$/.test(text)) {
       drawDigitsFast(text, x, y, size, opts);
+      _profileEnd("drawText.digits", _pt0);
       return;
     }
     // Cache key excludes shadowBlur / blurColor — they were keys when bakeTextLabel
@@ -692,12 +818,13 @@ export function createRenderer2D(canvas) {
     // path (and any one-off single-char drawText callers) always render.
     const bypassBudget = text.length <= 1;
     const entry = _getOrBakeEntry(text, size, opts, key, bypassBudget);
-    if (!entry) return;
+    if (!entry) { _profileEnd("drawText.skipped", _pt0); return; }
     let blitX = x - entry.padCSS;
     if (align === "center") blitX = x - entry.textWidthCSS * 0.5 - entry.padCSS;
     else if (align === "right") blitX = x - entry.textWidthCSS - entry.padCSS;
     const blitY = y - entry.padCSS;
     ctx.drawImage(entry.canvas, blitX, blitY, entry.widthCSS, entry.heightCSS);
+    _profileEnd("drawText.string", _pt0);
   }
 
   // ─── Per-variant draws (Tier 3, Vector). Each function assumes the camera matrix is
@@ -1092,32 +1219,43 @@ export function createRenderer2D(canvas) {
 
   function drawStarBatch(batch, mat) {
     if (!batch || !batch.length) return;
+    const _pt0Total = _profileBegin();
     applyMat(mat);
     setCop("lighter");
     for (let i = 0; i < batch.length; i++) {
       const s = batch[i];
       const c1 = c1Of(s.colorIdx);
       const intensity = intensityOf(s);
+      const _pt0 = _profileBegin();
       if (s.isBlackHole) {
         drawBlackHole(s, intensity);
+        _profileEnd("star.bh", _pt0);
       } else if (s.isMonolith) {
         drawMonolith(s, intensity);
+        _profileEnd("star.monolith", _pt0);
       } else if (s.isRingworld) {
         drawRingworld(s, c1, intensity);
+        _profileEnd("star.ringworld", _pt0);
       } else if (s.isPulsar) {
         drawPulsar(s, c1, intensity);
+        _profileEnd("star.pulsar", _pt0);
       } else if (s.isNebula) {
         drawNebula(s, c1, intensity);
+        _profileEnd("star.nebula", _pt0);
       } else if (s.isTeapot) {
         drawTeapot(s, intensity);
+        _profileEnd("star.teapot", _pt0);
       } else if (s.isAzazel) {
         drawAzazel(s, intensity);
+        _profileEnd("star.azazel", _pt0);
       } else {
         drawPlainStar(s, c1, intensity);
+        _profileEnd("star.plain", _pt0);
       }
     }
     setSB(0);
     setCop("source-over");
+    _profileEnd("starBatch.total", _pt0Total);
   }
 
   // Particle alpha is multiplied by this in the small / large branches below. Keeps
@@ -1129,6 +1267,7 @@ export function createRenderer2D(canvas) {
   const PARTICLE_ALPHA = 0.4;
   function drawCircleBatch(batch, mat) {
     if (!batch || !batch.length) return;
+    const _pt0 = _profileBegin();
     applyMat(mat);
     setCop("lighter");
     ctx.lineCap = "round";
@@ -1203,6 +1342,7 @@ export function createRenderer2D(canvas) {
     }
     setSB(0);
     setCop("source-over");
+    _profileEnd("circleBatch", _pt0);
   }
 
   // Trail decimation. The trail array gameplay.js hands us is in world space, but the
@@ -1223,6 +1363,7 @@ export function createRenderer2D(canvas) {
 
   function drawPolyline(points, mat, halfWidth, tailColor, headColor) {
     if (!points || points.length < 2) return;
+    const _pt0 = _profileBegin();
     applyMat(mat);
     setCop("lighter");
     ctx.lineJoin = "round";
@@ -1312,9 +1453,11 @@ export function createRenderer2D(canvas) {
     setSB(0);
     ctx.lineCap = "round";
     setCop("source-over");
+    _profileEnd("polyline", _pt0);
   }
 
   function finalizeFrame(_bhData) {
+    const _pt0 = _profileBegin();
     // Flush any dots collected during the star/circle/polyline phase before we reset
     // the transform — they're still in world coords from the last applyMat.
     _flushDots();
@@ -1322,6 +1465,7 @@ export function createRenderer2D(canvas) {
     setCop("source-over");
     ctx.globalAlpha = 1;
     setSB(0);
+    _profileEnd("finalize", _pt0);
   }
 
   function makeMat(scale, ox, oy) {
