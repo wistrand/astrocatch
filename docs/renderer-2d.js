@@ -464,15 +464,14 @@ export function createRenderer2D(canvas) {
   // composite="lighter" — same overlap-brightening mechanism as polygon stroking. The
   // bake's globalAlpha is multiplied by LINE_ALPHA so individual segments stay below
   // saturation; corners (e.g. the join in `K`, the `Y` fork, the spout-tip notch in `T`)
-  // brighten via overlap. shadowBlur is forced to 0 here: keeping the halo would refill
-  // the corner regions and erase the accumulation signal, mirroring the polygon path.
+  // brighten via overlap. The offscreen ctx is left with shadowBlur=0 (default) by
+  // bakeTextLabel — earlier the bake configured a non-zero shadowBlur and this function
+  // had to suppress it per-stroke, but the halo path was deleted; nothing to suppress now.
   function drawGlyphInto(c, glyphData, x, y, size) {
     if (!glyphData || glyphData.length === 0) return;
     const w = size * GLYPH_ASPECT;
     const h = size;
     const prevAlpha = c.globalAlpha;
-    const prevBlur = c.shadowBlur;
-    c.shadowBlur = 0;
     c.globalAlpha = prevAlpha * LINE_ALPHA;
     let penDown = false;
     let lastX = 0, lastY = 0;
@@ -493,7 +492,6 @@ export function createRenderer2D(canvas) {
       penDown = true;
     }
     c.globalAlpha = prevAlpha;
-    c.shadowBlur = prevBlur;
   }
 
   // Bake a text label into a dedicated DPR-scaled offscreen canvas. Returns
@@ -502,8 +500,6 @@ export function createRenderer2D(canvas) {
     const spacing = opts.spacing !== undefined ? opts.spacing : 0.22;
     const lineWidth = opts.width !== undefined ? opts.width : 1.2;
     const color = opts.color || "rgba(190,255,210,0.95)";
-    const blurColor = opts.blurColor || color;
-    const shadowBlur = opts.shadowBlur !== undefined ? opts.shadowBlur : 6;
     const advance = size * (GLYPH_ASPECT + spacing);
     const lines = String(text).toUpperCase().split("\n");
     let maxLineW = 0;
@@ -513,9 +509,12 @@ export function createRenderer2D(canvas) {
       const w = line.length * advance - size * spacing;
       if (w > maxLineW) maxLineW = w;
     }
-    // shadowBlur halo extends ~`blur` px past the stroke; pad covers that plus a small
-    // safety margin so the bake's halo doesn't clip at the offscreen canvas edge.
-    const padCSS = shadowBlur + 4;
+    // Small fixed pad — just enough so antialiasing residue at the stroke edges doesn't
+    // clip against the offscreen-canvas border. Earlier the pad scaled with shadowBlur
+    // to fit a halo around the strokes, but the bake-time halo was removed (drawGlyphInto
+    // zeroed shadowBlur for every stroke, so no halo ever painted); shrinking the pad
+    // reduces the offscreen canvas size with no visual effect.
+    const padCSS = 4;
     const textWidthCSS = maxLineW;
     const textHeightCSS = lines.length * size * GLYPH_LINE_HEIGHT;
     const widthCSS = textWidthCSS + padCSS * 2;
@@ -531,8 +530,6 @@ export function createRenderer2D(canvas) {
     // polygon stroker uses on the main canvas.
     oc.globalCompositeOperation = "lighter";
     oc.strokeStyle = color;
-    oc.shadowColor = blurColor;
-    oc.shadowBlur = shadowBlur;
     oc.lineWidth = lineWidth;
     oc.lineCap = "round";
     oc.lineJoin = "round";
@@ -563,10 +560,11 @@ export function createRenderer2D(canvas) {
     if (!text) return;
     opts = opts || {};
     const align = opts.align || "left";
+    // Cache key excludes shadowBlur / blurColor — they were keys when bakeTextLabel
+    // rendered a shadow halo, but the bake-time halo was removed, so callers passing
+    // different shadowBlur values produce bit-identical bakes that should share an entry.
     const key = text + "\x01" + size + "\x01" + (opts.color || "") + "\x01"
               + (opts.width === undefined ? "" : opts.width) + "\x01"
-              + (opts.shadowBlur === undefined ? "" : opts.shadowBlur) + "\x01"
-              + (opts.blurColor || "") + "\x01"
               + (opts.spacing === undefined ? "" : opts.spacing);
     let entry = _textCache.get(key);
     if (!entry) {

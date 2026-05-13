@@ -438,7 +438,7 @@ function announceVectorMode() {
   }, 800);
   setCanvasFlash("bonus", {
     text: msg, color: rgbaColor,
-    size: 18, width: 1.5, shadowBlur: 8,
+    size: 18, width: 1.5,
     fadeInMs: 80, holdMs: 800, fadeOutMs: 280,
     y: 130, anchor: "top",
   });
@@ -2501,7 +2501,6 @@ function setCanvasFlash(name, opts) {
     fadeOutMs: opts.fadeOutMs !== undefined ? opts.fadeOutMs : 300,
     anchor: opts.anchor || "top",
     y: opts.y !== undefined ? opts.y : 100,
-    shadowBlur: opts.shadowBlur !== undefined ? opts.shadowBlur : 6,
   };
 }
 function renderCanvasFlashes() {
@@ -2529,7 +2528,6 @@ function renderCanvasFlashes() {
     renderer.drawText(f.text, W / 2, y, f.size, {
       color: f.color,
       width: f.width,
-      shadowBlur: f.shadowBlur,
       align: "center",
     });
   }
@@ -2562,7 +2560,7 @@ function showChallengeBeatFlash() {
   setCanvasFlash("challengeBeat", {
     text: "challenge beaten",
     color: "rgba(255,226,98,1)",
-    size: 22, width: 1.6, shadowBlur: 10,
+    size: 22, width: 1.6,
     fadeInMs: 300, holdMs: 1500, fadeOutMs: 900,
     y: 90, anchor: "top",
   });
@@ -2611,7 +2609,7 @@ function showChapterFlash() {
   setCanvasFlash("chapter", {
     text: title,
     color: "rgba(255,220,160,0.95)",
-    size: 14, width: 1.2, shadowBlur: 6,
+    size: 14, width: 1.2,
     fadeInMs: 450, holdMs: 2400, fadeOutMs: 450,
     y: 100, anchor: "bottom",
   });
@@ -2644,7 +2642,7 @@ function showBonusFlash(bonus, streak) {
   setCanvasFlash("bonus", {
     text: text,
     color: bonus >= 3 ? "rgba(255,170,60,1)" : "rgba(88,224,251,1)",
-    size: 18, width: 1.5, shadowBlur: 8,
+    size: 18, width: 1.5,
     fadeInMs: 80, holdMs: 380, fadeOutMs: 280,
     y: 130, anchor: "top",
   });
@@ -2674,7 +2672,7 @@ function showCometFlash() {
   setCanvasFlash("bonus", {
     text: "COMET +" + COMET_BONUS,
     color: "rgba(88,224,251,1)",
-    size: 18, width: 1.5, shadowBlur: 8,
+    size: 18, width: 1.5,
     fadeInMs: 80, holdMs: 270, fadeOutMs: 280,
     y: 130, anchor: "top",
   });
@@ -4048,11 +4046,11 @@ function draw() {
     if (_ctx2d) {
       _ctx2d.setTransform(DPR, 0, 0, DPR, 0, 0);
       renderer.drawText(String(score), W / 2, 20, 30,
-        { color: "rgba(180,255,200,0.95)", width: 1.6, shadowBlur: 8, align: "center" });
+        { color: "rgba(180,255,200,0.95)", width: 1.6, align: "center" });
       renderer.drawText(
         document.getElementById("sub").textContent || "",
         W / 2, 64, 11,
-        { color: "rgba(140,200,170,0.75)", width: 1.0, shadowBlur: 4, align: "center" });
+        { color: "rgba(140,200,170,0.75)", width: 1.0, align: "center" });
       // Intro overlay vector pass. Reads visibility / textContent from the (display:none)
       // HTML elements so the existing intro state machine still drives content unchanged.
       if (introActive && ball && stars.length > 0) {
@@ -4071,7 +4069,7 @@ function draw() {
           const sx = star.x * camRenderScale + camRenderOx;
           const sy = (star.y + star.r) * camRenderScale + camRenderOy + 18;
           renderer.drawText(wrapVectorText(text, 240, tutSize), sx, sy, tutSize, {
-            color: tutColor, width: 1.1, shadowBlur: 5, align: "center",
+            color: tutColor, width: 1.1, align: "center",
           });
         }
       }
