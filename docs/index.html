@@ -346,17 +346,35 @@
   }
 
   /* ─── Modal overlays (start screen, pause, game over) ─── */
+  /* Top-aligned with a generous top padding so growing children (the resume / share card
+     flipping open) push siblings BELOW them down rather than shifting the whole stack
+     upward. A center-justified stack would yank the title up half the growth distance,
+     which reads as the page jumping. overflow:hidden so a short viewport pushes the
+     description / repo link past the viewport edge silently instead of summoning a
+     scroll bar — secondary copy that gets cut is acceptable; the card and primary
+     buttons must stay readable. */
   .overlay {
     position: absolute;
     inset: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
+    padding: max(36px, env(safe-area-inset-top, 0px) + 12px) 16px
+             max(24px, env(safe-area-inset-bottom, 0px) + 12px);
+    box-sizing: border-box;
+    overflow: hidden;
     background: rgba(10, 10, 18, 0.88);
     backdrop-filter: blur(16px);
     transition: opacity 0.35s;
     pointer-events: auto;
+  }
+  /* Lock direct children to their natural size — flex-shrink:1 (default) was squashing the
+     welcome info card when the share card expanded past the viewport. With shrink:0, the
+     stack keeps each item at its content size and overflow:hidden trims whatever falls past
+     the bottom of the overlay. */
+  .overlay > * {
+    flex-shrink: 0;
   }
 
   /* The game-over overlay is much more transparent so the looping
@@ -373,87 +391,41 @@
     #gameover-keys { display: none; }
   }
 
-  /* Challenge-out card: a CSS-3D flip-reveal. Front is a single
-     "get challenge link" button; the QR + info + copy-link sit
-     on the back face and only render to the eye after the flip.
-     Both faces use the same panel styling (border / background /
-     radius) so the flip looks like one card spinning rather than
-     two stacked rectangles. */
-  /* The card reserves its FULL flipped size at all times so
-     the surrounding overlay layout doesn't shift when the card
-     opens or closes. Unflipped state shows just a small dim
-     text link at the top of that reserved area; flipped state
-     reveals the panel filling the whole reserved area. */
-  #challenge-out {
-    margin-top: 18px;
+  /* Challenge-out card: simple max-height expand instead of 3D flip. The earlier 3D-flip
+     implementation worked only when the wrapper height was fixed; combining it with a
+     wrapper-height transition produced unpredictable clipping / overlap across browsers
+     because backface-visibility, child-inherited backface-visibility, and overflow:hidden
+     on perspective ancestors interact in ways that aren't worth debugging cross-browser
+     for what's essentially a "tap to reveal a panel" UI.
+     Class-based — `.challenge-out` covers both the gameover and the start-screen resume
+     instance. The gameover instance keeps its `#challenge-out` id for JS lookup; the
+     resume instance has its own id. */
+  .challenge-out {
+    /* Sits below either #start-btn / #resume-btn / #gameover-keys — the top margin is the
+       gap between the button (above) and the share-card. Bottom margin opens equivalent
+       breathing room before the next sibling. */
+    margin: 16px 0 4px;
     width: 240px;
-    /* Tall enough to fit info-text + QR (198) + button + ~24
-       padding on each end + flex gaps with breathing room. */
-    height: 348px;
-    perspective: 1200px;
     align-self: center;
-  }
-  #challenge-out .flip-inner {
-    position: relative;
-    width: 100%;
-    height: 100%;
-    transform-style: preserve-3d;
-    transition: transform 0.55s cubic-bezier(0.4, 0.0, 0.2, 1);
-  }
-  #challenge-out.flipped .flip-inner {
-    transform: rotateY(180deg);
-  }
-  #challenge-out .flip-front,
-  #challenge-out .flip-back {
-    position: absolute;
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    box-sizing: border-box;
-  }
-  #challenge-out .flip-front {
-    /* Sits at the top of the reserved card area, small height,
-       so the text link reads as continuing-from-the-buttons
-       rather than floating in the middle of empty space. */
-    top: 0; left: 0; right: 0;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    /* Belt-and-braces hide for the flip: backface-visibility
-       isn't honoured on <button> elements in some browsers
-       (the text bleeds through, mirrored). Fade out as the
-       flip reaches its midpoint so the back face is the only
-       thing visible by the time the rotation completes. */
-    opacity: 1;
-    transition: opacity 0.18s ease;
-    pointer-events: auto;
-  }
-  #challenge-out.flipped .flip-front {
-    opacity: 0;
-    transition: opacity 0.18s ease 0.22s;
-    pointer-events: none;
-  }
-  #challenge-out .flip-back {
-    /* Fills the whole reserved card area. translateZ pushes
-       the back face slightly forward so it reliably wins the
-       depth fight against the front face after the parent
-       flips (works around backface-visibility edge cases on
-       some browsers where the front face's edges leak). */
-    inset: 0;
-    transform: rotateY(180deg) translateZ(1px);
-    padding: 22px 14px;
     display: flex;
     flex-direction: column;
+    align-items: stretch;
+  }
+  /* Hidden state — collapsed margin + no visible children so the slot occupies zero
+     vertical space when there's no saved run / no death context to share. */
+  .challenge-out.hidden {
+    display: none;
+  }
+  .challenge-out-flip {
+    /* Stays visible in BOTH states. Tap to expand, tap again to collapse — same screen
+       position serves as both opener and closer, so the gesture is symmetric and there's
+       no mouse move between actions. Flex-centered text. The button text is updated by
+       JS to reflect state ("get challenge link" ↔ "close"). */
+    display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    background: rgba(20, 30, 60, 0.35);
-    border: 1px solid rgba(140, 210, 255, 0.25);
-    border-radius: 6px;
-  }
-  #challenge-out-flip {
     width: 100%;
-    height: 100%;
+    height: 32px;
     background: transparent;
     border: none;
     color: rgba(255, 255, 255, 0.4);
@@ -464,28 +436,62 @@
     font-family: inherit;
     cursor: pointer;
     white-space: nowrap;
-    transition: color 0.2s;
+    transition: color 0.2s ease;
   }
-  #challenge-out-flip:hover {
+  .challenge-out-flip:hover {
     color: rgba(255, 255, 255, 0.85);
+  }
+  .challenge-out-panel {
+    box-sizing: border-box;
+    width: 100%;
+    /* Collapsed default — max-height transitions cleanly even though the natural
+       content height varies; the flipped state uses a value larger than any expected
+       content so the animation finishes at content-height, not at the cap. */
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
+    padding: 0 14px;
+    background: rgba(20, 30, 60, 0);
+    border: 1px solid rgba(140, 210, 255, 0);
+    border-radius: 6px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    pointer-events: none;
+    transition: max-height 0.4s ease, opacity 0.3s ease 0.05s,
+                padding 0.4s ease, background-color 0.3s ease,
+                border-color 0.3s ease;
+  }
+  .challenge-out.flipped .challenge-out-panel {
+    max-height: 500px;
+    opacity: 1;
+    padding: 18px 14px 22px;
+    background: rgba(20, 30, 60, 0.35);
+    border-color: rgba(140, 210, 255, 0.25);
+    pointer-events: auto;
   }
   /* `display: none` can't be transitioned, so we keep both states in flow and animate
      max-height / opacity / collapsing margin+padding. The hard cap (max-height: 280px) is the
      fixed display height of the flip-card inside; on expand the transition reads 0 → 280px
      and the animation feels natural. */
+  /* Welcome card: sender's challenge summary. Block layout with text-align:center — children
+     stack naturally and the close-X (absolute-positioned) floats above. The share affordance
+     is no longer nested here; it sits as a sibling .challenge-out below this card so it has
+     its own width / height / button-toggle scope. */
   #challenge {
     position: relative;
-    margin: 16px auto 12px;
-    padding: 14px 0;
+    margin: 8px auto 4px;
+    padding: 12px 24px;
     border: 1px solid rgba(140, 210, 255, 0.25);
     border-radius: 6px;
     background: rgba(20, 30, 60, 0.35);
     width: 280px;
+    box-sizing: border-box;
     overflow: hidden;
-    max-height: 310px;
+    max-height: 360px;
     opacity: 1;
-    perspective: 1200px;
-    cursor: pointer;
+    text-align: center;
     transition: max-height 0.35s ease, opacity 0.25s ease,
                 margin 0.35s ease, padding 0.35s ease, border-width 0.35s ease;
   }
@@ -498,64 +504,6 @@
     padding-bottom: 0;
     border-top-width: 0;
     border-bottom-width: 0;
-  }
-  /* Flip mechanics for the welcome card. .flip-inner is the rotating element; .flip-front
-     and .flip-back are absolute-positioned siblings, each backface-hidden so only one shows
-     at a time. Click anywhere on the card (except the close-X, which stopPropagation()s)
-     toggles `.flipped`. */
-  #challenge .flip-inner {
-    position: relative;
-    width: 100%;
-    height: 270px;
-    transform-style: preserve-3d;
-    transition: transform 0.55s cubic-bezier(0.4, 0.0, 0.2, 1);
-  }
-  #challenge.flipped .flip-inner {
-    transform: rotateY(180deg);
-  }
-  #challenge .flip-front,
-  #challenge .flip-back {
-    position: absolute;
-    inset: 0;
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    padding: 0 24px;
-    box-sizing: border-box;
-  }
-  /* Belt-and-braces hide for the flip: backface-visibility isn't honoured on every browser
-     (text bleeds through mirrored on some Safari / Chromium combos). Fade the front out as
-     the flip reaches its midpoint so the back face is the only thing visible by the time the
-     rotation completes; do the inverse for the back face. The 220 ms delay matches the
-     transform's midpoint (≈0.55 s / 2). */
-  #challenge .flip-front {
-    opacity: 1;
-    transition: opacity 0.2s ease 0.18s;
-  }
-  #challenge.flipped .flip-front {
-    opacity: 0;
-    transition: opacity 0.2s ease 0.18s;
-  }
-  #challenge .flip-back {
-    transform: rotateY(180deg) translateZ(1px);
-    opacity: 0;
-    transition: opacity 0.2s ease;
-    gap: 0;
-  }
-  #challenge.flipped .flip-back {
-    opacity: 1;
-    transition: opacity 0.2s ease 0.22s;
-  }
-  #challenge-back-qr {
-    width: auto;
-    height: auto;
-    image-rendering: pixelated;
-    border-radius: 4px;
-    box-shadow: 0 0 12px rgba(140, 210, 255, 0.18);
   }
   #challenge-invalid {
     font-size: 11px;
@@ -628,7 +576,11 @@
   }
   #challenge-close, #challenge-go-close {
     position: absolute;
-    top: 4px;
+    /* Vertically align the button's content with the first label row ("challenge")
+       inside #challenge: card padding-top is 12px and the label line-box centres at
+       ≈10px below that, putting label-centre at y≈22. With button height 24, top:10
+       puts button-centre at y=22 — aligned. */
+    top: 10px;
     right: 4px;
     width: 24px;
     height: 24px;
@@ -647,9 +599,8 @@
     justify-content: center;
     appearance: none;
     -webkit-appearance: none;
-    /* Lift above the flip-card siblings so the close-X stays clickable. Without z-index the
-       .flip-inner (later in DOM) stacks on top and intercepts the click, causing the card to
-       flip instead of dismiss. */
+    /* Sit above the share-card siblings so the close-X stays clickable regardless of
+       stacking order under the card's flex layout. */
     z-index: 2;
   }
   #challenge-close:hover, #challenge-go-close:hover {
@@ -670,20 +621,21 @@
     color: rgba(255, 255, 255, 0.65);
   }
   #challenge-variants:empty, #challenge-go-variants:empty { display: none; }
-  #challenge-out-link {
+  .challenge-out-link {
     display: inline-block;
     line-height: 0; /* kill anchor descender gap below the canvas */
     text-decoration: none;
   }
-  #challenge-out-info {
+  .challenge-out-info {
     font-size: 11px;
     letter-spacing: 1px;
     color: rgba(255, 255, 255, 0.4);
     text-align: center;
     max-width: 220px;
     line-height: 1.4;
+    cursor: pointer;
   }
-  #challenge-out-qr {
+  .challenge-out-qr {
     /* Display at the backing-store's native pixel size — any
        non-integer downscale produces uneven module widths that
        trip stricter QR scanners. The encoder picks the canvas
@@ -747,6 +699,9 @@
     background-clip: text;
     -webkit-text-fill-color: transparent;
     letter-spacing: -1.8px;
+    /* Override browser default ~0.67em vertical margin so the start-screen stack stays
+       tight and the share card below START gets more room. */
+    margin: 0;
   }
 
   .tag {
@@ -764,7 +719,7 @@
     color: rgba(255, 255, 255, 0.55);
     max-width: 340px;
     text-align: center;
-    margin-top: 22px;
+    margin-top: 40px;
     line-height: 1.65;
   }
 
@@ -797,10 +752,10 @@
     font-size: 17px;
     font-weight: 700;
     letter-spacing: 1.8px;
-    padding: 15px 52px;
+    padding: 14px 52px;
     border-radius: 12px;
     cursor: pointer;
-    margin-top: 28px;
+    margin-top: 14px;
     box-shadow: 0 0 34px rgba(250, 109, 176, 0.32);
     transition: transform 0.1s;
   }
@@ -880,29 +835,53 @@
          from a different version). Content is set via textContent only — never innerHTML — so
          even a hash like #<script> is rendered as literal text, not parsed. -->
     <div id="challenge-invalid" class="hidden"></div>
-    <!-- Welcome card: a flip card with sender stats on the front and a QR for the same
-         challenge URL on the back. Any click on the card outside the close button toggles the
-         flip; close-X dismisses the challenge entirely (uses stopPropagation so its click never
-         reaches the card's flip toggle). -->
+    <!-- Welcome card: sender's challenge summary. Stats only; the share-card affordance
+         lives as a separate sibling below so it has its own layout space and the welcome
+         card's text stack doesn't compete with the button + panel. Close-X dismisses the
+         challenge entirely. -->
     <div id="challenge" class="hidden">
       <button id="challenge-close" type="button" aria-label="dismiss challenge">×</button>
-      <div class="flip-inner">
-        <div class="flip-front">
-          <!-- Sender's procedural run title — populated by showChallengeCard. -->
-          <div id="challenge-title"></div>
-          <div class="label">challenge</div>
-          <div id="challenge-score">0</div>
-          <div id="challenge-line" class="label">0 stars</div>
-          <div id="challenge-variants" class="label"></div>
-        </div>
-        <div class="flip-back">
-          <canvas id="challenge-back-qr" aria-label="challenge QR code"></canvas>
-          <button id="challenge-back-copy" class="link-btn" type="button">copy link</button>
-        </div>
-      </div>
+      <div class="label">challenge</div>
+      <!-- Sender's procedural run title — populated by showChallengeCard. Sits below
+           "challenge" so the label introduces the title, not the other way around. -->
+      <div id="challenge-title"></div>
+      <div id="challenge-score">0</div>
+      <div id="challenge-line" class="label">0 stars</div>
+      <div id="challenge-variants" class="label"></div>
     </div>
     <button id="start-btn">START</button>
+    <!-- Share affordance for the incoming challenge URL — sits directly under START in the
+         same relative position the resume share card sits under RESUME. Same .challenge-out
+         pattern as the gameover and resume instances. Shown together with #challenge
+         (hidden / revealed by showChallengeCard's `c` truthiness). -->
+    <div id="challenge-out-welcome" class="challenge-out hidden">
+      <button class="challenge-out-flip" type="button">get challenge link</button>
+      <div class="challenge-out-panel">
+        <div class="challenge-out-info">challenge link is score, run summary and game seed</div>
+        <a class="challenge-out-link" href="#" target="_blank" rel="noopener"
+           aria-label="open challenge link">
+          <canvas class="challenge-out-qr" aria-label="challenge QR code"></canvas>
+        </a>
+        <button class="link-btn challenge-out-copy">copy challenge link</button>
+      </div>
+    </div>
     <button id="resume-btn" style="visibility:hidden">RESUME</button>
+    <!-- Resume-card: mirrors the gameover #challenge-out, populated when a saved run exists.
+         Lets a player who reloaded mid-run share the same challenge URL they'd get from the
+         death-screen card without first having to die. JS toggles `.hidden` from
+         updateResumeButtonVisibility(); inner queries are class-based so renderChallengeCard
+         resolves both this instance and the gameover one identically. -->
+    <div id="challenge-out-resume" class="challenge-out hidden">
+      <button class="challenge-out-flip" type="button">get challenge link</button>
+      <div class="challenge-out-panel">
+        <div class="challenge-out-info">challenge link is score, run summary and game seed</div>
+        <a class="challenge-out-link" href="#" target="_blank" rel="noopener"
+           aria-label="open challenge link">
+          <canvas class="challenge-out-qr" aria-label="challenge QR code"></canvas>
+        </a>
+        <button class="link-btn challenge-out-copy">copy challenge link</button>
+      </div>
+    </div>
     <div class="desc">You're orbiting a star. <b>Tap</b> when your direction aims at the next
       one. The game picks a boost; gravity bends the path and captures you on the other side.
       Release within one rotation for bonus points.</div>
@@ -928,17 +907,17 @@
     <button id="continue-btn">CONTINUE</button>
     <div id="gameover-keys" class="tag" style="margin-top:12px">
       [space] restart · [enter] continue</div>
-    <div id="challenge-out">
-      <div class="flip-inner">
-        <button id="challenge-out-flip" class="flip-front" type="button">get challenge link</button>
-        <div class="flip-back">
-          <div id="challenge-out-info">challenge link is score, run summary and game seed</div>
-          <a id="challenge-out-link" href="#" target="_blank" rel="noopener"
-             aria-label="open challenge link">
-            <canvas id="challenge-out-qr" aria-label="challenge QR code"></canvas>
-          </a>
-          <button id="challenge-out-copy" class="link-btn">copy challenge link</button>
-        </div>
+    <div id="challenge-out" class="challenge-out">
+      <button id="challenge-out-flip"
+              class="challenge-out-flip" type="button">get challenge link</button>
+      <div class="challenge-out-panel">
+        <div id="challenge-out-info" class="challenge-out-info">challenge link is score, run summary and game seed</div>
+        <a id="challenge-out-link" class="challenge-out-link" href="#" target="_blank" rel="noopener"
+           aria-label="open challenge link">
+          <canvas id="challenge-out-qr" class="challenge-out-qr"
+                  aria-label="challenge QR code"></canvas>
+        </a>
+        <button id="challenge-out-copy" class="link-btn challenge-out-copy">copy challenge link</button>
       </div>
     </div>
   </div>

@@ -92,11 +92,16 @@ function updateDeathTargetMark() {
 function showChallengeCard() {
   const wrap = document.getElementById("challenge");
   if (!wrap) return;
+  // The share-card sibling. Visible alongside the welcome card when there's a valid
+  // incoming challenge, hidden otherwise. Both are toggled together so the start-screen
+  // layout doesn't carry an empty share button when there's nothing to share.
+  const shareScope = document.getElementById("challenge-out-welcome");
   const c = _incomingChallenge;
   // No (or invalid) hash → hide welcome card AND the inline death annotation. This also handles
   // the path where a hashchange wipes a previously-valid challenge.
   if (!c) {
     wrap.classList.add("hidden");
+    if (shareScope) shareScope.classList.add("hidden");
     setInvalidChallengeIndicator(_invalidChallengeHash);
     setDeathTargetInline(null);
     const titleEl = document.getElementById("challenge-title");
@@ -135,44 +140,15 @@ function showChallengeCard() {
   // so sender and recipient see identical labels.
   const titleEl = document.getElementById("challenge-title");
   if (titleEl) titleEl.textContent = composeRunTitle(c);
-  // Reset to front face every time the welcome card is (re)populated — a hashchange that
-  // brings a NEW challenge while the previous one was flipped should land on stats, not QR.
-  wrap.classList.remove("flipped");
-  // Render the back-face QR for the CURRENT URL, then asynchronously bake it into an animated
-  // APNG matching the death-screen card (scale 6, 198 px native on v3, 32-frame seamless loop
-  // with rotating-light sun). The slot might hold either a fresh <canvas> or an <img> from a
-  // previous showChallengeCard call (after a hashchange); ensure we have a canvas before the
-  // bake.
-  let backCanvas = document.getElementById("challenge-back-qr");
-  if (backCanvas) {
-    if (backCanvas.tagName === "IMG") {
-      const fresh = document.createElement("canvas");
-      fresh.id = "challenge-back-qr";
-      fresh.setAttribute("aria-label", "challenge QR code");
-      backCanvas.parentNode.replaceChild(fresh, backCanvas);
-      backCanvas = fresh;
-    }
-    const qrText = location.href.toUpperCase();
-    const matrix = makeQrMatrix(qrText, "M");
-    const SCALE = 6, QUIET = 2;
-    renderQrToCanvas(matrix, backCanvas, SCALE, QUIET);
-    // Snapshot the bare QR (no logo yet) for the APNG bake's delta-frame underlay.
-    if (!_welcomeBareQr
-        || _welcomeBareQr.width !== backCanvas.width
-        || _welcomeBareQr.height !== backCanvas.height) {
-      _welcomeBareQr = document.createElement("canvas");
-      _welcomeBareQr.width = backCanvas.width;
-      _welcomeBareQr.height = backCanvas.height;
-    }
-    const cacheCtx = _welcomeBareQr.getContext("2d");
-    cacheCtx.clearRect(0, 0, _welcomeBareQr.width, _welcomeBareQr.height);
-    cacheCtx.drawImage(backCanvas, 0, 0);
-    // Static first frame on the visible canvas so the back face has something to show before
-    // the bake finishes (~700 ms). The bake then replaces the canvas with an animated <img>.
-    drawSunLogo(backCanvas, matrix.size, SCALE, QUIET);
-    bakeWelcomeApng(backCanvas, matrix, SCALE, QUIET).catch((err) => {
-      console.log("[challenge] welcome-card APNG bake failed:", err);
-    });
+  // The QR-share affordance is the same .challenge-out instance the gameover and resume
+  // cards use, sitting as a sibling element below the welcome stats card. Same button +
+  // collapsible panel mechanic, same renderChallengeCard, same bake pipeline. The decoded
+  // stats bag `c` matches buildChallengeUrl's input shape, so its computed URL round-trips
+  // back to location.href. renderChallengeCard resets the .flipped state on (re)render so
+  // a hashchange bringing a NEW challenge starts collapsed.
+  if (shareScope) {
+    shareScope.classList.remove("hidden");
+    renderChallengeCard(c, shareScope);
   }
   wrap.classList.remove("hidden");
 }
@@ -207,47 +183,11 @@ const _closeBtnStart = document.getElementById("challenge-close");
 if (_closeBtnStart) _closeBtnStart.addEventListener("click", dismissChallenge);
 const _closeBtnDeath = document.getElementById("death-target-close");
 if (_closeBtnDeath) _closeBtnDeath.addEventListener("click", dismissChallenge);
-// Welcome-card flip — any click on #challenge that ISN'T the close button or copy button
-// toggles between front (sender stats) and back (QR for the current URL). Close uses
-// dismissChallenge() which stopPropagation()s; copy button does the same inside its own
-// handler below.
-const _challengeCard = document.getElementById("challenge");
-if (_challengeCard) {
-  _challengeCard.addEventListener("click", () => {
-    _challengeCard.classList.toggle("flipped");
-  });
-}
-// Welcome-card copy button — copies the current challenge URL to clipboard. stopPropagation
-// keeps the click from bubbling up to the card and toggling the flip. Same fallback path as
-// the death-screen copy button for older browsers without async clipboard access.
-const _backCopyBtn = document.getElementById("challenge-back-copy");
-if (_backCopyBtn) {
-  _backCopyBtn.addEventListener("click", (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const btn = e.currentTarget;
-    const url = location.href;
-    const flash = () => {
-      btn.classList.add("copied");
-      btn.textContent = "copied";
-      setTimeout(() => {
-        btn.classList.remove("copied");
-        btn.textContent = "copy link";
-      }, 1500);
-    };
-    if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
-    } else {
-      const ta = document.createElement("textarea");
-      ta.value = url;
-      ta.style.position = "fixed"; ta.style.opacity = "0";
-      document.body.appendChild(ta);
-      ta.select();
-      try { document.execCommand("copy"); flash(); } catch (_) { /* swallow */ }
-      document.body.removeChild(ta);
-    }
-  });
-}
+// The welcome card no longer has its own flip / copy handlers — the embedded
+// #challenge-out-welcome share affordance reuses the class-scoped .challenge-out-flip /
+// .challenge-out-copy listeners wired below. Click-anywhere-to-flip on the whole card
+// is gone too; tapping the stats area now does nothing (which is correct — the stats are
+// informational, and the share toggle has its own clear button).
 
 // ─────────────────────────────────────────────────────────────
 // Canvas + renderer setup
@@ -531,8 +471,12 @@ function showWebglUnavailableNotice() {
   if (!el) {
     el = document.createElement("div");
     el.id = "webgl-unavailable-banner";
+    // Pinned to the bottom (above the HUD safe-area inset for iOS home indicator) — the
+     // top of the screen is busy with the title + welcome card + buttons; the bottom is
+     // empty and the announcement reads clearly there without overlapping anything.
     el.style.cssText =
-      "position:fixed;top:140px;left:0;right:0;text-align:center;" +
+      "position:fixed;left:0;right:0;text-align:center;" +
+      "bottom:calc(env(safe-area-inset-bottom, 0px) + 68px);" +
       "font-size:14px;font-weight:600;letter-spacing:2px;text-transform:uppercase;" +
       "pointer-events:none;opacity:0;transition:opacity .5s;" +
       "color:#ffaa3c;text-shadow:0 0 20px rgba(255,170,60,.55);padding:0 20px;" +
@@ -771,6 +715,10 @@ document.addEventListener("visibilitychange", () => {
 // the death overlay. Past stars are stripped to stubs (x, y, r, colorIdx, caught=true) to keep
 // stars.length correct for addNextStar's difficulty ramp while staying tiny. Schema version bump
 // invalidates older saves on load.
+// Schema stays at v1; the `runStats` + `launchWindow` fields added for the resume-card share
+// flow are additive — saves without them load fine (savedRunStatsForShare zeroes missing fields,
+// resumeFromSave's restoration is guarded with `if (data.runStats)`). Bumping the key would
+// invalidate older saves for no real gain.
 const SAVE_KEY = "astrocatch_savegame_v1";
 function serializeStar(s, full) {
   const stub = {
@@ -824,6 +772,21 @@ function saveGame() {
     seed: currentRunSeed,
     score, starsVisited, fastStreak, trackedSpeed, hasBoosted,
     camY, camTargetY,
+    // Additive fields (v1-compatible): persist enough of runStats and the launch-window flag
+    // for the start-screen "resume" share card to build a faithful challenge URL + run title.
+    // Older v1 saves without these load fine — savedRunStatsForShare defaults missing fields
+    // to 0 (the URL still encodes, just with a sparse tier-breakdown / no variant census).
+    // Keys mirror `runStatsForShare` in renderChallengeCard exactly.
+    runStats: {
+      streakPeak: runStats.streakPeak,
+      blazingCount: runStats.blazingCount,
+      quickCount: runStats.quickCount,
+      slowCount: runStats.slowCount,
+      cometsCaught: runStats.cometsCaught,
+      deathCause: runStats.deathCause,
+      variants: { ...runStats.variants },
+    },
+    launchWindow: !!showLaunchWindow,
   };
   try { localStorage.setItem(SAVE_KEY, JSON.stringify(data)); }
   catch (_) { /* quota / private mode — ignore */ }
@@ -1776,6 +1739,11 @@ function resumeFromSave(data) {
   fastStreak = data.fastStreak || 0;
   trackedSpeed = data.trackedSpeed || 0;
   hasBoosted = !!data.hasBoosted;
+  // v2 fields. Restore launch-window setting and the per-run stats so a death in the resumed
+  // run produces a challenge URL with the full pre-resume history baked in (tier breakdown,
+  // variant census, deathCause, streakPeak). resetRunStats() below would zero them all, so
+  // we copy AFTER it runs.
+  if (typeof data.launchWindow === "boolean") showLaunchWindow = data.launchWindow;
   // Snap camera to the anchor, not the saved camY (which was captured at death and may be scrolled
   // to a bad spot).
   camY = -(anchor.y - H * CAM_FOCUS_Y);
@@ -1783,6 +1751,21 @@ function resumeFromSave(data) {
   audio.setStreak(fastStreak);
   audio.setDemonMode(!!anchor.isAzazel);
   resetRunStats();
+  // Copy v2-saved runStats into the live bag AFTER resetRunStats clears it, so a death in the
+  // resumed run encodes the full pre-resume history into the challenge URL / run title.
+  if (data.runStats) {
+    runStats.streakPeak = data.runStats.streakPeak || 0;
+    runStats.blazingCount = data.runStats.blazingCount || 0;
+    runStats.quickCount = data.runStats.quickCount || 0;
+    runStats.slowCount = data.runStats.slowCount || 0;
+    runStats.cometsCaught = data.runStats.cometsCaught || 0;
+    runStats.deathCause = data.runStats.deathCause || DEATH_CAUSES.unknown;
+    if (data.runStats.variants) {
+      for (const k of Object.keys(runStats.variants)) {
+        runStats.variants[k] = data.runStats.variants[k] || 0;
+      }
+    }
+  }
   // Clear all transient buffers (trail/particles/shockwaves/ replay) that we don't save.
   trail = [];
   particles = [];
@@ -2867,25 +2850,21 @@ function die(crash, crashedStar) {
     // Hide the live HUD score so it doesn't duplicate the #final on the game-over overlay. init()
     // re-shows it on the next run.
     document.getElementById("score-display").style.display = "none";
-    renderChallengeCard();
+    // Stamp the ✓/✗ verdict next to "TARGET N" on the inline death-stats line.
+    updateDeathTargetMark();
+    // Run title above the score number — keyed off the same stats bag the URL encodes so the
+    // sender sees the same title the recipient will compute from the decoded payload.
+    const stats = buildLiveRunStatsForShare();
+    const titleEl = document.getElementById("run-title");
+    if (titleEl) titleEl.textContent = composeRunTitle(stats);
+    renderChallengeCard(stats, document.getElementById("challenge-out"));
   }, DYING_FRAMES_MS);
 }
 
-// Build the challenge URL from the current run's stats and render its QR onto the overlay's canvas.
-// Stash the URL on the copy-button so the click handler can read it.
-function renderChallengeCard() {
-  // Reset the flip-card to its front face for each new death, so a player who flipped, played
-  // again, then died re-sees the "get challenge link" text rather than the prior QR.
-  const card = document.getElementById("challenge-out");
-  if (card) card.classList.remove("flipped");
-  // Stamp the ✓/✗ verdict next to "TARGET N" on the inline death-stats line. `score` is the
-  // player's final score at this point (no more captures fire after die() flips state).
-  updateDeathTargetMark();
-  // Single stats bag — fed both to buildChallengeUrl (encodes into the QR / copy-link) AND to
-  // composeRunTitle (the procedural title shown above the score). Keeping them in lockstep
-  // guarantees the title the player sees on death is the same one their recipient sees when
-  // they open the challenge link.
-  const runStatsForShare = {
+// Build the share stats bag from current live globals. Used by die() to populate the gameover
+// card; the resume card on the start screen passes its own stats (rehydrated from save) instead.
+function buildLiveRunStatsForShare() {
+  return {
     score, starsVisited,
     streakPeak: runStats.streakPeak,
     blazingCount: runStats.blazingCount,
@@ -2895,52 +2874,61 @@ function renderChallengeCard() {
     deathCause: runStats.deathCause,
     variants: runStats.variants,
     seed: currentRunSeed,
-    // Encode whether the player had the launch-window indicator on. `showLaunchWindow` is the
-    // user-facing setting — separate from the forced-on rendering azazel applies via the
-    // `lwForced` render check, so azazel orbits don't falsely flag the bit. Recipient's init()
-    // reads this and matches the setting.
+    // `showLaunchWindow` is the user-facing setting — separate from the forced-on rendering
+    // azazel applies via the `lwForced` render check, so azazel orbits don't falsely flag the
+    // bit. Recipient's init() reads this and matches the setting.
     launchWindow: !!showLaunchWindow,
   };
-  const url = buildChallengeUrl(runStatsForShare, location.origin + location.pathname);
-  // Procedural run title above the score number.
-  const titleEl = document.getElementById("run-title");
-  if (titleEl) titleEl.textContent = composeRunTitle(runStatsForShare);
-  // The slot holds either the live canvas (during/just after death) or a baked APNG <img> (from
-  // a previous death). Either way, ensure we have a canvas to draw the first frame onto before
-  // the APNG finishes encoding — replaces the img with a fresh canvas if needed.
-  let canvas = document.getElementById("challenge-out-qr");
-  const copyBtn = document.getElementById("challenge-out-copy");
+}
+
+// Build the challenge URL from `stats` and render its QR onto whichever `.challenge-out-qr`
+// canvas lives inside `scope`. Stash the URL on the matching copy button. Stats are the
+// caller's responsibility — die() passes live globals, the start-screen resume card passes
+// the rehydrated save snapshot — so this function makes no global reads beyond `location`.
+function renderChallengeCard(stats, scope) {
+  if (!scope) return;
+  // Reset the flip-card to its front face on each (re)render so a flipped state from a prior
+  // session doesn't leak into a fresh fill. Also sync the button label so it shows "get
+  // challenge link" again (matching the collapsed state we just reset to).
+  scope.classList.remove("flipped");
+  const flipBtn = scope.querySelector(".challenge-out-flip");
+  if (flipBtn) flipBtn.textContent = CHALLENGE_FLIP_LABELS.open;
+  const url = buildChallengeUrl(stats, location.origin + location.pathname);
+  // The slot holds either the live canvas (first render) or a baked APNG <img> (after a
+  // prior bake completed). Ensure we have a canvas to draw the first frame onto before any
+  // bake starts.
+  let canvas = scope.querySelector(".challenge-out-qr");
+  const copyBtn = scope.querySelector(".challenge-out-copy");
   if (!canvas || !copyBtn) return;
   if (canvas.tagName === "IMG") {
     const fresh = document.createElement("canvas");
-    fresh.id = "challenge-out-qr";
+    fresh.className = canvas.className;
+    if (canvas.id) fresh.id = canvas.id;
     fresh.setAttribute("aria-label", "challenge QR code");
     canvas.parentNode.replaceChild(fresh, canvas);
     canvas = fresh;
   }
   // Encode the URL as uppercase so the host + path + fragment payload all qualify for QR
-  // alphanumeric mode (5.5 bits/char vs 8). Browsers normalise scheme + host case so the link still
-  // resolves; the fragment stays uppercase, which our base32 decoder accepts. EC level M gives ~15%
-  // damage tolerance — enough to overlay the centred sun logo.
+  // alphanumeric mode (5.5 bits/char vs 8). Browsers normalise scheme + host case so the link
+  // still resolves; the fragment stays uppercase, which our base32 decoder accepts. EC level M
+  // gives ~15% damage tolerance — enough to overlay the centred sun logo.
   const qrText = url.toUpperCase();
   const matrix = makeQrMatrix(qrText, "M");
-  // Backing-store scale 6 → 33-module v3 = 198 px native; CSS displays at native size for crisp
-  // scanner-friendly cells.
+  // Backing-store scale 6 → 33-module v3 = 198 px native; CSS displays at native size for
+  // crisp scanner-friendly cells.
   const SCALE = 6, QUIET = 2;
   renderQrToCanvas(matrix, canvas, SCALE, QUIET);
   // Cache the bare QR (without logo) so the animation loop can re-blit it cheaply each frame
   // instead of re-running the full QR fillRect grid. ~840 fillRects → one drawImage per frame.
   startSunAnimation(canvas, matrix, SCALE, QUIET);
-  // QR also acts as a clickable link to the same challenge URL (opens in a new tab). Useful for
-  // pasting into a chat or verifying the encoded URL by eye.
-  const qrLink = document.getElementById("challenge-out-link");
+  // QR also acts as a clickable link to the same challenge URL (opens in a new tab).
+  const qrLink = scope.querySelector(".challenge-out-link");
   if (qrLink) qrLink.href = url;
   copyBtn.dataset.url = url;
   copyBtn.classList.remove("copied");
   copyBtn.textContent = "copy challenge link";
-  // Bake the animation into an APNG blob and swap the live canvas for an <img>. The user gets a
-  // right-click-saveable animated image (drag into Slack / iMessage etc) and we stop burning RAF
-  // frames once the baked version takes over. The live canvas covers the ~250 ms it takes to
+  // Bake the animation into an APNG blob and swap the live canvas for an <img>. The user gets
+  // a right-click-saveable animated image. The live canvas covers the ~250 ms it takes to
   // encode 16 frames so the card never shows a static fallback.
   bakeChallengeApng(canvas, matrix, SCALE, QUIET).catch((err) => {
     console.log("[challenge] APNG bake failed, keeping live canvas:", err);
@@ -2952,10 +2940,10 @@ function renderChallengeCard() {
 let _challengeApngUrl = null;
 
 // Encode a QR canvas as a delta-encoded animated PNG with the rotating sun. Pure data; no DOM
-// mutation, no URL management. Both bakeChallengeApng (death-screen) and bakeWelcomeApng
-// (welcome-card) use this — they differ only in which canvas + cache they pass and how they
-// swap the result into the DOM. Frame timing: 32 @ 16 fps = 2 s seamless loop. Azimuth
-// per-frame jump ≈ 11.25° (~1.5 modules of arc); elevation traces a narrow [π/8, 3π/8] oval.
+// mutation, no URL management. Used by bakeChallengeApng (the single bake function for all
+// three card instances — gameover share, start-screen resume, welcome). Frame timing: 32 @
+// 16 fps = 2 s seamless loop. Azimuth per-frame jump ≈ 11.25° (~1.5 modules of arc);
+// elevation traces a narrow [π/8, 3π/8] oval.
 async function encodeQrApngBytes(canvas, bareQr, matrix, scale, quiet) {
   const ctx = canvas.getContext("2d");
   const FRAMES = 32;
@@ -3013,10 +3001,13 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   // The encoder draws the LAST frame onto the canvas. Avoid showing it briefly before swap by
   // restoring the bare QR (the live animation already drew frame 0 onto it on the prior tick).
   canvas.getContext("2d").drawImage(_sunAnimBareQr, 0, 0);
-  // Build the <img> with the same id / aria as the canvas it replaces; CSS for #challenge-out-qr
-  // already targets the slot regardless of tag.
+  // Build the <img> with the same id / class / aria as the canvas it replaces. The id is
+  // preserved so existing CSS selectors keep targeting it; the class is preserved so the
+  // scope-based `scope.querySelector(".challenge-out-qr")` in the next renderChallengeCard
+  // call still finds it (regardless of which #challenge-out instance hosts the slot).
   const img = document.createElement("img");
-  img.id = "challenge-out-qr";
+  if (canvas.id) img.id = canvas.id;
+  img.className = canvas.className;
   img.src = _challengeApngUrl;
   img.setAttribute("aria-label", "challenge QR code");
   img.style.imageRendering = "pixelated";
@@ -3029,32 +3020,6 @@ async function bakeChallengeApng(canvas, matrix, scale, quiet) {
   } else {
     URL.revokeObjectURL(_challengeApngUrl);
     _challengeApngUrl = null;
-  }
-}
-
-// Welcome-card bake. Same encode path as the death-screen bake, but with its own bareQr
-// cache + blob URL state, and no RAF to stop. The welcome card stays at the same URL for the
-// session (unless the user hashchange's to a new challenge), so the resulting <img> animates
-// silently in the back face whether the user has flipped to it yet or not.
-let _welcomeBareQr = null;
-let _welcomeApngUrl = null;
-async function bakeWelcomeApng(canvas, matrix, scale, quiet) {
-  const apngBytes = await encodeQrApngBytes(canvas, _welcomeBareQr, matrix, scale, quiet);
-  if (_welcomeApngUrl) URL.revokeObjectURL(_welcomeApngUrl);
-  const file = new File([apngBytes], "astrocatch-challenge.png", { type: "image/png" });
-  _welcomeApngUrl = URL.createObjectURL(file);
-  const img = document.createElement("img");
-  img.id = "challenge-back-qr";
-  img.src = _welcomeApngUrl;
-  img.setAttribute("aria-label", "challenge QR code");
-  img.style.imageRendering = "pixelated";
-  img.width = canvas.width;
-  img.height = canvas.height;
-  if (canvas.parentNode) {
-    canvas.parentNode.replaceChild(img, canvas);
-  } else {
-    URL.revokeObjectURL(_welcomeApngUrl);
-    _welcomeApngUrl = null;
   }
 }
 
@@ -4464,6 +4429,10 @@ document.getElementById("start-btn").addEventListener("click", (e) => {
   state = STATE.PLAY;
   // Starting a fresh run invalidates any saved run.
   clearSave();
+  // If the resume-card was visible on the start screen, its sun-animation RAF would keep
+  // burning frames behind the now-hidden overlay. Same reasoning as the gameover RESTART /
+  // CONTINUE handlers — stop the animation when the surface owning it disappears.
+  stopSunAnimation();
   init();
 });
 document.getElementById("retry-btn").addEventListener("click", (e) => {
@@ -4474,52 +4443,68 @@ document.getElementById("retry-btn").addEventListener("click", (e) => {
   clearSave();
   init();
 });
-// Challenge card flip toggle. The .flipped class lives on #challenge-out itself so its CSS
-// transitions (width/height) glide with the inner's rotateY at the same time. Clicking the
-// front-face "get challenge link" text flips it open; clicking the description line on the back
-// flips it back closed.
-document.getElementById("challenge-out-flip").addEventListener("click", (e) => {
-  e.preventDefault(); e.stopPropagation();
-  const card = document.getElementById("challenge-out");
-  if (card) card.classList.add("flipped");
-});
-{
-  const infoEl = document.getElementById("challenge-out-info");
-  if (infoEl) {
-    infoEl.style.cursor = "pointer";
-    infoEl.addEventListener("click", (e) => {
-      e.preventDefault(); e.stopPropagation();
-      const card = document.getElementById("challenge-out");
-      if (card) card.classList.remove("flipped");
-    });
-  }
+// Challenge card flip + copy handlers. Class-scoped via querySelectorAll so the gameover
+// instance and the start-screen resume instance both get the same listeners. The button
+// stays visible in both states and toggles, so the tap target for opening AND closing
+// the card is at the same screen position. Button text reflects state — "get challenge
+// link" when collapsed, "close" when expanded. The .challenge-out-info row inside the
+// panel doubles as a secondary close affordance (tap the description to collapse).
+const CHALLENGE_FLIP_LABELS = {
+  open: "get challenge link",
+  close: "close",
+};
+function syncChallengeFlipLabel(btn, card) {
+  btn.textContent = card.classList.contains("flipped")
+    ? CHALLENGE_FLIP_LABELS.close : CHALLENGE_FLIP_LABELS.open;
 }
-// Challenge card: copy the current run's URL to clipboard. Falls back to a textarea + execCommand
-// on browsers without async clipboard access (older Safari, http origins).
-document.getElementById("challenge-out-copy").addEventListener("click", (e) => {
-  e.preventDefault(); e.stopPropagation();
-  const btn = e.currentTarget;
-  const url = btn.dataset.url || "";
-  if (!url) return;
-  const flash = () => {
-    btn.classList.add("copied");
-    btn.textContent = "copied";
-    setTimeout(() => {
-      btn.classList.remove("copied");
-      btn.textContent = "copy challenge link";
-    }, 1500);
-  };
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
-  } else {
-    const ta = document.createElement("textarea");
-    ta.value = url;
-    ta.style.position = "fixed"; ta.style.opacity = "0";
-    document.body.appendChild(ta);
-    ta.select();
-    try { document.execCommand("copy"); flash(); } catch (_) { /* swallow */ }
-    document.body.removeChild(ta);
-  }
+document.querySelectorAll(".challenge-out-flip").forEach((btn) => {
+  const card = btn.closest(".challenge-out");
+  if (card) syncChallengeFlipLabel(btn, card);
+  btn.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!card) return;
+    card.classList.toggle("flipped");
+    syncChallengeFlipLabel(btn, card);
+  });
+});
+document.querySelectorAll(".challenge-out-info").forEach((info) => {
+  info.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const card = info.closest(".challenge-out");
+    if (!card) return;
+    card.classList.remove("flipped");
+    const btn = card.querySelector(".challenge-out-flip");
+    if (btn) syncChallengeFlipLabel(btn, card);
+  });
+});
+// Copy the current run's URL to clipboard (read from button.dataset.url stamped by
+// renderChallengeCard). Falls back to a textarea + execCommand on browsers without async
+// clipboard access (older Safari, http origins).
+document.querySelectorAll(".challenge-out-copy").forEach((btn) => {
+  btn.addEventListener("click", (e) => {
+    e.preventDefault(); e.stopPropagation();
+    const url = btn.dataset.url || "";
+    if (!url) return;
+    const flash = () => {
+      btn.classList.add("copied");
+      btn.textContent = "copied";
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        btn.textContent = "copy challenge link";
+      }, 1500);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
+    } else {
+      const ta = document.createElement("textarea");
+      ta.value = url;
+      ta.style.position = "fixed"; ta.style.opacity = "0";
+      document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); flash(); } catch (_) { /* swallow */ }
+      document.body.removeChild(ta);
+    }
+  });
 });
 document.getElementById("continue-btn").addEventListener("click", (e) => {
   e.preventDefault(); e.stopPropagation();
@@ -4539,8 +4524,41 @@ document.getElementById("resume-btn").addEventListener("click", (e) => {
   if (!data) return;
   document.getElementById("start").classList.add("hidden");
   state = STATE.PLAY;
+  stopSunAnimation();
   resumeFromSave(data);
 });
+
+// Build a runStatsForShare-shaped bag from a v2 save snapshot. The shape matches
+// buildLiveRunStatsForShare exactly so renderChallengeCard / composeRunTitle / buildChallengeUrl
+// treat the saved run identically to a live one. Missing fields are defensively zeroed (v2
+// saves have them all, but older mid-flight saves from before the v2 bump won't be loadable
+// anyway — loadGame() filters by data.v === 2).
+function savedRunStatsForShare(data) {
+  const rs = data.runStats || {};
+  const variants = rs.variants || {};
+  return {
+    score: data.score || 0,
+    starsVisited: data.starsVisited || 0,
+    streakPeak: rs.streakPeak || 0,
+    blazingCount: rs.blazingCount || 0,
+    quickCount: rs.quickCount || 0,
+    slowCount: rs.slowCount || 0,
+    cometsCaught: rs.cometsCaught || 0,
+    deathCause: rs.deathCause || DEATH_CAUSES.unknown,
+    variants: {
+      azazel: variants.azazel || 0,
+      teapot: variants.teapot || 0,
+      blackHole: variants.blackHole || 0,
+      ringworld: variants.ringworld || 0,
+      nebula: variants.nebula || 0,
+      pulsar: variants.pulsar || 0,
+      binary: variants.binary || 0,
+      monolith: variants.monolith || 0,
+    },
+    seed: data.seed || 1,
+    launchWindow: !!data.launchWindow,
+  };
+}
 
 // Expose the RESUME button on the menu if a saved run exists AND no incoming challenge is active.
 // The challenge guard matters because RESUME calls resumeFromSave(), which restores the saved score
@@ -4548,10 +4566,27 @@ document.getElementById("resume-btn").addEventListener("click", (e) => {
 // prior run's progress. Forcing them to start fresh keeps the challenge meaningful. The button's
 // slot is reserved in HTML via `visibility:hidden` so a load with a save and a load without one
 // have the same layout — flipping visibility doesn't shift the description / link block beneath it.
+// Also keeps the resume-card share affordance (#challenge-out-resume) in lockstep: a saved run
+// with no incoming challenge → show + populate the card so the player can share it just like
+// they could after a death; otherwise hide it.
 function updateResumeButtonVisibility() {
   const btn = document.getElementById("resume-btn");
   if (!btn) return;
-  const allowed = !_incomingChallenge && !!loadGame();
+  const data = loadGame();
+  const allowed = !_incomingChallenge && !!data;
   btn.style.visibility = allowed ? "visible" : "hidden";
+  const resumeCard = document.getElementById("challenge-out-resume");
+  if (resumeCard) {
+    if (allowed) {
+      resumeCard.classList.remove("hidden");
+      renderChallengeCard(savedRunStatsForShare(data), resumeCard);
+    } else {
+      resumeCard.classList.add("hidden");
+      // The resume-card's sun-animation RAF would otherwise keep firing while the card is
+      // hidden / start screen has been dismissed. stopSunAnimation is also called from
+      // start-btn / resume-btn click handlers below for the same reason.
+      stopSunAnimation();
+    }
+  }
 }
 updateResumeButtonVisibility();
