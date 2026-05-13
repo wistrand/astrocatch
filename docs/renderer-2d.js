@@ -867,15 +867,36 @@ export function createRenderer2D(canvas) {
       setSB(0);
       ctx.lineWidth = 1.0;
       strokePolyCircle(s.x, s.y, r * 0.55, 8);
+      // Sun rays: 8 spokes around the star. Each ray gets a length jitter (±35%) and an
+      // angle jitter (±0.16 rad ≈ ±9°) so the rays read as irregular rather than a
+      // clockwork 8-fold pattern. Each jitter ALSO drifts slowly over time (~30 s for a
+      // full cycle on length, ~42 s on angle), so the ray pattern breathes instead of
+      // sitting frozen. The per-star phase (`seed`) keeps each star animating
+      // independently — neighbours don't pulse in sync.
+      //
+      // Seed must be hashed from a property STABLE across frames. `s.x, s.y` shimmer for
+      // binary sub-stars (orbit the COM every frame), so we use (s.r, s.colorIdx); both
+      // are stable from spawn through the run. Base rotation `angle0` rotates the whole
+      // fan together.
       const rays = 8;
       const angle0 = nowSec * 0.35;
-      const inR = r * 1.15, outR = r * 1.55;
+      const inR = r * 1.15;
+      const baseOutR = r * 1.55;
+      const seedH = Math.sin(s.r * 13.71 + s.colorIdx * 19.31) * 43758.5;
+      const seed = seedH - Math.floor(seedH);
+      // Slow time drives. 0.2 rad/s on length (~31 s period), 0.15 rad/s on angle
+      // (~42 s period). Different rates so length and angle don't sync.
+      const tL = nowSec * 0.2;
+      const tA = nowSec * 0.15;
       ctx.lineWidth = 1.0;
       setSS("rgba(" + baseRGB + "," + (0.7 * intensity) + ")");
       ctx.beginPath();
       for (let k = 0; k < rays; k++) {
-        const a = angle0 + (k / rays) * Math.PI * 2;
+        const lengthVar = 1 + 0.35 * Math.sin(seed * 12 + k * 1.7 + tL);
+        const angleVar = 0.16 * Math.sin(seed * 25 + k * 2.3 + tA);
+        const a = angle0 + (k / rays) * Math.PI * 2 + angleVar;
         const cx = Math.cos(a), cy = Math.sin(a);
+        const outR = baseOutR * lengthVar;
         ctx.moveTo(s.x + cx * inR, s.y + cy * inR);
         ctx.lineTo(s.x + cx * outR, s.y + cy * outR);
       }
