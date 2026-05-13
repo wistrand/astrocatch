@@ -473,9 +473,11 @@ export function createRenderer2D(canvas) {
   // across captures). When a cache entry is LRU-evicted, its canvas returns to the
   // pool keyed by (widthPx × heightPx). Subsequent same-size bakes pop a recycled
   // canvas instead of creating a new DOM element. Cap of 4 per bucket prevents
-  // unbounded growth on bake-size diversity. `acquireOffscreenCanvas` returns a
-  // canvas with the requested dims set; setting `.width` clears the pixel buffer
-  // (per spec), so re-use is safe regardless of prior content.
+  // unbounded growth on bake-size diversity. Pool entries match the request by key,
+  // so dims are already correct; an explicit clearRect inside acquire wipes residue
+  // from the previous bake (per HTML spec, assigning canvas.width to its current
+  // value does NOT reset the bitmap — only a value change does, so we can't rely on
+  // a width re-assignment to clear).
   const _canvasPool = new Map();
   const _POOL_PER_KEY_MAX = 4;
   function acquireOffscreenCanvas(widthPx, heightPx) {
@@ -483,9 +485,13 @@ export function createRenderer2D(canvas) {
     const arr = _canvasPool.get(k);
     if (arr && arr.length > 0) {
       const c = arr.pop();
-      // Re-setting width to its current value still clears the bitmap and context
-      // state per the canvas spec — semantically a fresh canvas, no allocation.
-      c.width = widthPx;
+      // Reset bitmap + transform explicitly. Without this, the next bake's
+      // composite="lighter" strokes would accumulate on top of the previous bake's
+      // pixels, producing corrupted ghost-text. setTransform to identity first so
+      // clearRect covers the full pixel surface regardless of the prior transform.
+      const cc = c.getContext("2d");
+      cc.setTransform(1, 0, 0, 1, 0, 0);
+      cc.clearRect(0, 0, widthPx, heightPx);
       return c;
     }
     const c = document.createElement("canvas");
