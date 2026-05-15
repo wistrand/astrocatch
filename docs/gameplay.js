@@ -44,6 +44,16 @@ function recomputeIncomingChallenge() {
   }
   _incomingChallenge = decodeChallengeCode(code);
   _invalidChallengeHash = _incomingChallenge ? null : code;
+  // Strip trailing junk from the address bar when the decoder accepted a code that had
+  // descriptive text glued on (typical when the share blob is pasted into the URL bar and
+  // the trailing description becomes %20… in the fragment). replaceState does not fire
+  // hashchange, so this won't re-enter.
+  if (_incomingChallenge) {
+    const m = code.match(/^[A-Za-z2-7]+/);
+    if (m && m[0].length !== code.length) {
+      history.replaceState(null, "", location.pathname + location.search + "#" + m[0]);
+    }
+  }
 }
 recomputeIncomingChallenge();
 // Show / hide the "invalid challenge link" indicator on the start screen. textContent is the
@@ -2939,6 +2949,15 @@ function renderChallengeCard(stats, scope) {
   const qrLink = scope.querySelector(".challenge-out-link");
   if (qrLink) qrLink.href = url;
   copyBtn.dataset.url = url;
+  // URL-first so chat URL detectors and a paste into the browser address bar both still link to
+  // a valid challenge. The decoder ignores trailing non-base32 characters in the hash, so even
+  // when address-bar paste glues the description on with %20 the code still parses. Stashed on
+  // a JS property rather than dataset so the embedded newline isn't whitespace-normalised by
+  // the HTML attribute round-trip.
+  copyBtn._shareText =
+    url + " \nASTROCATCH challenge · " +
+    composeRunTitle(stats) +
+    " · beat " + stats.score;
   copyBtn.classList.remove("copied");
   copyBtn.textContent = "copy challenge link";
   // Bake the animation into an APNG blob and swap the live canvas for an <img>. The user gets
@@ -4568,6 +4587,7 @@ document.querySelectorAll(".challenge-out-copy").forEach((btn) => {
     e.preventDefault(); e.stopPropagation();
     const url = btn.dataset.url || "";
     if (!url) return;
+    const text = btn._shareText || url;
     const flash = () => {
       btn.classList.add("copied");
       btn.textContent = "copied";
@@ -4577,10 +4597,10 @@ document.querySelectorAll(".challenge-out-copy").forEach((btn) => {
       }, 1500);
     };
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      navigator.clipboard.writeText(url).then(flash, () => {/* swallow */});
+      navigator.clipboard.writeText(text).then(flash, () => {/* swallow */});
     } else {
       const ta = document.createElement("textarea");
-      ta.value = url;
+      ta.value = text;
       ta.style.position = "fixed"; ta.style.opacity = "0";
       document.body.appendChild(ta);
       ta.select();

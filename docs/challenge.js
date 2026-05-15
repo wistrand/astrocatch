@@ -913,7 +913,13 @@ function rejectChallenge(reason, code) {
 }
 export function decodeChallengeCode(code) {
   if (!code) return null;
-  const bytes = b32ToBytes(code.toUpperCase());
+  // Tolerate descriptive text after the code: when the share blob's URL is pasted into a
+  // browser address bar, the trailing description glues onto the fragment as `%20…`. Slicing
+  // to the leading base32 run lets the code still parse. Anything before the first base32
+  // char (rare) is left alone so the length check below still rejects pathological inputs.
+  const m = code.toUpperCase().match(/^[A-Z2-7]+/);
+  if (!m) return rejectChallenge("no base32 prefix", code);
+  const bytes = b32ToBytes(m[0]);
   if (!bytes) return rejectChallenge("invalid base32 char", code);
   // v2 fixed length: always 17 bytes (134 payload+checksum bits → 17 bytes byte-padded). The v1
   // 13-byte no-seed shape was dropped — every encoded challenge now carries a seed.
