@@ -4262,15 +4262,24 @@ let ballRenderX = 0, ballRenderY = 0;
 // cam-velocity jitter.
 let renderFrameDt = 16.67;
 
+// Low-pass-filtered dt for timeLerp. Firefox mobile (Fenix) interleaves wildly uneven RAF
+// intervals (8 ms then 24 ms back-to-back); plugged into `1 - exp(-dt/tau)` that produces a
+// near-3× swing in lerp weight per frame and the camera reads as janky even against a fixed
+// target. Smoothing dt before the lerp doesn't change the mean settle time — only its
+// high-frequency component — so visual smoothness improves without the camera feeling
+// laggy. Physics, ball extrapolation, and the cinematic 1st-order integrator (which needs
+// exact dt for velocity estimation) still use raw `renderFrameDt`.
+let _smoothedCamDt = 16.67;
+
 // Time-based exponential lerp toward `target` with characteristic decay `tauMs`. Replaces the
 // classic frame-rate-dependent `cam += (target - cam) * w` pattern: at 60 fps the two are
 // numerically identical for w mapped to tau via `tau = -16.67 / ln(1 - w)`; at other refresh
 // rates the time form maintains a consistent settle time. Without this, lower-fps modes feel
 // "faster" because the camera lags further behind each frame (less of the gap closed per
-// wall-clock second). Uses the most-recent renderFrameDt; the loop clamps that to
-// MAX_FRAME_GAP_MS so a tab-switch resumption doesn't snap the camera by surprise.
+// wall-clock second). Uses the smoothed dt; the loop clamps raw dt to MAX_FRAME_GAP_MS so a
+// tab-switch resumption doesn't snap the camera by surprise.
 function timeLerp(current, target, tauMs) {
-  const k = 1 - Math.exp(-renderFrameDt / tauMs);
+  const k = 1 - Math.exp(-_smoothedCamDt / tauMs);
   return current + (target - current) * k;
 }
 
@@ -4296,6 +4305,9 @@ function loop(rafTime) {
   if (elapsed < 0) elapsed = 0;
   lastFrameTime = rafTime;
   renderFrameDt = elapsed;
+  // IIR low-pass on dt for camera lerps. 0.15 ≈ 7-frame settling so single-frame RAF
+  // hiccups don't translate into camera step jitter.
+  _smoothedCamDt += (elapsed - _smoothedCamDt) * 0.15;
   physicsAccumulator += elapsed;
 
   let ticks = 0;
