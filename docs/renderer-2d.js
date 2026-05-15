@@ -870,18 +870,16 @@ export function createRenderer2D(canvas) {
       setSB(0);
       ctx.lineWidth = 1.0;
       strokePolyEllipse(s.x, s.y, r * 0.55, r * 0.55, angle0, 8);
-      // Sun rays: 8 triangular spokes around the star. Each ray is drawn as an OPEN V
-      // (two segments converging at the outer tip) — no base edge connecting the two
-      // base corners, so the ray reads as a sharp triangular sliver pointing outward
-      // rather than a closed triangle silhouette.
+      // Sun rays: 8 triangular spokes, each an open V (base-left → tip → base-right).
+      // Routed through `_strokeScratchPoly` so the tip vertex picks up the same per-vertex
+      // brightening dot every other polygon in this renderer gets — the dot also keeps the
+      // tip reading as a sharp point even though the join is round.
       //
-      // Each ray gets length jitter (±15%) and angle jitter (±0.16 rad ≈ ±9°), so the
-      // rays read as irregular rather than a clockwork 8-fold pattern. Each jitter
-      // drifts slowly over time (~30 s for a full cycle on length, ~42 s on angle), so
-      // the ray pattern breathes instead of sitting frozen. The per-star phase (`seed`)
-      // keeps each star animating independently. Seed is hashed from (s.r, s.colorIdx)
-      // because s.x/s.y orbit every frame for binary sub-stars and would shimmer.
-      // Base rotation `angle0` rotates the whole fan together.
+      // Each ray gets length jitter (±15%) and angle jitter (±0.16 rad ≈ ±9°), drifting
+      // slowly over time (~30 s for a full length cycle, ~42 s on angle). Per-star phase
+      // (`seed`) keeps each star animating independently. Seed is hashed from
+      // (s.r, s.colorIdx) because s.x/s.y orbit every frame for binary sub-stars and would
+      // shimmer. Base rotation `angle0` rotates the whole fan together.
       const rays = 8;
       const inR = r * 1.15;
       const baseOutR = r * 1.55;
@@ -890,19 +888,7 @@ export function createRenderer2D(canvas) {
       const seed = seedH - Math.floor(seedH);
       const tL = nowSec * 0.2;
       const tA = nowSec * 0.15;
-      ctx.lineWidth = 1.0;
-      // Butt caps + miter joins so the base ends look flat (no round-cap dots
-      // suggesting a "base" exists) and the tip stays as a sharp point. miterLimit is
-      // bumped well past default 10 so the very sharp V tip (≈9° internal angle at
-      // 0.10r base × 0.63r length) doesn't fall back to a bevel cut.
-      const prevLineCap = ctx.lineCap;
-      const prevLineJoin = ctx.lineJoin;
-      const prevMiterLimit = ctx.miterLimit;
-      ctx.lineCap = "butt";
-      ctx.lineJoin = "miter";
-      ctx.miterLimit = 30;
-      setSS("rgba(" + baseRGB + "," + (0.7 * intensity) + ")");
-      ctx.beginPath();
+      setStroke("rgba(" + baseRGB + "," + Math.min(1, intensity) + ")", 1.6);
       for (let k = 0; k < rays; k++) {
         const lengthVar = 1 + 0.15 * Math.sin(seed * 12 + k * 1.7 + tL);
         const angleVar = 0.16 * Math.sin(seed * 25 + k * 2.3 + tA);
@@ -913,19 +899,13 @@ export function createRenderer2D(canvas) {
         const tipY = s.y + cy * outR;
         const baseCx = s.x + cx * inR;
         const baseCy = s.y + cy * inR;
-        // Perpendicular offset for the two base corners, scaled by baseHalfWidth.
         const perpX = -cy * baseHalfWidth;
         const perpY = cx * baseHalfWidth;
-        // Open V: base-left → tip → base-right. No close back to base-left → no base
-        // edge drawn. Each iteration's moveTo starts a fresh subpath.
-        ctx.moveTo(baseCx + perpX, baseCy + perpY);
-        ctx.lineTo(tipX, tipY);
-        ctx.lineTo(baseCx - perpX, baseCy - perpY);
+        _scratchVerts[0] = baseCx + perpX; _scratchVerts[1] = baseCy + perpY;
+        _scratchVerts[2] = tipX;           _scratchVerts[3] = tipY;
+        _scratchVerts[4] = baseCx - perpX; _scratchVerts[5] = baseCy - perpY;
+        _strokeScratchPoly(3, false);
       }
-      ctx.stroke();
-      ctx.lineCap = prevLineCap;
-      ctx.lineJoin = prevLineJoin;
-      ctx.miterLimit = prevMiterLimit;
     }
   }
 
