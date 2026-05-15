@@ -855,10 +855,13 @@ export function createRenderer2D(canvas) {
     const r = s.r;
     const baseRGB = rgbStr(c1, 1.2); // boost saturation for phosphor feel
     const color = "rgba(" + baseRGB + "," + Math.min(1, intensity) + ")";
+    // Photosphere outline (12-gon) + inner ring (8-gon) rotate at the same angular rate
+    // as the ray fan via `angle0`, so the vertex-dot brightening on the polygons travels
+    // with the rays instead of sitting at fixed angles while the rays sweep past them.
+    // strokePolyEllipse with rx=ry produces a circle rotated by the third arg.
+    const angle0 = nowSec * 0.35;
     setStroke(color, 2.1);
-    // Photosphere outline — 12-gon at this scale, plenty round enough for the eye. Keeps
-    // the glow so the star reads as luminous.
-    strokePolyCircle(s.x, s.y, r, 12);
+    strokePolyEllipse(s.x, s.y, r, r, angle0, 12);
     // Decorative inner ring + rays: drop shadowBlur to 0. The photosphere's glow already
     // covers this region, and inner/rays are sharp accent strokes that don't need their
     // own blur passes — biggest savings come from the rays loop, which used to be one
@@ -866,41 +869,63 @@ export function createRenderer2D(canvas) {
     if (!s.isPast) {
       setSB(0);
       ctx.lineWidth = 1.0;
-      strokePolyCircle(s.x, s.y, r * 0.55, 8);
-      // Sun rays: 8 spokes around the star. Each ray gets a length jitter (±35%) and an
-      // angle jitter (±0.16 rad ≈ ±9°) so the rays read as irregular rather than a
-      // clockwork 8-fold pattern. Each jitter ALSO drifts slowly over time (~30 s for a
-      // full cycle on length, ~42 s on angle), so the ray pattern breathes instead of
-      // sitting frozen. The per-star phase (`seed`) keeps each star animating
-      // independently — neighbours don't pulse in sync.
+      strokePolyEllipse(s.x, s.y, r * 0.55, r * 0.55, angle0, 8);
+      // Sun rays: 8 triangular spokes around the star. Each ray is drawn as an OPEN V
+      // (two segments converging at the outer tip) — no base edge connecting the two
+      // base corners, so the ray reads as a sharp triangular sliver pointing outward
+      // rather than a closed triangle silhouette.
       //
-      // Seed must be hashed from a property STABLE across frames. `s.x, s.y` shimmer for
-      // binary sub-stars (orbit the COM every frame), so we use (s.r, s.colorIdx); both
-      // are stable from spawn through the run. Base rotation `angle0` rotates the whole
-      // fan together.
+      // Each ray gets length jitter (±15%) and angle jitter (±0.16 rad ≈ ±9°), so the
+      // rays read as irregular rather than a clockwork 8-fold pattern. Each jitter
+      // drifts slowly over time (~30 s for a full cycle on length, ~42 s on angle), so
+      // the ray pattern breathes instead of sitting frozen. The per-star phase (`seed`)
+      // keeps each star animating independently. Seed is hashed from (s.r, s.colorIdx)
+      // because s.x/s.y orbit every frame for binary sub-stars and would shimmer.
+      // Base rotation `angle0` rotates the whole fan together.
       const rays = 8;
-      const angle0 = nowSec * 0.35;
       const inR = r * 1.15;
       const baseOutR = r * 1.55;
+      const baseHalfWidth = r * 0.10;
       const seedH = Math.sin(s.r * 13.71 + s.colorIdx * 19.31) * 43758.5;
       const seed = seedH - Math.floor(seedH);
-      // Slow time drives. 0.2 rad/s on length (~31 s period), 0.15 rad/s on angle
-      // (~42 s period). Different rates so length and angle don't sync.
       const tL = nowSec * 0.2;
       const tA = nowSec * 0.15;
       ctx.lineWidth = 1.0;
+      // Butt caps + miter joins so the base ends look flat (no round-cap dots
+      // suggesting a "base" exists) and the tip stays as a sharp point. miterLimit is
+      // bumped well past default 10 so the very sharp V tip (≈9° internal angle at
+      // 0.10r base × 0.63r length) doesn't fall back to a bevel cut.
+      const prevLineCap = ctx.lineCap;
+      const prevLineJoin = ctx.lineJoin;
+      const prevMiterLimit = ctx.miterLimit;
+      ctx.lineCap = "butt";
+      ctx.lineJoin = "miter";
+      ctx.miterLimit = 30;
       setSS("rgba(" + baseRGB + "," + (0.7 * intensity) + ")");
       ctx.beginPath();
       for (let k = 0; k < rays; k++) {
-        const lengthVar = 1 + 0.35 * Math.sin(seed * 12 + k * 1.7 + tL);
+        const lengthVar = 1 + 0.15 * Math.sin(seed * 12 + k * 1.7 + tL);
         const angleVar = 0.16 * Math.sin(seed * 25 + k * 2.3 + tA);
         const a = angle0 + (k / rays) * Math.PI * 2 + angleVar;
         const cx = Math.cos(a), cy = Math.sin(a);
         const outR = baseOutR * lengthVar;
-        ctx.moveTo(s.x + cx * inR, s.y + cy * inR);
-        ctx.lineTo(s.x + cx * outR, s.y + cy * outR);
+        const tipX = s.x + cx * outR;
+        const tipY = s.y + cy * outR;
+        const baseCx = s.x + cx * inR;
+        const baseCy = s.y + cy * inR;
+        // Perpendicular offset for the two base corners, scaled by baseHalfWidth.
+        const perpX = -cy * baseHalfWidth;
+        const perpY = cx * baseHalfWidth;
+        // Open V: base-left → tip → base-right. No close back to base-left → no base
+        // edge drawn. Each iteration's moveTo starts a fresh subpath.
+        ctx.moveTo(baseCx + perpX, baseCy + perpY);
+        ctx.lineTo(tipX, tipY);
+        ctx.lineTo(baseCx - perpX, baseCy - perpY);
       }
       ctx.stroke();
+      ctx.lineCap = prevLineCap;
+      ctx.lineJoin = prevLineJoin;
+      ctx.miterLimit = prevMiterLimit;
     }
   }
 
@@ -1136,8 +1161,8 @@ export function createRenderer2D(canvas) {
     for (let L = 0; L < layerCount; L++) {
       const layerSeed = (seed + L * 0.317) % 1;
       const mul = 0.95 + L * (0.55 + seed * 0.35);
-      const layerA = 0.50 - L * 0.10;
-      const layerW = 1.05 - L * 0.10;
+      const layerA = 1.00 - L * 0.18;
+      const layerW = 1.30 - L * 0.10;
       // Per-layer breath: each layer phase-shifts the global breath cycle so inner /
       // outer shells contract against each other (counter-pulsing instead of uniform
       // scale).
@@ -1326,7 +1351,7 @@ export function createRenderer2D(canvas) {
         strokePolyCircle(c.x, c.y, midR, 16);
       } else if (isBallGlow) {
         // Ball-glow halo: 12-gon outline (no blur for the same reason as the shockwave).
-        setSS("rgba(" + rgb + "," + (a * 0.85) + ")");
+        setSS("rgba(" + rgb + "," + (a * 0.45) + ")");
         ctx.lineWidth = 1.1;
         strokePolyCircle(c.x, c.y, Math.max(1, outerR), 12);
       } else if (outerR <= 4) {
