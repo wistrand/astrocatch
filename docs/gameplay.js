@@ -644,6 +644,14 @@ let replayCamY = 0;
 // Replay frames advanced per render frame. Replay was recorded at 1 sample/render-frame, so 1 =
 // real-time, 1.75 = ~1.75× fast, 2 = 2× fast.
 const REPLAY_SPEED = 1.75;
+// Hold + fade-out window past the recorded end of the replay. The marker stays pinned to the
+// last point during this window while alpha lerps from 1 → 0. Wrap fires once replayIdx >=
+// replay.length + REPLAY_HOLD_FRAMES.
+const REPLAY_HOLD_FRAMES = 30;
+// Frames over which the marker + trail fade IN at the start of each replay loop, mirroring
+// the hold/fade-out at the end. Together they cross-fade the wrap so the marker never visibly
+// teleports from the death point to the spawn point.
+const REPLAY_FADE_IN_FRAMES = 30;
 
 // Cinematic mode — Z cycles 0 → 1 → 2 → 3 → 0. Level 0 is the regular camera; 1–3 are
 // ship-following replayMat-style cams with a simplex zoom breath, mirroring drawReplayGhost. Levels
@@ -3230,16 +3238,18 @@ function renderTick() {
   }
 
   // Camera: follow upward progress (even while DYING, so the wind-down pan matches the ball's
-  // drift).
+  // drift). Time-based lerp (tau ≈ 200 ms) so the camera settles at the same wall-clock speed
+  // regardless of render fps — was `* 0.08` per frame, which made low-fps modes feel like the
+  // ship is "faster" because the camera lagged further behind each frame.
   const desired = -(stars[ball.currentStar].y - H * CAM_FOCUS_Y);
   if (desired > camTargetY) camTargetY = desired;
-  camY += (camTargetY - camY) * 0.08;
+  camY = timeLerp(camY, camTargetY, 200);
 
-  // Ringworld zoom-in: target 1.7x while orbiting a ringworld, back to 1.0 otherwise. Same easing
-  // rate as camY.
+  // Ringworld zoom-in: target 1.7x while orbiting a ringworld, back to 1.0 otherwise. Same
+  // time-based form as camY but a longer tau (was `* 0.05` per frame ≈ tau 325 ms).
   const cs0 = stars[ball.currentStar];
   zoomMultTarget = zoomTargetFor(cs0);
-  zoomMult += (zoomMultTarget - zoomMult) * 0.05;
+  zoomMult = timeLerp(zoomMult, zoomMultTarget, 325);
 
   // Horizontal camera nudge — keep the current star's visible extent inside the viewport. Only
   // matters at elevated zooms, where ringworld bands (3.6 · r) or Nebula outer shells (~2.7 · r)
@@ -3265,7 +3275,7 @@ function renderTick() {
     else if (rightOverflow > 0) shiftPx = -rightOverflow;
     camXTarget = shiftPx / effZoom;
   }
-  camX += (camXTarget - camX) * 0.08;
+  camX = timeLerp(camX, camXTarget, 200);
   // Safety clamp — if the eased camX is still leaving the star partially clipped (e.g. the current
   // star changed abruptly and easing hasn't caught up), snap hard enough to keep the silhouette
   // fully on screen this frame. Keeps the soft easing for the common case where camXTarget barely
@@ -3481,18 +3491,36 @@ function drawReplayGhost() {
   // Current marker position (the "ship").
   const p = replay[upTo];
 
-  // Smooth-follow camera: ease toward the marker. At 60 fps with 0.06 weight, the camera responds
-  // in ~300 ms — fast enough to track sharp turns, slow enough to give the replay a cinematic glide
-  // instead of a locked follow.
-  replayCamX += (p.x - replayCamX) * 0.005;
-  replayCamY += (p.y - replayCamY) * 0.005;
+  // Loop cross-fade envelope. Multiplies the alpha on the moving elements (marker dot + trail)
+  // so the wrap from end → start reads as a fade rather than a jump cut. Static elements
+  // (star markers) keep full opacity — they're the persistent backdrop. Two regions:
+  //   • End hold (replayIdx >= replay.length): linear fade 1 → 0 over REPLAY_HOLD_FRAMES.
+  //   • Start fade-in (replayIdx < REPLAY_FADE_IN_FRAMES): linear fade 0 → 1.
+  // Smoothstep eases the linear ramp so the alpha doesn't visibly kink at the endpoints.
+  let replayFade = 1;
+  if (replayIdx >= replay.length) {
+    const t = Math.min(1, (replayIdx - replay.length) / REPLAY_HOLD_FRAMES);
+    replayFade = 1 - t * t * (3 - 2 * t);
+  } else if (replayIdx < REPLAY_FADE_IN_FRAMES) {
+    const t = replayIdx / REPLAY_FADE_IN_FRAMES;
+    replayFade = t * t * (3 - 2 * t);
+  }
 
-  // Simplex-driven zoom variation. The noise makes the camera slowly breathe in and out, giving the
-  // replay depth and preventing the "locked zoom" look. Base zoom is slightly wider on mobile so
-  // the smaller screen doesn't feel cramped.
+  // Smooth-follow camera: ease toward the marker with a long time constant (tau ≈ 3.3 s) for a
+  // cinematic glide rather than a locked follow. Was `* 0.005` per frame at an assumed 60 fps;
+  // the time-based form keeps the same settle behavior on any monitor refresh rate.
+  replayCamX = timeLerp(replayCamX, p.x, 3326);
+  replayCamY = timeLerp(replayCamY, p.y, 3326);
+
+  // Simplex-driven zoom variation. The noise makes the camera slowly breathe in and out, giving
+  // the replay depth and preventing the "locked zoom" look. Driven by wall-clock time (not
+  // `replayIdx`) so the zoom value is CONTINUOUS across the loop wrap — was visibly snapping
+  // when replayIdx reset from end → 0, scaling all rendered stars by the noise delta at the
+  // moment of wrap. Time-rate matches the original replayIdx frequency: REPLAY_SPEED=1.75 ×
+  // 60 fps × 0.0004 ≈ 0.042 noise units / sec, so the breathing tempo stays the same.
   const zoomBase = IS_TOUCH ? 0.42 : 0.52;
   const zoomAmplitude = 0.16;
-  const zoomNoise = simplex2(replayIdx * 0.0004, 50.0);
+  const zoomNoise = simplex2(performance.now() * 0.000042, 50.0);
   const currentZoom = zoomBase + zoomNoise * zoomAmplitude;
 
   // Build a dynamic camera matrix: center at (camX, camY), scale = currentZoom. Reuses
@@ -3502,9 +3530,11 @@ function drawReplayGhost() {
   const oy = -replayCamY * scale + H / 2;
   const mat = renderer.replayMat(scale, ox, oy);
 
-  // Star markers: halo + center for each star the trajectory passed. Most will be off-screen with
-  // the close follow camera, but the GPU culls them at rasterization so no performance hit from
-  // submitting the full list.
+  // Star markers: halo + center for each star the trajectory passed. Most will be off-screen
+  // with the close follow camera, but the GPU culls them at rasterization so no performance
+  // hit from submitting the full list. Alpha gated by the loop cross-fade envelope so the
+  // camera-position snap on wrap is hidden by the fade — without this the new starting view
+  // pops in instantly because the star markers are at full alpha at the new camera location.
   if (b.lastStarIdx > 0) {
     const markers = [];
     for (let i = 0; i < b.lastStarIdx; i++) {
@@ -3514,13 +3544,13 @@ function drawReplayGhost() {
         x: s.x, y: s.y,
         outerR: s.r * 1.8, innerR: 0,
         r: c[0], g: c[1], b: c[2],
-        a: 0.55, kind: 2,
+        a: 0.55 * replayFade, kind: 2,
       });
       markers.push({
         x: s.x, y: s.y,
         outerR: s.r * 0.7, innerR: 0,
         r: c[0], g: c[1], b: c[2],
-        a: 0.9, kind: 0,
+        a: 0.9 * replayFade, kind: 0,
       });
     }
     renderer.drawCircleBatch(markers, mat);
@@ -3534,7 +3564,7 @@ function drawReplayGhost() {
   // current position (replay[upTo]) is appended as the final point so the polyline tip
   // meets the moving dot exactly, regardless of where decimation cut nearby samples.
   if (upTo > 1 && b.decimated) {
-    const headA = 0.85;
+    const headA = 0.85 * replayFade;
     const head = [0.63 * headA, 0.86 * headA, 1.0 * headA, headA];
     const tail = [0, 0, 0, 0];
     const dec = b.decimated;
@@ -3554,11 +3584,11 @@ function drawReplayGhost() {
   }
 
   // Marker dot — white glow + core, sized relative to current zoom so the dot stays a constant
-  // screen size.
+  // screen size. Alpha gated by the loop cross-fade envelope.
   const dotR = 5 / scale;
   renderer.drawCircleBatch([
-    { x: p.x, y: p.y, outerR: dotR * 4, innerR: 0, r: 1, g: 1, b: 1, a: 0.9, kind: 2 },
-    { x: p.x, y: p.y, outerR: dotR, innerR: 0, r: 1, g: 1, b: 1, a: 1.0, kind: 0 },
+    { x: p.x, y: p.y, outerR: dotR * 4, innerR: 0, r: 1, g: 1, b: 1, a: 0.9 * replayFade, kind: 2 },
+    { x: p.x, y: p.y, outerR: dotR, innerR: 0, r: 1, g: 1, b: 1, a: 1.0 * replayFade, kind: 0 },
   ], mat);
 }
 
@@ -4209,6 +4239,18 @@ let ballRenderX = 0, ballRenderY = 0;
 // cam-velocity jitter.
 let renderFrameDt = 16.67;
 
+// Time-based exponential lerp toward `target` with characteristic decay `tauMs`. Replaces the
+// classic frame-rate-dependent `cam += (target - cam) * w` pattern: at 60 fps the two are
+// numerically identical for w mapped to tau via `tau = -16.67 / ln(1 - w)`; at other refresh
+// rates the time form maintains a consistent settle time. Without this, lower-fps modes feel
+// "faster" because the camera lags further behind each frame (less of the gap closed per
+// wall-clock second). Uses the most-recent renderFrameDt; the loop clamps that to
+// MAX_FRAME_GAP_MS so a tab-switch resumption doesn't snap the camera by surprise.
+function timeLerp(current, target, tauMs) {
+  const k = 1 - Math.exp(-renderFrameDt / tauMs);
+  return current + (target - current) * k;
+}
+
 // Rolling-mean FPS counter — opt-in via ?fps=1 URL param. Drops samples older than FPS_WINDOW_MS so
 // the readout reflects current performance, not the run average.
 const _fpsEnabled = new URLSearchParams(location.search).get("fps") === "1";
@@ -4259,10 +4301,21 @@ function loop(rafTime) {
   renderTick();
   draw();
 
-  // Advance the replay marker only while the game-over screen is up.
+  // Advance the replay marker only while the game-over screen is up. Hold for REPLAY_HOLD_FRAMES
+  // past the end so the marker fades out at the death position, then snap camera + index back
+  // to the start. drawReplayGhost's alpha envelope (see below) cross-fades the marker + trail
+  // through this transition so the loop reads as a smooth cut, not a jump cut — especially
+  // important for short replays (< 3 stars), where the wrap distance can be most of the
+  // viewport and the camera glide would otherwise lag visibly for seconds.
   if (state === STATE.DEAD && replay.length > 0) {
     replayIdx += REPLAY_SPEED;
-    if (replayIdx >= replay.length + 30) replayIdx = 0; // brief hold then loop
+    if (replayIdx >= replay.length + REPLAY_HOLD_FRAMES) {
+      replayIdx = 0;
+      // Snap the replay camera to the new start so the fade-in begins anchored on the start
+      // position, not gliding from the death point.
+      replayCamX = replay[0].x;
+      replayCamY = replay[0].y;
+    }
   }
   // Rolling-mean FPS counter — push the current frame's elapsed onto the sample queue, drop
   // anything older than the window, and refresh the readout at most every 250 ms.
