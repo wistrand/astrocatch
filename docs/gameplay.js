@@ -2894,12 +2894,11 @@ function buildLiveRunStatsForShare() {
 // the rehydrated save snapshot — so this function makes no global reads beyond `location`.
 function renderChallengeCard(stats, scope) {
   if (!scope) return;
-  // Reset the flip-card to its front face on each (re)render so a flipped state from a prior
-  // session doesn't leak into a fresh fill. Also sync the button label so it shows "get
-  // challenge link" again (matching the collapsed state we just reset to).
+  // Reset the flip-card to its collapsed state on each (re)render so a flipped state
+  // from a prior session doesn't leak into a fresh fill. The button text is static
+  // ("get challenge link") — the button only opens; the info row inside the panel
+  // closes — so no label sync is needed here.
   scope.classList.remove("flipped");
-  const flipBtn = scope.querySelector(".challenge-out-flip");
-  if (flipBtn) flipBtn.textContent = CHALLENGE_FLIP_LABELS.open;
   const url = buildChallengeUrl(stats, location.origin + location.pathname);
   // The slot holds either the live canvas (first render) or a baked APNG <img> (after a
   // prior bake completed). Ensure we have a canvas to draw the first frame onto before any
@@ -4488,38 +4487,24 @@ document.getElementById("retry-btn").addEventListener("click", (e) => {
   clearSave();
   init();
 });
-// Challenge card flip + copy handlers. Class-scoped via querySelectorAll so the gameover
-// instance and the start-screen resume instance both get the same listeners. The button
-// stays visible in both states and toggles, so the tap target for opening AND closing
-// the card is at the same screen position. Button text reflects state — "get challenge
-// link" when collapsed, "close" when expanded. The .challenge-out-info row inside the
-// panel doubles as a secondary close affordance (tap the description to collapse).
-const CHALLENGE_FLIP_LABELS = {
-  open: "get challenge link",
-  close: "close",
-};
-function syncChallengeFlipLabel(btn, card) {
-  btn.textContent = card.classList.contains("flipped")
-    ? CHALLENGE_FLIP_LABELS.close : CHALLENGE_FLIP_LABELS.open;
-}
+// Challenge card open/close handlers. Class-scoped via querySelectorAll so the gameover,
+// start-screen resume, and welcome instances share one set of listeners. Roles are
+// asymmetric on purpose: the .challenge-out-flip button OPENS only (it collapses out of
+// layout when .flipped is set, so it never receives close clicks anyway); the
+// .challenge-out-info row at the top of the expanded panel is the CLOSE target. The
+// info row sits at the same Y as the collapsed button, so tap-same-position still toggles.
 document.querySelectorAll(".challenge-out-flip").forEach((btn) => {
   const card = btn.closest(".challenge-out");
-  if (card) syncChallengeFlipLabel(btn, card);
   btn.addEventListener("click", (e) => {
     e.preventDefault(); e.stopPropagation();
-    if (!card) return;
-    card.classList.toggle("flipped");
-    syncChallengeFlipLabel(btn, card);
+    if (card) card.classList.add("flipped");
   });
 });
 document.querySelectorAll(".challenge-out-info").forEach((info) => {
   info.addEventListener("click", (e) => {
     e.preventDefault(); e.stopPropagation();
     const card = info.closest(".challenge-out");
-    if (!card) return;
-    card.classList.remove("flipped");
-    const btn = card.querySelector(".challenge-out-flip");
-    if (btn) syncChallengeFlipLabel(btn, card);
+    if (card) card.classList.remove("flipped");
   });
 });
 // Copy the current run's URL to clipboard (read from button.dataset.url stamped by

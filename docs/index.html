@@ -403,7 +403,9 @@
   .challenge-out {
     /* Sits below either #start-btn / #resume-btn / #gameover-keys — the top margin is the
        gap between the button (above) and the share-card. Bottom margin opens equivalent
-       breathing room before the next sibling. */
+       breathing room before the next sibling. Flex column lays button above panel; on
+       flip, the button collapses to height 0 and the panel slides up to occupy the same
+       Y, so the visible "card" appears anchored to the button's position. */
     margin: 16px 0 4px;
     width: 240px;
     align-self: center;
@@ -417,10 +419,10 @@
     display: none;
   }
   .challenge-out-flip {
-    /* Stays visible in BOTH states. Tap to expand, tap again to collapse — same screen
-       position serves as both opener and closer, so the gesture is symmetric and there's
-       no mouse move between actions. Flex-centered text. The button text is updated by
-       JS to reflect state ("get challenge link" ↔ "close"). */
+    /* Opener only. Collapses out of layout when .flipped is set; the info text inside the
+       expanded panel takes the close role and sits at the same Y as this button was, so
+       the user keeps tap-same-position to toggle. Flex-centered text; transitions on
+       opacity and height match the panel's expand so the swap reads as one motion. */
     display: flex;
     align-items: center;
     justify-content: center;
@@ -436,10 +438,18 @@
     font-family: inherit;
     cursor: pointer;
     white-space: nowrap;
-    transition: color 0.2s ease;
+    overflow: hidden;
+    transition: color 0.2s ease, opacity 0.2s ease, height 0.35s ease;
   }
   .challenge-out-flip:hover {
     color: rgba(255, 255, 255, 0.85);
+  }
+  .challenge-out.flipped .challenge-out-flip {
+    /* display:none removes the button from layout entirely when the panel is open, so the
+       panel becomes the flex column's first child and renders at the wrapper top. No
+       lingering 0-height invisible button to interfere with click hit-testing on the
+       info-text close affordance. */
+    display: none;
   }
   .challenge-out-panel {
     box-sizing: border-box;
@@ -755,7 +765,7 @@
     padding: 14px 52px;
     border-radius: 12px;
     cursor: pointer;
-    margin-top: 14px;
+    margin-top: 24px;
     box-shadow: 0 0 34px rgba(250, 109, 176, 0.32);
     transition: transform 0.1s;
   }
