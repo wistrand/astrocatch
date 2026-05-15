@@ -650,8 +650,10 @@ In a typical 4-star scene the per-frame fill count drops from ~30 (one per polyg
 Four branches gated by `screenR = outerR × mat[0]` (CSS pixels):
 
 - **Shockwave** (innerR > 0): 16-gon ring via `strokePolyCircle`. Always renders.
-- **Ball-glow halo** (kind === 2, screenR ≥ 5): 12-gon outline. Significant on-screen glows
-  only — small kind:2 entries demote.
+- **Ball-glow halo** (kind === 2, screenR ≥ 5): 12-gon outline at `a × 0.45`. Used by BH-binary
+  ejecta and comet-wake halos once they're large enough on-screen; the 0.45 multiplier (was
+  0.85) keeps thick ejecta tails from saturating under the afterglow accumulator. Small kind:2
+  entries demote to the small-particle branch.
 - **Small particle** (outerR ≤ 4 *or* kind:2 demote): single beginPath with a phosphor cross
   (2 moveTo+lineTo pairs), one stroke. `pa = a × PARTICLE_ALPHA (0.4)` so slow swarms (BH-
   binary ejecta, comet wakes near periapsis) don't saturate under the afterglow accumulator.
@@ -696,10 +698,29 @@ state every time, even for identical values. Cached helpers `setSS / setFS / set
 setCop` compare against a JS-side `_*Cache` variable and skip the write on no-op — a few
 hundred avoided ctx writes per frame at peak.
 
+### Plain star
+
+`drawPlainStar` paints a 12-gon photosphere (rotating at `nowSec × 0.35`), an 8-gon inner ring
+(same rotation rate), and a fan of 8 sun rays — each ray a 3-point open polyline (base-left →
+tip → base-right) routed through `_strokeScratchPoly`, so the tip vertex picks up the same
+brightening dot every closed polygon gets (endpoints are skipped on open polylines).
+
+Per-ray length jitter (±15%, ~30 s cycle) and angle jitter (±0.16 rad, ~42 s cycle) read as
+irregular rather than clockwork. Seed = `hash(s.r, s.colorIdx)` instead of `(s.x, s.y)` so
+binary sub-stars (whose `x/y` orbit each frame) don't shimmer. Stroke alpha 1.0 × `LINE_ALPHA`
+plus tip dot keeps the rays visually on par with the polygon outlines despite being routed
+through the alpha-capped stroker.
+
+### Nebula
+
+2–4 jittered polygon shells; the volumetric noise the WebGL shader does is approximated with
+seed-driven vertex jitter that produces a distinct silhouette per nebula. Per-layer alpha
+`layerA = 1.00 - L × 0.18` and width `layerW = 1.30 - L × 0.10` — inner shell saturates the
+`LINE_ALPHA` cap (≈ plain-star outline brightness), outer shells gradually dim. Central
+pinpoint is a 8-gon `strokePolyCircle` in `PHOSPHOR_WHITE`.
+
 ### What it *doesn't* do
 
 No FBOs, no lensing composite — black holes render as bare accretion ellipses + sparse
 orbiting clumps. Background galaxies aren't drawn (the parallax bgStars carry the cosmic
-backdrop). Nebula renders as 2–4 jittered polygon shells; the volumetric noise the WebGL
-shader does is approximated with seed-driven vertex jitter that produces a distinct silhouette
-per nebula.
+backdrop).

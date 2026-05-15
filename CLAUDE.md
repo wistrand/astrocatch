@@ -116,8 +116,13 @@ npm start          # → http://localhost:8001/
 - **Challenge links** (`challenge.js`): on death, encodes per-run stats + run seed + 1-bit
   launch-window flag + 5-bit checksum into a lowercase base32 URL fragment (28 chars, format
   v2). Rendered as an APNG-animated QR (v3, EC M, 32-frame ray-traced sun logo with rotating
-  light) on the death-screen flip card. Decoder uppercases, strict 17-byte length, checksum-
-  verified — random edits don't fake a higher score. The `launch_window` bit forces hint-
+  light) on the death-screen flip card. Decoder uppercases, takes the leading `[A-Z2-7]+` run
+  (so a copy-paste with trailing descriptive text still resolves), strict 17-byte length,
+  checksum-verified — random edits don't fake a higher score. After a polluted decode succeeds,
+  `recomputeIncomingChallenge` `replaceState`s the address bar back to a clean `#code`. The
+  copy-link button emits a multi-line share blob (URL line + `ASTROCATCH challenge · <title> ·
+  beat <score>`) via a JS property on the button (`_shareText`, not `dataset`, so the embedded
+  `\n` isn't whitespace-normalised). The `launch_window` bit forces hint-
   indicator parity between sender and recipient; init() reads it and overrides
   `showLaunchWindow` for the challenge run. Incoming `#code` URLs surface a welcome card with
   sender stats; `hashchange` listener re-runs decode for same-tab navigations; invalid hashes

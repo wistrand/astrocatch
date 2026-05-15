@@ -474,6 +474,31 @@ layers:
   from `/foo/` aren't broken.
 - Each rejected decode logs `[challenge] rejected: <reason>` at log level so a stale or tampered
   hash is visible in DevTools without firing as an error.
+- **Lenient decode**: `decodeChallengeCode()` matches the leading `[A-Z2-7]+` run only — anything
+  past the base32 prefix is ignored. This lets the share-blob's URL survive a paste into the
+  browser address bar where the trailing description glues onto the fragment as `%20…`. The
+  17-byte length check still rejects truly malformed inputs (the lenient pass just trims, not
+  guesses).
+- **Hash canonicalisation**: after a successful decode, `recomputeIncomingChallenge()` runs
+  `history.replaceState` to strip any trailing junk from the visible URL (so a polluted paste
+  lands on a clean `#code` in the address bar). `replaceState` doesn't fire `hashchange`, so no
+  re-entry.
+
+### Copy-link share blob
+
+`renderChallengeCard()` stamps a multi-line share string on `copyBtn._shareText` (a plain JS
+property, not `dataset`, so the embedded newline isn't whitespace-normalised by HTML attribute
+round-trips):
+
+```
+<url> \n
+ASTROCATCH challenge · <run-title> · beat <score>
+```
+
+URL-first so chat URL detectors and a paste into the browser address bar both still link to a
+valid challenge. The invisible trailing space before `\n` is a defensive separator for
+destinations that collapse the newline — the URL terminator stays intact either way. Click
+handler prefers `_shareText`, falls back to `dataset.url` for any pre-render call path.
 
 ### QR + sun logo
 
