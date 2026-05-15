@@ -20,31 +20,6 @@ const PREDICT_MAX_FRAMES = 600;
 function starGM(visR) { return G * STAR_GM_PER_PX * visR; }
 function circularV(GM, r) { return Math.sqrt(GM / r); }
 
-// Nearest-star scan optionally restricted to indices >= fromIdx. The live game sets fromIdx =
-// ball.currentStar so past (already- captured) stars don't become the gravitational primary if the
-// ship's trajectory swings back near them. Default 0 preserves the API for any external caller.
-function nearestStarIdx(stars, px, py, fromIdx) {
-  if (fromIdx === undefined) fromIdx = 0;
-  let best = fromIdx, bestD2 = Infinity;
-  for (let i = fromIdx; i < stars.length; i++) {
-    const s = stars[i];
-    const dx = s.x - px, dy = s.y - py;
-    const d2 = dx * dx + dy * dy;
-    if (d2 < bestD2) { bestD2 = d2; best = i; }
-  }
-  return best;
-}
-
-function accelAt(stars, px, py, fromIdx) {
-  const s = stars[nearestStarIdx(stars, px, py, fromIdx)];
-  const dx = s.x - px, dy = s.y - py;
-  const r2 = dx * dx + dy * dy;
-  if (r2 < 1) return [0, 0];
-  const r = Math.sqrt(r2);
-  const a = s.gm / (r2 * r);
-  return [a * dx, a * dy];
-}
-
 // Acceleration from a KNOWN star — skips the nearest-star scan, letting the integrator hot-loop
 // reuse a single primary cached at the start of the frame.
 function accelFromStar(s, px, py) {
@@ -109,8 +84,8 @@ function accelFromStarWithPlanets(primary, planets, px, py) {
 }
 
 // Combined nearest-star scan: returns the star's index AND the minimum distance (sqrt) in a single
-// pass over `stars`. Replaces both `nearestStarIdx` + `subStepCount` for the integrator hot loop,
-// so each frame does ONE O(stars.length) scan instead of many. Sub-steps within the same frame
+// pass over `stars`. The integrator hot loop does ONE O(stars.length) scan per frame, and
+// sub-steps within the same frame
 // reuse the same primary and the same `sub` count — safe because per-frame displacement (≤
 // MAX_SPEED = 16 px) is far less than the > 100 px Voronoi cell width guaranteed by SAFE_SEP, so a
 // sub-step can't cross a boundary.
@@ -124,13 +99,6 @@ function nearestStarInfo(stars, px, py, fromIdx) {
     if (d2 < bestD2) { bestD2 = d2; bestIdx = i; }
   }
   return { idx: bestIdx, minR: Math.sqrt(bestD2) };
-}
-
-// Kept for the public export (`AC.subStepCount`) — internal hot path uses `nearestStarInfo`
-// directly.
-function subStepCount(stars, px, py, fromIdx) {
-  const minR = nearestStarInfo(stars, px, py, fromIdx).minR;
-  return minR < 60 ? 4 : minR < 120 ? 2 : 1;
 }
 
 // One physics frame (mutates ball.x/y/vx/vy). Pure free flight, no burn handling — that's a
@@ -436,7 +404,7 @@ PERI_VORONOI_FRAC, PERI_HYSTERESIS, TRANSFER_TIMEOUT,
 SAFE_SEP, PREDICT_MAX_FRAMES,
 BOOST_SEARCH_MIN, BOOST_SEARCH_MAX, BOOST_SEARCH_STEPS,
 // helpers
-starGM, circularV, nearestStarIdx, accelAt, subStepCount,
+starGM, circularV,
 physicsStep, burnStep, predictCapture, applyBoostAndArm,
 makeStar, makeBallInCircularOrbit,
 };
