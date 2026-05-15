@@ -3777,7 +3777,11 @@ function draw() {
   for (let i = minDrawIdx; i < stars.length; i++) {
     const s = stars[i];
     const sY = s.y + camY;
-    if (sY < -240 || sY > H + 240) continue;
+    // Stars with comets use a wider cull band to match the comet's own ±400 band — otherwise
+    // a comet's orbit can swing into the viewport while its parent star sits just past the
+    // tight cull, producing a comet orbiting empty space.
+    const cullBand = (s.comets && s.comets.length) ? 400 : 240;
+    if (sY < -cullBand || sY > H + cullBand) continue;
     if (s.pulse > 0) s.pulse -= 0.03;
     // Crash wobble — soft decaying squeeze into an ellipse along the impact direction. Decays over
     // ~1.5 s with a gentle oscillation so the star settles back to round.
