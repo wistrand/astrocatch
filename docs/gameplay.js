@@ -4271,11 +4271,6 @@ let renderFrameDt = 16.67;
 // exact dt for velocity estimation) still use raw `renderFrameDt`.
 let _smoothedCamDt = 16.67;
 
-// Low-pass-filtered accFrac for ship render extrapolation. Same RAF-dt-jitter mitigation as
-// `_smoothedCamDt` but applied to the leftover-accumulator fraction so the rendered ship
-// position doesn't pulse when accFrac swings frame-to-frame.
-let _smoothedAccFrac = 0;
-
 // Time-based exponential lerp toward `target` with characteristic decay `tauMs`. Replaces the
 // classic frame-rate-dependent `cam += (target - cam) * w` pattern: at 60 fps the two are
 // numerically identical for w mapped to tau via `tau = -16.67 / ln(1 - w)`; at other refresh
@@ -4332,18 +4327,10 @@ function loop(rafTime) {
   // interpolation collapsed in that case (ballPrev == ball.x), freezing the ship for one frame and
   // then jumping when the next K=2 frame caught up. Extrapolation makes the rendered position a
   // smooth function of wall time regardless of how ticks are distributed across frames.
-  //
-  // accFrac is low-pass filtered so RAF-dt jitter (Firefox mobile interleaves 8 ms / 24 ms
-  // intervals) doesn't translate into oscillating extrapolation distance. At close approach
-  // the orbital acceleration rotates velocity fast enough that the per-frame extrapolation
-  // error magnitude swings visibly when accFrac swings. Smoothing introduces sub-millisecond
-  // average lag (rendered ship trails sim state by a fraction of a tick) — invisible at
-  // typical ship speeds, gameplay tap-targeting still aims at true sim state.
   if (ball) {
-    const rawAccFrac = physicsAccumulator / PHYSICS_DT_MS;
-    _smoothedAccFrac += (rawAccFrac - _smoothedAccFrac) * 0.25;
-    ballRenderX = ball.x + ball.vx * _smoothedAccFrac;
-    ballRenderY = ball.y + ball.vy * _smoothedAccFrac;
+    const accFrac = physicsAccumulator / PHYSICS_DT_MS;
+    ballRenderX = ball.x + ball.vx * accFrac;
+    ballRenderY = ball.y + ball.vy * accFrac;
   }
 
   renderTick();
